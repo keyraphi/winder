@@ -1,0 +1,7 @@
+# Start from the base image cibuildwheel uses
+FROM quay.io/pypa/manylinux_2_28_x86_64
+
+# Run the exact setup steps from your BEFORE_ALL
+RUN yum install -y yum-utils gcc-toolset-13-gcc gcc-toolset-13-gcc-c++ && \
+    yum-config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo && \
+    yum install -y cuda-nvcc-12-4 cuda-cudart-devel-12-4 cuda-libraries-devel-12-4

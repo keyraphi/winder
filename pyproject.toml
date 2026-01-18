@@ -1,0 +1,46 @@
+[build-system]
+requires = ["scikit-build-core>=0.10.0"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "winder"
+version = "0.1.0"
+description = "Fast Differentiable Winding Numbers on GPU"
+authors = [
+    { name = "Raphael Braun", email = "keyraphi@gmail.com" }
+]
+readme = "README.md"
+requires-python = ">=3.8"
+
+[project.optional-dependencies]
+dev = [
+    "black",
+    "isort"
+    "numpy"
+]
+
+[tool.scikit-build]
+cmake.minimum-version = "3.18"
+wheel.packages = ["src/winder"]
+cmake.build-type = "Release"
+install.strip = false
+
+
+[tool.cibuildwheel]
+build = "cp312-manylinux_x86_64"
+manylinux-x86_64-image = "manylinux_2_28"
+
+[tool.cibuildwheel.linux]
+before-all = """
+yum install -y yum-utils gcc-toolset-13-gcc gcc-toolset-13-gcc-c++ && \
+yum-config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo && \
+yum install -y cuda-nvcc-12-4 cuda-cudart-devel-12-4 cuda-libraries-devel-12-4
+"""
+
+[tool.cibuildwheel.environment]
+PATH = "$PATH:/usr/local/cuda-12.4/bin"
+LD_LIBRARY_PATH = "$LD_LIBRARY_PATH:/usr/local/cuda-12.4/lib64"
+CUDA_PATH = "/usr/local/cuda-12.4"
+CC = "/opt/rh/gcc-toolset-13/root/usr/bin/gcc"
+CXX = "/opt/rh/gcc-toolset-13/root/usr/bin/g++"
+CMAKE_ARGS = "-DCMAKE_CUDA_HOST_COMPILER=/opt/rh/gcc-toolset-13/root/usr/bin/gcc"
