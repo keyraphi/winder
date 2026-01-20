@@ -286,6 +286,36 @@ __global__ void compute_leaf_aabb_and_coefficients_kernel(
   
   // second order
   // TODO. There should be 18 unique coefficients
+  // 1/2 (\sum_{i=1}^m a_i(p_i - p_center)\otimes (p_i-p_center) \otimes n)
+  // t[0] = d.x*d.x*n.x
+  // t[1] = d.x*d.x*n.y
+  // t[2] = d.x*d.x*n.z
+  // t[3] = d.x*d.y*n.x
+  // t[4] = d.x*d.y*n.y
+  // t[5] = d.x*d.y*n.z
+  // t[6] = d.x*d.z*n.x
+  // t[7] = d.x*d.z*n.y
+  // t[8] = d.x*d.z*n.z
+  //
+  // t[-] = d.y*d.x*n.x = t[3]
+  // t[-] = d.y*d.x*n.y = t[4]
+  // t[-] = d.y*d.x*n.z = t[5]
+  // t[9] = d.y*d.y*n.x
+  // t[10] = d.y*d.y*n.y
+  // t[11] = d.y*d.y*n.z
+  // t[12] = d.y*d.z*n.x
+  // t[13] = d.y*d.z*n.y
+  // t[14] = d.y*d.z*n.z
+  //
+  // t[-] = d.z*d.x*n.x = t[6]
+  // t[-] = d.z*d.x*n.y = t[7]
+  // t[-] = d.z*d.x*n.z = t[8]
+  // t[-] = d.z*d.y*n.x = t[12]
+  // t[-] = d.z*d.y*n.y = t[13]
+  // t[-] = d.z*d.y*n.z = t[14]
+  // t[18] = d.z*d.z*n.x
+  // t[19] = d.z*d.z*n.y
+  // t[20] = d.z*d.z*n.z
 }
 
 void WinderBackend::initialize_point_data(const float *points,
@@ -360,3 +390,18 @@ void WinderBackend::initialize_point_data(const float *points,
 
   thrust::device_vector<AABB> binary_aabbs(2 * leaf_count - 1);
 }
+
+
+// __global__ void test(const BVH8Node *nodes, Vec3_bf16 *zero_out,
+//                      Mat3x3_bf16 *first_out, Tensor3_bf16 *second_out) {
+//   float scale_factor = nodes[0].get_shared_scale_factor();
+//   Vec3_bf16 zero_order = nodes[0].get_tailor_zero_order(scale_factor);
+//   Mat3x3_bf16 first_order = nodes[0].get_tailor_first_order(scale_factor);
+//   Tensor3_bf16_compressed second_order_c =
+//       nodes[0].get_tailor_second_order(scale_factor);
+//   Tensor3_bf16 second_order = second_order_c.uncompress();
+//
+//   zero_out[0] = zero_order;
+//   first_out[0] = first_order;
+//   second_out[0] = second_order;
+// }
