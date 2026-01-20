@@ -24,7 +24,9 @@
 
 #include "aabb.h"
 #include "binary_node.h"
+#include "bvh8.h"
 #include "mat3x3.h"
+#include "tensor3.h"
 #include "utils.h"
 #include "vec3.h"
 #include "winder_cuda.h"
@@ -392,16 +394,21 @@ void WinderBackend::initialize_point_data(const float *points,
 }
 
 
-// __global__ void test(const BVH8Node *nodes, Vec3_bf16 *zero_out,
-//                      Mat3x3_bf16 *first_out, Tensor3_bf16 *second_out) {
-//   float scale_factor = nodes[0].get_shared_scale_factor();
-//   Vec3_bf16 zero_order = nodes[0].get_tailor_zero_order(scale_factor);
-//   Mat3x3_bf16 first_order = nodes[0].get_tailor_first_order(scale_factor);
-//   Tensor3_bf16_compressed second_order_c =
-//       nodes[0].get_tailor_second_order(scale_factor);
-//   Tensor3_bf16 second_order = second_order_c.uncompress();
-//
-//   zero_out[0] = zero_order;
-//   first_out[0] = first_order;
-//   second_out[0] = second_order;
-// }
+__global__ void test(const BVH8Node *nodes, Vec3_bf16 *zero_out,
+                     Mat3x3_bf16 *first_out, Tensor3_bf16 *second_out) {
+  BVH8Node node = nodes[0];
+  Vec3 zero;
+  Mat3x3 first;
+  Tensor3_compressed second;
+  node.set_tailor_coefficients(zero, first, second);
+  float scale_factor = nodes[0].get_shared_scale_factor();
+  Vec3_bf16 zero_order = nodes[0].get_tailor_zero_order(scale_factor);
+  Mat3x3_bf16 first_order = nodes[0].get_tailor_first_order(scale_factor);
+  Tensor3_bf16_compressed second_order_c =
+      nodes[0].get_tailor_second_order(scale_factor);
+  Tensor3_bf16 second_order = second_order_c.uncompress();
+
+  zero_out[0] = zero_order;
+  first_out[0] = first_order;
+  second_out[0] = second_order;
+}

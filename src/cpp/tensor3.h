@@ -3,8 +3,8 @@
 #include <cuda_bf16.h>
 #include <cuda_runtime_api.h>
 
-struct Tensor3 {
-  float data[27];
+struct Tensor3_compressed {
+  float data[18];
 };
 
 struct Tensor3_bf16 {
