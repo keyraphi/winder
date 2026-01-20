@@ -6,10 +6,11 @@
 #include <memory>
 #include <thrust/detail/raw_pointer_cast.h>
 #include <thrust/device_vector.h>
-#include <type_traits>
 #include <vector_types.h>
 
 # define LEAF_SIZE 32
+
+// forward definitions
 
 class ScopedCudaDevice {
 private:

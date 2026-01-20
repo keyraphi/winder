@@ -30,6 +30,7 @@
 #include "utils.h"
 #include "vec3.h"
 #include "winder_cuda.h"
+#include "bvh8.cuh"
 
 void CudaDeleter::operator()(void *ptr) const { cudaFree(ptr); }
 
