@@ -1,0 +1,39 @@
+CompileFlags:
+  Add:
+    - -Wall
+    - -I/opt/cuda/include
+    - -Wextra
+    - -fopenmp
+  Remove:
+    - --expt-relaxed-constexpr
+    - --default-stream
+    - --generate-code=*
+    - --options-file
+    - -arch=*
+    - -forward-unknown-to-host-compiler
+    - -Xptxas=*
+    - -Xcompiler=*
+CompilationDatabase: "build"
+
+InlayHints:
+  autoDeclaration: false
+
+Diagnostics:
+  ClangTidy:
+    Add:
+      - modernize-*
+      - readability-*
+      - performance-*
+      - bugprone-*
+    Remove:
+      - bugprone-macro-parentheses
+      - bugprone-easily-swappable-parameters
+      - readability-identifier-length
+      - readability-math-missing-parentheses
+  Suppress:
+      - ovl_no_viable_function_in_init
+  UnusedIncludes: Strict
+  MissingIncludes: Strict
+
+Index:
+  Background: Build

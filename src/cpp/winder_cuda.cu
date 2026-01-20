@@ -14,6 +14,7 @@
 #include <thrust/host_vector.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/iterator/discard_iterator.h>
+#include <thrust/iterator/strided_iterator.h>
 #include <thrust/iterator/transform_iterator.h>
 #include <thrust/scan.h>
 #include <thrust/sequence.h>
@@ -22,6 +23,8 @@
 #include <vector_types.h>
 
 #include "aabb.h"
+#include "binary_node.h"
+#include "mat3x3.h"
 #include "utils.h"
 #include "vec3.h"
 #include "winder_cuda.h"
@@ -72,7 +75,7 @@ WinderBackend::WinderBackend(WinderMode mode, size_t size, int device_id)
   size_t floats_per_elem = (mode == WinderMode::Triangle) ? 9 : 6;
   m_sorted_geometry.resize(size * floats_per_elem);
 
-  size_t leaf_count_upper_bound = size / LEAF_MIN_SIZE;
+  size_t leaf_count_upper_bound = size / LEAF_SIZE;
   m_nodes.resize(1.2 * leaf_count_upper_bound);
   m_leaf_info.resize(leaf_count_upper_bound);
 
@@ -80,13 +83,14 @@ WinderBackend::WinderBackend(WinderMode mode, size_t size, int device_id)
   m_to_canonical.resize(size);
 }
 
-// Gather kernel that interleaves positions and normals in the sorted geometry array
+// Gather kernel that interleaves positions and normals in the sorted geometry
+// array
 __global__ void __launch_bounds__(256)
     interleave_gather_geometry(const float *__restrict__ points,
-                                  const float *__restrict__ normals,
-                                  const uint32_t *__restrict__ indices,
-                                  float *__restrict__ out_geometry,
-                                  const uint32_t count) {
+                               const float *__restrict__ normals,
+                               const uint32_t *__restrict__ indices,
+                               float *__restrict__ out_geometry,
+                               const uint32_t count) {
   const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= count)
     return;
@@ -103,13 +107,185 @@ __global__ void __launch_bounds__(256)
   float2 n_xy = reinterpret_cast<const float2 *>(normals + src_offset)[0];
   float n_z = normals[src_offset + 2];
 
-  // We write 24 bytes as a float4 + float2.
-  uint32_t dst_offset = idx * 6;
-  float4 out1 = make_float4(p_xy.x, p_xy.y, p_z, n_xy.x);
-  float2 out2 = make_float2(n_xy.y, n_z);
+  // We write 24 bytes as 3 float2 transactions
+  const uint32_t dst_offset = idx * 6;
+  const float2 out1 = make_float2(p_xy.x, p_xy.y);
+  const float2 out2 = make_float2(p_z, n_xy.x);
+  const float2 out3 = make_float2(n_xy.y, n_z);
 
-  reinterpret_cast<float4 *>(out_geometry + dst_offset)[0] = out1;
-  reinterpret_cast<float2 *>(out_geometry + dst_offset + 4)[0] = out2;
+  float2 *f2_base_ptr = reinterpret_cast<float2 *>(out_geometry + dst_offset);
+  f2_base_ptr[0] = out1;
+  f2_base_ptr[1] = out2;
+  f2_base_ptr[2] = out3;
+}
+
+// Longest Common Prefix for code[i] and code[j]
+__device__ inline auto delta(int i, int j, const uint32_t *__restrict__ codes,
+                             int codes_len) -> int {
+  if (j < 0 || j >= codes_len) {
+    return -1;
+  }
+  uint32_t x = codes[i];
+  uint32_t y = codes[j];
+  if (x == y) {
+    // tie break
+    constexpr int tiebreaker_offset = 32;
+    return tiebreaker_offset + __clz(i ^ j);
+  }
+  return __clz((int)x ^ (int)y);
+}
+
+__global__ void build_binary_topology_kernel(
+    const uint32_t
+        *__restrict__ morton_codes, // morton code of first leaf entry
+    BinaryNode *nodes, uint32_t *parents, const uint32_t leaf_count) {
+  uint32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (thread_idx >= leaf_count - 1) {
+    return;
+  }
+
+  // Compute range direction (+1 or -1)
+  int direction =
+      (delta(thread_idx, thread_idx + 1, morton_codes, leaf_count) -
+           delta(thread_idx, thread_idx - 1, morton_codes, leaf_count) >=
+       0)
+          ? 1
+          : -1;
+
+  // find bit position where prefix change happens (full node)
+  int parent_prefix =
+      delta(thread_idx, thread_idx - direction, morton_codes, leaf_count);
+  int node_end_bit_mask = 2;
+  while (delta(thread_idx, thread_idx + node_end_bit_mask * direction,
+               morton_codes, leaf_count) > parent_prefix) {
+    node_end_bit_mask *= 2;
+  }
+
+  // find the index in the morton code array where this bitflip happens
+  int total_idx_range_length = 0;
+  for (int search_step = node_end_bit_mask / 2; search_step >= 1;
+       search_step /= 2) {
+    if (delta(thread_idx,
+              thread_idx + (total_idx_range_length + search_step) * direction,
+              morton_codes, leaf_count) > parent_prefix) {
+      total_idx_range_length += search_step;
+    }
+  }
+  int range_end = (int)thread_idx + total_idx_range_length * direction;
+
+  // Find the split point. Index where bit flip happens inside the node.
+  int node_prefix = delta(thread_idx, range_end, morton_codes, leaf_count);
+  int split_offset = 0;
+
+  // start with largest power of 2 smaller than total_idx_range_length
+  int search_step = 1 << (31 - __clz(total_idx_range_length));
+  for (; search_step >= 1; search_step >>= 1) {
+    int candidate_offset = split_offset + search_step;
+    if (candidate_offset < total_idx_range_length) {
+      if (delta(thread_idx, thread_idx + candidate_offset * direction,
+                morton_codes, leaf_count) > node_prefix) {
+        split_offset = candidate_offset;
+      }
+    }
+  }
+  // if direction == 1: spli_offset is where the left child ends.
+  // if direction == -1: spli_offset is where the left child ends.
+  int split_idx =
+      (int)thread_idx + split_offset * direction + min(direction, 0);
+
+  // determine child indices
+  uint32_t left_node_idx =
+      (min((int)thread_idx, range_end) == split_idx)
+          ? (split_idx + (leaf_count - 1)) // its a leaf node
+          : split_idx; // this node is responsible for the left side
+  uint32_t right_node_idx =
+      (max((int)thread_idx, range_end) == split_idx + 1)
+          ? (split_idx + 1 + (leaf_count - 1)) // its a leaf node
+          : (split_idx + 1); // this node is responsible for the right side
+
+  // store childs of this node
+  nodes[thread_idx].left_child = left_node_idx;
+  nodes[thread_idx].right_child = right_node_idx;
+  // for bottom up traversal tell those childs who therir parent is
+  parents[left_node_idx] = thread_idx;
+  parents[right_node_idx] = thread_idx;
+}
+
+__global__ void compute_leaf_aabb_and_coefficients_kernel(
+    const float *__restrict__ sorted_geometry, AABB *aabbs,
+    const uint32_t leaf_count, const uint32_t point_count) {
+  uint32_t point_idx = threadIdx.x + blockIdx.x * blockDim.x;
+  uint32_t leaf_idx = point_idx / 32;
+  if (leaf_idx >= leaf_count)
+    return;
+
+  uint32_t lane_id = point_idx % 32;
+
+  Vec3 p, n;
+  if (point_idx < point_count) {
+    const auto *base =
+        reinterpret_cast<const float2 *>(sorted_geometry + point_idx * 6);
+
+    float2 chunk0 = base[0]; // px, py
+    float2 chunk1 = base[1]; // pz, nx
+    float2 chunk2 = base[2]; // ny, nz
+
+    p = {chunk0.x, chunk0.y, chunk1.x};
+    n = {chunk1.y, chunk2.x, chunk2.y};
+  } else {
+    p = {1e38F, 1e38F, 1e38F};
+    n = {0.F, 0.F, 0.F};
+  }
+
+  // Compute AABB
+  Vec3 p_min = p;
+  Vec3 p_max = point_idx < point_count ? p : Vec3{1e-38F, 1e-38F, 1e-38F};
+
+#pragma unroll
+  for (int offset = 16; offset > 0; offset /= 2) {
+    p_min.x = fminf(p_min.x, __shfl_down_sync(0xFFFFFFFF, p_min.x, offset));
+    p_min.y = fminf(p_min.y, __shfl_down_sync(0xFFFFFFFF, p_min.y, offset));
+    p_min.z = fminf(p_min.z, __shfl_down_sync(0xFFFFFFFF, p_min.z, offset));
+
+    p_max.x = fmaxf(p_max.x, __shfl_down_sync(0xFFFFFFFF, p_max.x, offset));
+    p_max.y = fmaxf(p_max.y, __shfl_down_sync(0xFFFFFFFF, p_max.y, offset));
+    p_max.z = fmaxf(p_max.z, __shfl_down_sync(0xFFFFFFFF, p_max.z, offset));
+  }
+
+  // Compute tailor coefficients
+  // w(q) \approx (\sum_{i=1}^m a_i n_i ) \cdot \nabla G(q, p_center) +
+  // (\sum_{i=1}^m a_i(p_i-p_center)\otimes n_i) \cdot \nabla^2 G(q, p_center) +
+  // 1/2 (\sum_{i=1}^m a_i(p_i - p_center)\otimes (p_i-p_center) \otimes n)
+  // \cdot \nabla^3 G(q, p_center)
+  Vec3 center = (p_min + p_max) * 0.5;
+
+  // Zero order
+  //\sum_{i=1}^m a_i n_i
+  Vec3 zero_order = n;
+
+#pragma unroll
+  for (int offset = 16; offset > 0; offset /= 2) {
+    zero_order.x += __shfl_down_sync(0xFFFFFFFF, zero_order.x, offset);
+    zero_order.y += __shfl_down_sync(0xFFFFFFFF, zero_order.y, offset);
+    zero_order.z += __shfl_down_sync(0xFFFFFFFF, zero_order.z, offset);
+  }
+
+  // First order
+  // \sum_{i=1}^m a_i(p_i-p_center)\otimes n_i
+  Vec3 d = p - center;
+  Mat3x3 first_order = d.outer_product(n);
+
+#pragma unroll
+  for (int offset = 16; offset > 0; offset /= 2) {
+#pragma unroll
+    for (int i = 0; i < 9; ++i) {
+      first_order.data[i] +=
+          __shfl_down_sync(0xFFFFFFFF, first_order.data[i], offset);
+    }
+  }
+  
+  // second order
+  // TODO. There should be 18 unique coefficients
 }
 
 void WinderBackend::initialize_point_data(const float *points,
@@ -152,14 +328,35 @@ void WinderBackend::initialize_point_data(const float *points,
       });
 
   thrust::sequence(m_to_internal.begin(), m_to_internal.end());
-  // sorts both morton_codes and m_to_internal 
+  // sorts both morton_codes and m_to_internal
   thrust::sort_by_key(morton_codes.begin(), morton_codes.end(),
                       m_to_internal.begin());
 
-  const size_t threads = 256;
-  const size_t block_size = (m_count + threads - 1) / threads;
-  interleave_gather_geometry<<<block_size, threads>>>(points, normals, m_to_internal.data().get(), m_sorted_geometry.data().get(), m_count);
-  check_launch_error("interleave_geometry");
+  {
+    const size_t threads = 256;
+    const size_t block_size = (m_count + threads - 1) / threads;
+    interleave_gather_geometry<<<block_size, threads>>>(
+        points, normals, m_to_internal.data().get(),
+        m_sorted_geometry.data().get(), m_count);
+    check_launch_error("interleave_geometry");
+  }
 
-  // TODO continue here with the LBVH construction using Karras
+  uint32_t leaf_count = (morton_codes.size() + LEAF_SIZE + 1) / LEAF_SIZE;
+  thrust::device_vector<BinaryNode> binary_nodes(leaf_count - 1);
+  thrust::device_vector<uint32_t> parents(2 * leaf_count - 1);
+  {
+    auto morton_leave_stride =
+        thrust::make_strided_iterator<LEAF_SIZE>(morton_codes.begin());
+    thrust::device_vector<uint32_t> leaf_morton_codes(leaf_count);
+    thrust::copy(morton_leave_stride, morton_leave_stride + leaf_count,
+                 leaf_morton_codes.begin());
+    const size_t threads = 256;
+    const size_t block_size = (leaf_count - 1 + threads - 1) / threads;
+    build_binary_topology_kernel<<<block_size, threads>>>(
+        leaf_morton_codes.data().get(), binary_nodes.data().get(),
+        parents.data().get(), leaf_count);
+    check_launch_error("build_binary_topology_kernel");
+  }
+
+  thrust::device_vector<AABB> binary_aabbs(2 * leaf_count - 1);
 }

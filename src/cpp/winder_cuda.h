@@ -9,7 +9,7 @@
 #include <type_traits>
 #include <vector_types.h>
 
-# define LEAF_MIN_SIZE 32;
+# define LEAF_SIZE 32
 
 class ScopedCudaDevice {
 private:
