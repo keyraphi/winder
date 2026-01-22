@@ -43,3 +43,20 @@ if(UNIX)
     set_target_properties(winder_backend PROPERTIES INSTALL_RPATH "$ORIGIN")
 endif()
 install(TARGETS winder_backend LIBRARY DESTINATION winder)
+
+# TESTs - this will be moved out later
+add_executable(test_quantization tests/test_quantization.cu)
+target_compile_options(
+    test_quantization
+    PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-Wall
+        -Wextra
+        -Werror>
+        # CUDA-specific flags
+        $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+        $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda>
+        $<$<COMPILE_LANGUAGE:CUDA>:-use_fast_math>
+        $<$<COMPILE_LANGUAGE:CUDA>:-res-usage>
+        # Pass -Werror to the host compiler even when compiling .cu files
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wall,-Wextra,-Werror>
+)

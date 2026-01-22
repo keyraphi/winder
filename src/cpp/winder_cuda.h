@@ -1,4 +1,5 @@
 #pragma once
+#include "binary_node.h"
 #include "bvh8.h"
 #include <cstddef>
 #include <cstdint>
@@ -37,7 +38,6 @@ enum class WinderMode : uint8_t { Point, Triangle };
 
 struct BVH8View {
   const BVH8Node *nodes;
-  const LeafInfo *leaf_info;
   const float *geometry;
 
   uint32_t node_count;
@@ -90,15 +90,24 @@ private:
   // provide a view on the BVH8 data for kernel launches
   auto get_bvh_view() -> BVH8View;
 
-  // 2. Permutation Maps for sorting and unsorting
+  // Permutation Maps for sorting and unsorting
   thrust::device_vector<uint32_t> m_to_internal;  // original -> sorted
   thrust::device_vector<uint32_t> m_to_canonical; // sorted -> original
 
   // sorted copy of the input data used by the bvh8
   thrust::device_vector<float> m_sorted_geometry;
 
-  // 4. The Tree Structure
+  // The BVH8 Tree Structure
   thrust::device_vector<BVH8Node> m_nodes;
-  thrust::device_vector<LeafInfo> m_leaf_info;
+  // Data attached to leaf nodes
+  thrust::device_vector<TailorCoefficientsBf16> m_leaf_coefficients;
+  thrust::device_vector<AABB> m_leaf_aabb;
+
+  // Data for auxillary radrix tree construction
+  thrust::device_vector<uint32_t> m_morton_codes;
+  thrust::device_vector<uint32_t> m_leaf_morton_codes;
+  thrust::device_vector<BinaryNode> m_binary_nodes;
+  thrust::device_vector<uint32_t> m_binary_parents;
+  thrust::device_vector<AABB> m_binary_aabb;
 
 };

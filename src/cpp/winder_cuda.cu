@@ -14,7 +14,7 @@
 #include <thrust/host_vector.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/iterator/discard_iterator.h>
-#include <thrust/iterator/strided_iterator.h>
+#include <thrust/iterator/permutation_iterator.h>
 #include <thrust/iterator/transform_iterator.h>
 #include <thrust/scan.h>
 #include <thrust/sequence.h>
@@ -30,13 +30,11 @@
 #include "utils.h"
 #include "vec3.h"
 #include "winder_cuda.h"
-#include "bvh8.cuh"
 
 void CudaDeleter::operator()(void *ptr) const { cudaFree(ptr); }
 
 auto WinderBackend::get_bvh_view() -> BVH8View {
   return BVH8View{thrust::raw_pointer_cast(m_nodes.data()),
-                  thrust::raw_pointer_cast(m_leaf_info.data()),
                   thrust::raw_pointer_cast(m_sorted_geometry.data()),
                   (uint32_t)m_nodes.size()};
 }
@@ -76,14 +74,20 @@ WinderBackend::WinderBackend(WinderMode mode, size_t size, int device_id)
   ScopedCudaDevice device_scope(device_id);
 
   size_t floats_per_elem = (mode == WinderMode::Triangle) ? 9 : 6;
+  size_t leaf_count = (size + LEAF_SIZE - 1) / LEAF_SIZE;
+
+  // preallocate all memory used for tree construction
   m_sorted_geometry.resize(size * floats_per_elem);
-
-  size_t leaf_count_upper_bound = size / LEAF_SIZE;
-  m_nodes.resize(1.2 * leaf_count_upper_bound);
-  m_leaf_info.resize(leaf_count_upper_bound);
-
   m_to_internal.resize(size);
   m_to_canonical.resize(size);
+  m_nodes.resize(1.2 * leaf_count);
+  m_leaf_coefficients.resize(leaf_count);
+  m_leaf_aabb.resize(leaf_count);
+  m_morton_codes.resize(size);
+  m_leaf_morton_codes.resize(leaf_count);
+  m_binary_nodes.resize(leaf_count - 1);
+  m_binary_parents.resize(2 * leaf_count - 1);
+  m_binary_aabb.resize(leaf_count - 1);
 }
 
 // Gather kernel that interleaves positions and normals in the sorted geometry
@@ -222,7 +226,7 @@ __global__ void compute_leaf_aabb_and_coefficients_kernel(
   if (leaf_idx >= leaf_count)
     return;
 
-  uint32_t lane_id = point_idx % 32;
+  // uint32_t lane_id = point_idx % 32;
 
   Vec3 p, n;
   if (point_idx < point_count) {
@@ -286,7 +290,7 @@ __global__ void compute_leaf_aabb_and_coefficients_kernel(
           __shfl_down_sync(0xFFFFFFFF, first_order.data[i], offset);
     }
   }
-  
+
   // second order
   // TODO. There should be 18 unique coefficients
   // 1/2 (\sum_{i=1}^m a_i(p_i - p_center)\otimes (p_i-p_center) \otimes n)
@@ -342,9 +346,8 @@ void WinderBackend::initialize_point_data(const float *points,
   float scale = (max_dim > 1e-9f) ? 1.0f / max_dim : 0.0f;
   Vec3 min_p = scene_bounds.min;
 
-  thrust::device_vector<uint32_t> morton_codes(m_count);
   thrust::transform(
-      points_begin, points_begin + m_count, morton_codes.begin(),
+      points_begin, points_begin + m_count, m_morton_codes.begin(),
       [min_p, scale] __host__ __device__(const Vec3 &p) -> uint32_t {
         // Scale to range [0, 1]
         float tx = (p.x - min_p.x) * scale;
@@ -362,7 +365,7 @@ void WinderBackend::initialize_point_data(const float *points,
 
   thrust::sequence(m_to_internal.begin(), m_to_internal.end());
   // sorts both morton_codes and m_to_internal
-  thrust::sort_by_key(morton_codes.begin(), morton_codes.end(),
+  thrust::sort_by_key(m_morton_codes.begin(), m_morton_codes.end(),
                       m_to_internal.begin());
 
   {
@@ -374,42 +377,22 @@ void WinderBackend::initialize_point_data(const float *points,
     check_launch_error("interleave_geometry");
   }
 
-  uint32_t leaf_count = (morton_codes.size() + LEAF_SIZE + 1) / LEAF_SIZE;
-  thrust::device_vector<BinaryNode> binary_nodes(leaf_count - 1);
-  thrust::device_vector<uint32_t> parents(2 * leaf_count - 1);
+  uint32_t leaf_count = (m_morton_codes.size() + LEAF_SIZE + 1) / LEAF_SIZE;
   {
-    auto morton_leave_stride =
-        thrust::make_strided_iterator<LEAF_SIZE>(morton_codes.begin());
-    thrust::device_vector<uint32_t> leaf_morton_codes(leaf_count);
-    thrust::copy(morton_leave_stride, morton_leave_stride + leaf_count,
-                 leaf_morton_codes.begin());
+    auto morton_leaf_stride_idx = thrust::make_transform_iterator(
+        thrust::make_counting_iterator<uint32_t>(0),
+        [] __host__ __device__(uint32_t i) -> uint32_t {
+          return i * LEAF_SIZE;
+        });
+    // thrust::make_strided_iterator<LEAF_SIZE>(m_morton_codes.begin());
+    auto morton_leaf_stride = thrust::make_permutation_iterator(m_morton_codes.begin(), morton_leaf_stride_idx);
+    thrust::copy(morton_leaf_stride, morton_leaf_stride + leaf_count,
+                 m_leaf_morton_codes.begin());
     const size_t threads = 256;
     const size_t block_size = (leaf_count - 1 + threads - 1) / threads;
     build_binary_topology_kernel<<<block_size, threads>>>(
-        leaf_morton_codes.data().get(), binary_nodes.data().get(),
-        parents.data().get(), leaf_count);
+        m_leaf_morton_codes.data().get(), m_binary_nodes.data().get(),
+        m_binary_parents.data().get(), leaf_count);
     check_launch_error("build_binary_topology_kernel");
   }
-
-  thrust::device_vector<AABB> binary_aabbs(2 * leaf_count - 1);
-}
-
-
-__global__ void test(const BVH8Node *nodes, Vec3_bf16 *zero_out,
-                     Mat3x3_bf16 *first_out, Tensor3_bf16 *second_out) {
-  BVH8Node node = nodes[0];
-  Vec3 zero;
-  Mat3x3 first;
-  Tensor3_compressed second;
-  node.set_tailor_coefficients(zero, first, second);
-  float scale_factor = nodes[0].get_shared_scale_factor();
-  Vec3_bf16 zero_order = nodes[0].get_tailor_zero_order(scale_factor);
-  Mat3x3_bf16 first_order = nodes[0].get_tailor_first_order(scale_factor);
-  Tensor3_bf16_compressed second_order_c =
-      nodes[0].get_tailor_second_order(scale_factor);
-  Tensor3_bf16 second_order = second_order_c.uncompress();
-
-  zero_out[0] = zero_order;
-  first_out[0] = first_order;
-  second_out[0] = second_order;
 }
