@@ -10,6 +10,7 @@ struct Tensor3 {
   float data[27];
 };
 
+struct Tensor3_compressed;
 // compressed tensor for second order coefficients
 struct Tensor3_bf16_compressed {
   nv_bfloat16 data[18];
@@ -46,6 +47,9 @@ struct Tensor3_bf16_compressed {
     result.data[26] = data[17];
     return result;
   }
+
+  __host__ __device__ __forceinline__ auto
+  operator=(const Tensor3_compressed &t);
 };
 
 struct Tensor3_compressed {
@@ -98,3 +102,10 @@ struct Tensor3_compressed {
     return result;
   }
 };
+
+__host__ __device__ __forceinline__ auto
+Tensor3_bf16_compressed::operator=(const Tensor3_compressed &t) {
+  for (int i = 0; i < 18; ++i) {
+    data[i] = t.data[i];
+  }
+}

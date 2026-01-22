@@ -68,7 +68,7 @@ public:
     }
     // by default the points are assumed to be on a surface. Ther winding number
     // is 0.5
-    Scalar_t points_winding_numbers = cuda::scalar_with_default(
+    Scalar_t points_winding_numbers = winder_cuda::scalar_with_default(
         maybe_points_winding_nubers, points.shape(0), 0.5F);
 
     auto backend = WinderBackend::CreateForSolver(points.data(), points.shape(0), points.device_id());
@@ -89,7 +89,7 @@ public:
     }
 
     float *raw_ptr = raw_ptr_unique.release();
-    nb::capsule owner(raw_ptr, [](void *p) noexcept { cuda::cuda_free(p); });
+    nb::capsule owner(raw_ptr, [](void *p) noexcept { winder_cuda::cuda_free(p); });
 
     size_t n_points = m_impl->point_count();
     return {raw_ptr, {n_points, 3}, owner};
@@ -101,7 +101,7 @@ public:
 
     auto raw_ptr_unique = m_impl->compute(queries.data(), n);
     float *raw_ptr = raw_ptr_unique.release();
-    nb::capsule owner(raw_ptr, [](void *p) noexcept { cuda::cuda_free(p); });
+    nb::capsule owner(raw_ptr, [](void *p) noexcept { winder_cuda::cuda_free(p); });
 
     return {raw_ptr, {n}, owner};
   }
@@ -112,7 +112,7 @@ public:
         m_impl->grad_normals(grad_output.data(), grad_output.shape(0));
 
     float *raw_ptr = raw_ptr_unique.release();
-    nb::capsule owner(raw_ptr, [](void *p) noexcept { cuda::cuda_free(p); });
+    nb::capsule owner(raw_ptr, [](void *p) noexcept { winder_cuda::cuda_free(p); });
 
     size_t n_points = m_impl->point_count();
     return {raw_ptr, {n_points, 3}, owner};
@@ -123,7 +123,7 @@ public:
     auto raw_ptr_unique =
         m_impl->grad_points(grad_output.data(), grad_output.shape(0));
     float *raw_ptr = raw_ptr_unique.release();
-    nb::capsule owner(raw_ptr, [](void *p) noexcept { cuda::cuda_free(p); });
+    nb::capsule owner(raw_ptr, [](void *p) noexcept { winder_cuda::cuda_free(p); });
 
     size_t n_points = m_impl->point_count();
     return {raw_ptr, {n_points, 3}, nb::handle()};

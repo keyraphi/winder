@@ -4,6 +4,8 @@
 #include <cuda_runtime_api.h>
 #include <vector_types.h>
 
+struct Vec3;
+
 struct Vec3_bf16 {
   nv_bfloat16 x, y, z;
 
@@ -40,13 +42,15 @@ struct Vec3_bf16 {
     m.data[8] = z * b.z;
     return m;
   }
+
+  __host__ __device__ __forceinline__ auto operator=(const Vec3 &v);
 };
 
 struct Vec3 {
   float x, y, z;
 
-  __host__ __device__ __forceinline__ 
-  static auto from_bf16(const Vec3_bf16 &v) -> Vec3 {
+  __host__ __device__ __forceinline__ static auto from_bf16(const Vec3_bf16 &v)
+      -> Vec3 {
     Vec3 result;
     result.x = v.x;
     result.y = v.y;
@@ -87,10 +91,15 @@ struct Vec3 {
     return m;
   }
 
-
   __host__ __device__ __forceinline__ auto operator=(const Vec3_bf16 &v) {
     x = v.x;
     y = v.y;
     z = v.z;
   }
 };
+
+__host__ __device__ __forceinline__ auto Vec3_bf16::operator=(const Vec3 &v) {
+  x = v.x;
+  y = v.y;
+  z = v.z;
+}

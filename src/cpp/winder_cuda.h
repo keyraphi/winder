@@ -9,6 +9,7 @@
 #include <thrust/device_vector.h>
 #include <vector_types.h>
 
+// one warp per leaf
 # define LEAF_SIZE 32
 
 // forward definitions
@@ -109,5 +110,6 @@ private:
   thrust::device_vector<BinaryNode> m_binary_nodes;
   thrust::device_vector<uint32_t> m_binary_parents;
   thrust::device_vector<AABB> m_binary_aabb;
+  thrust::device_vector<uint32_t> m_atomic_counters;
 
 };

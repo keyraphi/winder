@@ -12,7 +12,7 @@ namespace nb = nanobind;
 using Scalar_t = nb::ndarray<nb::array_api, float, nb::shape<-1>, nb::c_contig,
                              nb::device::cuda>;
 
-namespace cuda {
+namespace winder_cuda {
 
 // Forward declarations
 class ScopedCudaDevice;
@@ -43,7 +43,3 @@ __host__ __device__ inline auto morton3D_30bit(uint32_t x, uint32_t y,
                                                uint32_t z) -> uint32_t {
   return (expand_bits(x) << 2) | (expand_bits(y) << 1) | expand_bits(z);
 }
-
-
-void check_launch_error(const std::string &kernel_name); 
-
