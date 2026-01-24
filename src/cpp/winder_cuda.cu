@@ -12,9 +12,11 @@
 #include <stdexcept>
 #include <sys/types.h>
 #include <thrust/copy.h>
+#include <thrust/detail/raw_pointer_cast.h>
 #include <thrust/detail/vector_base.h>
 #include <thrust/device_ptr.h>
 #include <thrust/device_vector.h>
+#include <thrust/fill.h>
 #include <thrust/host_vector.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/iterator/discard_iterator.h>
@@ -49,9 +51,7 @@
 void CudaDeleter::operator()(void *ptr) const { cudaFree(ptr); }
 
 auto WinderBackend::get_bvh_view() -> BVH8View {
-  return BVH8View{thrust::raw_pointer_cast(m_bvh8_nodes.data()),
-                  thrust::raw_pointer_cast(m_sorted_geometry.data()),
-                  (uint32_t)m_bvh8_nodes.size()};
+  return BVH8View{m_bvh8_nodes, m_bvh8_leaf_pointers, m_sorted_geometry, m_bvh8_node_count};
 }
 
 auto WinderBackend::CreateFromMesh(const float *trisangles,
@@ -84,6 +84,26 @@ auto WinderBackend::CreateForSolver(const float *points, size_t point_count,
   return self;
 }
 
+template <typename T>
+T *get_aligned_ptr(void *&current_ptr, size_t count,
+                   size_t &remaining_arena_size) {
+  const size_t alignment = L2_ALIGN;
+  size_t requested_bytes = count * sizeof(T);
+
+  void *aligned =
+      std::align(alignment, requested_bytes, current_ptr, remaining_arena_size);
+
+  if (!aligned) {
+    throw std::runtime_error("Arena overflow or alignment failure");
+  }
+
+  // Advance the global pointer for the next buffer
+  current_ptr = static_cast<uint8_t *>(aligned) + requested_bytes;
+  remaining_arena_size -= requested_bytes;
+
+  return static_cast<T *>(aligned);
+}
+
 WinderBackend::WinderBackend(WinderMode mode, size_t size, int device_id)
     : m_mode(mode), m_count(size), m_device(device_id) {
   ScopedCudaDevice device_scope(device_id);
@@ -91,20 +111,84 @@ WinderBackend::WinderBackend(WinderMode mode, size_t size, int device_id)
   size_t floats_per_elem = (mode == WinderMode::Triangle) ? 9 : 6;
   size_t leaf_count = (size + LEAF_SIZE - 1) / LEAF_SIZE;
 
-  // preallocate memory. No initialization!
-  m_sorted_geometry.resize(size * floats_per_elem, thrust::no_init);
-  m_to_internal.resize(size, thrust::no_init);
-  m_to_canonical.resize(size, thrust::no_init);
-  m_bvh8_nodes.resize(1.2 * leaf_count, thrust::no_init);
-  m_leaf_coefficients.resize(leaf_count, thrust::no_init);
-  m_morton_codes.resize(size, thrust::no_init);
-  m_leaf_morton_codes.resize(leaf_count, thrust::no_init);
-  m_binary_nodes.resize(leaf_count - 1, thrust::no_init);
-  m_binary_parents.resize(2 * leaf_count - 1, thrust::no_init);
-  m_binary_aabbs.resize(2 * leaf_count - 1, thrust::no_init);
+  uint32_t max_bvh8_nodes = leaf_count * 0.2;
 
-  // counters are initialized to 0
-  m_atomic_counters.resize(leaf_count - 1);
+  // Allocate memory arena
+  // Compute how much memory is needed, to make every entry 128 byte aligned
+  size_t total_required = 0;
+  auto add_to_total = [&](size_t bytes, size_t alignment) {
+    size_t padding = (alignment - (total_required % alignment)) % alignment;
+    total_required += padding;
+    total_required += bytes;
+  };
+
+  add_to_total(max_bvh8_nodes * sizeof(BVH8Node),
+               L2_ALIGN); // m_bvh8_nodes are already 128 byte
+  add_to_total(leaf_count * sizeof(TailorCoefficientsBf16),
+               L2_ALIGN); // m_leaf_coefficients
+  add_to_total(max_bvh8_nodes * sizeof(LeafPointers),
+               L2_ALIGN); // m_bvh8_leaf_pointers
+  add_to_total((2 * leaf_count - 1) * sizeof(AABB), L2_ALIGN); // m_binary_aabbs
+  add_to_total((leaf_count - 1) * sizeof(BinaryNode),
+               L2_ALIGN); // m_binary_nodes
+  add_to_total(size * floats_per_elem * sizeof(float),
+               L2_ALIGN);                                // m_sorted_geometry
+  add_to_total(size * sizeof(uint32_t), L2_ALIGN);       // m_to_internal
+  add_to_total(size * sizeof(uint32_t), L2_ALIGN);       // m_to_canonical
+  add_to_total(size * sizeof(uint32_t), L2_ALIGN);       // m_morton_codes
+  add_to_total(leaf_count * sizeof(uint32_t), L2_ALIGN); // m_leaf_morton_codes
+  add_to_total((2 * leaf_count - 1) * sizeof(uint32_t),
+               L2_ALIGN); // m_binary_parents
+  add_to_total((leaf_count - 1) * sizeof(uint32_t),
+               L2_ALIGN);                                // m_atomic_counters
+  add_to_total(leaf_count * sizeof(uint32_t), L2_ALIGN); // m_bvh8_leaf_parents
+  add_to_total(max_bvh8_nodes * sizeof(uint32_t),
+               L2_ALIGN); // m_bvh8_internal_parent_map
+  add_to_total((leaf_count - 1) * sizeof(uint32_t),
+               L2_ALIGN); // m_bvh8_work_queue_A
+  add_to_total((leaf_count - 1) * sizeof(uint32_t),
+               L2_ALIGN);                       // m_bvh8_work_queue_B
+  add_to_total(1 * sizeof(uint32_t), L2_ALIGN); // m_global_counter
+  m_memory_arena.resize(total_required);
+
+  // Assign each member to its location in the arena
+  void *ptr = thrust::raw_pointer_cast(m_memory_arena.data());
+  size_t remaining_arena_size = m_memory_arena.size();
+
+  m_bvh8_nodes =
+      get_aligned_ptr<BVH8Node>(ptr, max_bvh8_nodes, remaining_arena_size);
+  m_leaf_coefficients = get_aligned_ptr<TailorCoefficientsBf16>(
+      ptr, leaf_count, remaining_arena_size);
+  m_bvh8_leaf_pointers =
+      get_aligned_ptr<LeafPointers>(ptr, max_bvh8_nodes, remaining_arena_size);
+  m_binary_aabbs =
+      get_aligned_ptr<AABB>(ptr, 2 * leaf_count - 1, remaining_arena_size);
+  m_binary_nodes =
+      get_aligned_ptr<BinaryNode>(ptr, leaf_count - 1, remaining_arena_size);
+  m_sorted_geometry =
+      get_aligned_ptr<float>(ptr, size * floats_per_elem, remaining_arena_size);
+  m_to_internal = get_aligned_ptr<uint32_t>(ptr, size, remaining_arena_size);
+  m_to_canonical = get_aligned_ptr<uint32_t>(ptr, size, remaining_arena_size);
+  m_morton_codes = get_aligned_ptr<uint32_t>(ptr, size, remaining_arena_size);
+  m_leaf_morton_codes =
+      get_aligned_ptr<uint32_t>(ptr, leaf_count, remaining_arena_size);
+  m_binary_parents =
+      get_aligned_ptr<uint32_t>(ptr, 2 * leaf_count - 1, remaining_arena_size);
+  m_atomic_counters =
+      get_aligned_ptr<uint32_t>(ptr, leaf_count - 1, remaining_arena_size);
+  m_bvh8_leaf_parents =
+      get_aligned_ptr<uint32_t>(ptr, leaf_count, remaining_arena_size);
+  m_bvh8_internal_parent_map =
+      get_aligned_ptr<uint32_t>(ptr, max_bvh8_nodes, remaining_arena_size);
+  m_bvh8_work_queue_A =
+      get_aligned_ptr<uint32_t>(ptr, leaf_count - 1, remaining_arena_size);
+  m_bvh8_work_queue_B =
+      get_aligned_ptr<uint32_t>(ptr, leaf_count - 1, remaining_arena_size);
+  m_global_counter = get_aligned_ptr<uint32_t>(
+      ptr, 1, remaining_arena_size); // always at the end!
+
+  // initialize the atomic counters to 0
+  thrust::fill_n(m_atomic_counters, leaf_count - 1, 0);
 }
 
 // Gather kernel that interleaves positions and normals in the sorted geometry
@@ -419,7 +503,7 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients(
 __global__ void convert_binary_tree_to_bvh8(
     const BinaryNode *binary_nodes, const AABB *binary_aabbs,
     BVH8Node *bvh8_nodes, uint32_t *bvh8_leaf_parents,
-    uint32_t *bvh8_leaf_pointers, uint32_t *bvh8_internal_parents,
+    LeafPointers *bvh8_leaf_pointers, uint32_t *bvh8_internal_parents,
     const uint32_t *work_queue_in, const uint32_t work_queue_length,
     uint32_t *work_queue_out, uint32_t *global_counter,
     const uint32_t leaf_count, const uint32_t level_offset) {
@@ -587,7 +671,7 @@ void WinderBackend::initialize_point_data(const float *points,
   Vec3 min_p = scene_bounds.min;
 
   thrust::transform(
-      points_begin, points_begin + m_count, m_morton_codes.begin(),
+      points_begin, points_begin + m_count, m_morton_codes,
       [min_p, scale] __host__ __device__(const Vec3 &p) -> uint32_t {
         // Scale to range [0, 1]
         float tx = (p.x - min_p.x) * scale;
@@ -603,21 +687,23 @@ void WinderBackend::initialize_point_data(const float *points,
         return morton3D_30bit(x, y, z);
       });
 
-  thrust::sequence(m_to_internal.begin(), m_to_internal.end());
+  thrust::sequence(m_to_internal, m_to_internal + m_count);
   // sorts both morton_codes and m_to_internal
-  thrust::sort_by_key(m_morton_codes.begin(), m_morton_codes.end(),
-                      m_to_internal.begin());
+  thrust::sort_by_key(m_morton_codes, m_morton_codes + m_count, m_to_internal);
+  // create inverse mapping m_to_canonical
+  thrust::scatter(thrust::make_counting_iterator<uint32_t>(0),
+                  thrust::make_counting_iterator<uint32_t>(m_count),
+                  m_to_internal, m_to_canonical);
 
   {
     const size_t threads = 256;
     const size_t block_size = (m_count + threads - 1) / threads;
     interleave_gather_geometry<<<block_size, threads>>>(
-        points, normals, m_to_internal.data().get(),
-        m_sorted_geometry.data().get(), m_count);
+        points, normals, m_to_internal, m_sorted_geometry, m_count);
     CUDA_CHECK(cudaGetLastError());
   }
 
-  uint32_t leaf_count = (m_morton_codes.size() + LEAF_SIZE - 1) / LEAF_SIZE;
+  uint32_t leaf_count = (m_count + LEAF_SIZE - 1) / LEAF_SIZE;
   {
     auto morton_leaf_stride_idx = thrust::make_transform_iterator(
         thrust::make_counting_iterator<uint32_t>(0),
@@ -626,14 +712,13 @@ void WinderBackend::initialize_point_data(const float *points,
         });
     // thrust::make_strided_iterator<LEAF_SIZE>(m_morton_codes.begin());
     auto morton_leaf_stride = thrust::make_permutation_iterator(
-        m_morton_codes.begin(), morton_leaf_stride_idx);
+        m_morton_codes, morton_leaf_stride_idx);
     thrust::copy(morton_leaf_stride, morton_leaf_stride + leaf_count,
-                 m_leaf_morton_codes.begin());
+                 m_leaf_morton_codes);
     const size_t threads = 256;
     const size_t grid_size = (leaf_count - 1 + threads - 1) / threads;
     build_binary_topology_kernel<<<grid_size, threads>>>(
-        m_leaf_morton_codes.data().get(), m_binary_nodes.data().get(),
-        m_binary_parents.data().get(), leaf_count);
+        m_leaf_morton_codes, m_binary_nodes, m_binary_parents, leaf_count);
     CUDA_CHECK(cudaGetLastError());
     // the root node gets a unique value for its parent
     m_binary_parents[0] = 0xFFFFFFFF;
@@ -642,61 +727,47 @@ void WinderBackend::initialize_point_data(const float *points,
     const size_t threads = 256;
     const size_t grid_size = (leaf_count * LEAF_SIZE + threads - 1) / threads;
     populate_binary_tree_aabb_and_leaf_coefficients<<<grid_size, threads>>>(
-        m_sorted_geometry.data().get(), m_leaf_coefficients.data().get(),
-        leaf_count, m_binary_nodes.data().get(), m_binary_aabbs.data().get(),
-        m_binary_parents.data().get(), m_atomic_counters.data().get(),
-        m_sorted_geometry.size());
+        m_sorted_geometry, m_leaf_coefficients, leaf_count, m_binary_nodes,
+        m_binary_aabbs, m_binary_parents, m_atomic_counters, m_count);
     CUDA_CHECK(cudaGetLastError());
   }
   // Convert binary LBVH tree into BVH8 tree
   {
     uint32_t max_bvh8_nodes = leaf_count * 0.2;
-    thrust::device_vector<uint32_t> d_leaf_parents(leaf_count, thrust::no_init);
-    thrust::device_vector<uint32_t> d_leaf_pointers(max_bvh8_nodes * 8,
-                                                    thrust::no_init);
-    thrust::device_vector<uint32_t> d_internal_parent_map(max_bvh8_nodes,
-                                                          thrust::no_init);
-
-    // Work queues (there are only leaf_count-1 internal binary nodes)
-    thrust::device_vector<uint32_t> d_work_queue_A(leaf_count - 1,
-                                                   thrust::no_init);
-    thrust::device_vector<uint32_t> d_work_queue_B(leaf_count - 1,
-                                                   thrust::no_init);
-    uint32_t *q_in = thrust::raw_pointer_cast(d_work_queue_A.data());
-    uint32_t *q_out = thrust::raw_pointer_cast(d_work_queue_B.data());
-
-    // Global counter for the NEXT level's size
-    thrust::device_vector<uint32_t> d_global_counter(1, thrust::no_init);
 
     // Add root to queue
     uint32_t root_binary_idx = 0;
-    d_work_queue_A[0] = root_binary_idx;
+    thrust::copy_n(&root_binary_idx, 1, m_bvh8_work_queue_A);
 
     // Set root parent to 0xFFFFFFFF
     uint32_t root_parent = 0xFFFFFFFF;
-    d_internal_parent_map[0] = root_parent;
+    thrust::copy_n(&root_parent, 1, m_bvh8_internal_parent_map);
 
     // Level Creation Loop
     uint32_t level_offset = 0;
     uint32_t current_level_width = 1; // start with only root
     uint32_t total_bvh8_nodes = 1;
 
+    uint32_t *q_in = m_bvh8_work_queue_A;
+    uint32_t *q_out = m_bvh8_work_queue_B;
+
     while (current_level_width > 0) {
       // Reset the counter for the children that will be discovered
-      d_global_counter[0] = 0;
+      uint32_t reset_global_counter = 0;
+      thrust::copy_n(&reset_global_counter, 1, m_global_counter);
 
       uint32_t threads = 256;
       uint32_t blocks = (current_level_width + threads - 1) / threads;
 
       convert_binary_tree_to_bvh8<<<blocks, threads>>>(
-          m_binary_nodes.data().get(), m_binary_aabbs.data().get(),
-          m_bvh8_nodes.data().get(), d_leaf_parents.data().get(),
-          d_leaf_pointers.data().get(), d_internal_parent_map.data().get(),
-          q_in, current_level_width, q_out, d_global_counter.data().get(),
-          leaf_count, level_offset);
+          m_binary_nodes, m_binary_aabbs, m_bvh8_nodes, m_bvh8_leaf_parents,
+          m_bvh8_leaf_pointers, m_bvh8_internal_parent_map, q_in,
+          current_level_width, q_out, m_global_counter, leaf_count,
+          level_offset);
 
       // Get the number of internal nodes found for the next level
-      uint32_t next_level_width = d_global_counter[0];
+      uint32_t next_level_width;
+      thrust::copy_n(m_global_counter, 1, &next_level_width);
 
       // Update offsets for the next kernel call
       level_offset = total_bvh8_nodes;

@@ -1,16 +1,20 @@
 #pragma once
+#include "aabb.h"
 #include "binary_node.h"
 #include "bvh8.h"
+#include "tailor_coefficients.h"
 #include <cstddef>
 #include <cstdint>
 #include <cuda_runtime_api.h>
 #include <memory>
 #include <thrust/detail/raw_pointer_cast.h>
 #include <thrust/device_vector.h>
+#include <thrust/execution_policy.h>
 #include <vector_types.h>
 
 // one warp per leaf
-# define LEAF_SIZE 32
+#define LEAF_SIZE 32
+#define L2_ALIGN 128
 
 // forward definitions
 
@@ -37,8 +41,13 @@ template <typename T> using CudaUniquePtr = std::unique_ptr<T[], CudaDeleter>;
 
 enum class WinderMode : uint8_t { Point, Triangle };
 
+struct LeafPointers{
+  uint32_t p[8];
+};
+
 struct BVH8View {
   const BVH8Node *nodes;
+  const LeafPointers *leaf_pointers;
   const float *geometry;
 
   uint32_t node_count;
@@ -47,7 +56,6 @@ struct BVH8View {
 class WinderBackend {
 
 public:
-
   static auto CreateFromMesh(const float *triangles, size_t triangle_count,
                              int device_id) -> std::unique_ptr<WinderBackend>;
 
@@ -83,6 +91,7 @@ private:
   WinderMode m_mode;
   size_t m_count;
   int m_device;
+  uint32_t m_bvh8_node_count;
 
   // Private constructor used in factories. Allocates vectors but doesn't fill
   // them yet
@@ -91,24 +100,48 @@ private:
   // provide a view on the BVH8 data for kernel launches
   auto get_bvh_view() -> BVH8View;
 
-  // Permutation Maps for sorting and unsorting
-  thrust::device_vector<uint32_t> m_to_internal;  // original -> sorted
-  thrust::device_vector<uint32_t> m_to_canonical; // sorted -> original
+  // memory arena
+  thrust::device_vector<uint8_t> m_memory_arena;
 
-  // sorted copy of the input data used by the bvh8
-  thrust::device_vector<float> m_sorted_geometry;
+  /** * MEMORY ARENA POINTERS
+   * All pointers below refer to segments within m_memory_arena.
+   * N = Point Count, L = Leaf Count (N/32)
+   */
 
-  // The BVH8 Tree Structure
-  thrust::device_vector<BVH8Node> m_bvh8_nodes;
-  // Coefficients attached to leaf nodes
-  thrust::device_vector<TailorCoefficientsBf16> m_leaf_coefficients;
+  // --- Geometric Data & Permutation Maps ---
+  uint32_t *m_to_internal;  // [N] Map: Original index -> Morton sorted index
+  uint32_t *m_to_canonical; // [N] Map: Morton sorted index -> Original index
+  float *m_sorted_geometry; // [N * floats_per_elem] Interleaved P and N (or
+                            // Triangles)
 
-  // Data for auxillary radrix tree construction
-  thrust::device_vector<uint32_t> m_morton_codes;
-  thrust::device_vector<uint32_t> m_leaf_morton_codes;
-  thrust::device_vector<BinaryNode> m_binary_nodes;
-  thrust::device_vector<uint32_t> m_binary_parents;
-  thrust::device_vector<AABB> m_binary_aabbs;
-  thrust::device_vector<uint32_t> m_atomic_counters;
+  // --- Binary LBVH (Auxiliary Structure for BVH8 Construction) ---
+  uint32_t *m_morton_codes; // [N] 30-bit Morton codes for individual points
+  uint32_t
+      *m_leaf_morton_codes; // [L] Morton code of the first point in each leaf
+  BinaryNode
+      *m_binary_nodes; // [L-1] Topology of the auxiliary binary radix tree
+  uint32_t *m_binary_parents;  // [2L-1] Parent pointers for binary tree
+                               // (bottom-up traversal)
+  AABB *m_binary_aabbs;        // [2L-1] AABBs for all binary nodes/leaves
+  uint32_t *m_atomic_counters; // [L-1] Counters for thread synchronization
+                               // during AABB/M2M climb
 
+  // --- BVH8 Tree Structure (Final Output) ---
+  BVH8Node *m_bvh8_nodes; // [~0.2L] The 8-way wide-tree nodes (Quantized AABBs
+                          // + Topology)
+  TailorCoefficientsBf16 *m_leaf_coefficients; // [L] Taylor expansion terms for
+                                               // leaf clusters (Bfloat16)
+
+  // --- BVH8 Construction & M2M Support ---
+  uint32_t *m_bvh8_leaf_parents; // [L] Map: Leaf index -> Parent BVH8Node index
+  LeafPointers *m_bvh8_leaf_pointers; // [0.2L] Map: BVH8Node slot -> Leaf index
+                                  // (for traversal)
+  uint32_t *m_bvh8_internal_parent_map; // [0.2L] Map: BVH8Node -> Parent
+                                        // BVH8Node index (for M2M climb)
+  uint32_t *m_bvh8_work_queue_A; // [L-1] Double-buffer for level-by-level tree
+                                 // conversion
+  uint32_t *m_bvh8_work_queue_B; // [L-1] Double-buffer for level-by-level tree
+                                 // conversion
+  uint32_t *m_global_counter;    // [1] Atomic counter for work queue management
+                                 // and node allocation
 };
