@@ -5,11 +5,15 @@
 #include <cuda_runtime_api.h>
 #include <vector_types.h>
 
+struct AABB;
 struct AABB8BitApprox {
-  uint8_t qmin[3];  // quantized min offset
-  uint8_t qmax[3];  // quantized max offset
-};
+  uint8_t qmin[3]; // quantized min offset
+  uint8_t qmax[3]; // quantized max offset
 
+  __device__ __forceinline__ static auto
+  quantize_aabb(const AABB &aabb, const Vec3 &parent_min,
+                const Vec3 &parent_inv_extend) -> AABB8BitApprox;
+};
 
 struct AABB {
   Vec3 min;
@@ -66,3 +70,17 @@ struct AABB {
              fmaxf(a.max.z, b.max.z)}};
   }
 };
+
+__device__ __forceinline__ auto
+AABB8BitApprox::quantize_aabb(const AABB &aabb, const Vec3 &parent_min,
+                              const Vec3 &parent_inv_extend) -> AABB8BitApprox {
+
+  AABB8BitApprox result;
+  result.qmin[0] = (uint8_t)((aabb.min.x - parent_min.x) * parent_inv_extend.x);
+  result.qmin[1] = (uint8_t)((aabb.min.y - parent_min.y) * parent_inv_extend.y);
+  result.qmin[2] = (uint8_t)((aabb.min.z - parent_min.z) * parent_inv_extend.z);
+  result.qmax[0] = (uint8_t)((aabb.max.x - parent_min.x) * parent_inv_extend.x);
+  result.qmax[1] = (uint8_t)((aabb.max.y - parent_min.y) * parent_inv_extend.y);
+  result.qmax[2] = (uint8_t)((aabb.max.z - parent_min.z) * parent_inv_extend.z);
+  return result;
+}

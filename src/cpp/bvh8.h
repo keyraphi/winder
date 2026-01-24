@@ -12,7 +12,7 @@ struct BVH8Node {
   AABB parent_aabb;               // 24 bytes
   uint32_t child_base;            // 4 bytes
   ChildType child_meta[8];        // 8 bytes
-  AABB8BitApprox child_approx[8]; // 48 bytes (6*8)
+  AABB8BitApprox child_aabb_approx[8]; // 48 bytes (6*8)
   // 84 bytes so far => 44 left for tailor coefficients
 
   // Quantized Tailor coefficients: 44 bytes

@@ -2,14 +2,17 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cub/block/block_scan.cuh>
 #include <cub/util_type.cuh>
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
 #include <device_atomic_functions.h>
 #include <driver_types.h>
 #include <memory>
+#include <stdexcept>
 #include <sys/types.h>
 #include <thrust/copy.h>
+#include <thrust/detail/vector_base.h>
 #include <thrust/device_ptr.h>
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
@@ -46,9 +49,9 @@
 void CudaDeleter::operator()(void *ptr) const { cudaFree(ptr); }
 
 auto WinderBackend::get_bvh_view() -> BVH8View {
-  return BVH8View{thrust::raw_pointer_cast(m_nodes.data()),
+  return BVH8View{thrust::raw_pointer_cast(m_bvh8_nodes.data()),
                   thrust::raw_pointer_cast(m_sorted_geometry.data()),
-                  (uint32_t)m_nodes.size()};
+                  (uint32_t)m_bvh8_nodes.size()};
 }
 
 auto WinderBackend::CreateFromMesh(const float *trisangles,
@@ -92,14 +95,13 @@ WinderBackend::WinderBackend(WinderMode mode, size_t size, int device_id)
   m_sorted_geometry.resize(size * floats_per_elem, thrust::no_init);
   m_to_internal.resize(size, thrust::no_init);
   m_to_canonical.resize(size, thrust::no_init);
-  m_nodes.resize(1.2 * leaf_count, thrust::no_init);
+  m_bvh8_nodes.resize(1.2 * leaf_count, thrust::no_init);
   m_leaf_coefficients.resize(leaf_count, thrust::no_init);
-  m_leaf_aabb.resize(leaf_count, thrust::no_init);
   m_morton_codes.resize(size, thrust::no_init);
   m_leaf_morton_codes.resize(leaf_count, thrust::no_init);
   m_binary_nodes.resize(leaf_count - 1, thrust::no_init);
   m_binary_parents.resize(2 * leaf_count - 1, thrust::no_init);
-  m_binary_aabb.resize(leaf_count - 1, thrust::no_init);
+  m_binary_aabbs.resize(2 * leaf_count - 1, thrust::no_init);
 
   // counters are initialized to 0
   m_atomic_counters.resize(leaf_count - 1);
@@ -242,7 +244,7 @@ __device__ __forceinline__ auto warp_reduce_add_down(float val) -> float {
 }
 
 __global__ void populate_binary_tree_aabb_and_leaf_coefficients(
-    const float *__restrict__ sorted_geometry, AABB *leaf_aabbs,
+    const float *__restrict__ sorted_geometry,
     TailorCoefficientsBf16 *leaf_coefficients, const uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, uint32_t *atomic_counters,
@@ -290,8 +292,8 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients(
   }
   // write aggregated AABB for leaf
   if (lane_id == 0) {
-    leaf_aabbs[leaf_idx].min = p_min;
-    leaf_aabbs[leaf_idx].max = p_max;
+    binary_aabbs[leaf_idx + leaf_count - 1].min = p_min;
+    binary_aabbs[leaf_idx + leaf_count - 1].max = p_max;
   }
 
   // Compute tailor coefficients
@@ -392,19 +394,13 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients(
     while (current_parent_idx != 0xFFFFFFFF) {
       BinaryNode parent_node = binary_nodes[current_parent_idx];
 
-      auto get_aabb = [&](uint32_t id) -> AABB {
-        return (id >= leaf_count - 1)
-                   ? leaf_aabbs[id -
-                                (leaf_count - 1)] // only in first iteration
-                   : binary_aabbs[id];
-      };
-
       // merge child aabbs
-      binary_aabbs[current_parent_idx] = AABB::merge(
-          get_aabb(parent_node.left_child), get_aabb(parent_node.right_child));
+      binary_aabbs[current_parent_idx] =
+          AABB::merge(binary_aabbs[parent_node.left_child],
+                      binary_aabbs[parent_node.right_child]);
       // make sure that aabb has been written before the counter is incremented
-      // cuda::atomic_thread_fence(cuda::memory_order_seq_cst,
-      //                           cuda::thread_scope_device);
+      cuda::atomic_thread_fence(cuda::memory_order_seq_cst,
+                                cuda::thread_scope_device);
 
       // Move up to the next level
       uint32_t next_parent = binary_parents[current_parent_idx];
@@ -418,6 +414,155 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients(
       current_parent_idx = next_parent;
     }
   }
+}
+
+__global__ void convert_binary_tree_to_bvh8(
+    const BinaryNode *binary_nodes, const AABB *binary_aabbs,
+    BVH8Node *bvh8_nodes, uint32_t *bvh8_leaf_parents,
+    uint32_t *bvh8_leaf_pointers, uint32_t *bvh8_internal_parents,
+    const uint32_t *work_queue_in, const uint32_t work_queue_length,
+    uint32_t *work_queue_out, uint32_t *global_counter,
+    const uint32_t leaf_count, const uint32_t level_offset) {
+  uint32_t idx = threadIdx.x + blockIdx.x * blockDim.x;
+  if (idx >= work_queue_length) {
+    return;
+  }
+
+  uint32_t children[8];
+  uint32_t my_binary_idx = work_queue_in[idx];
+  children[0] = my_binary_idx;
+  uint32_t child_count = 1;
+  for (int iter = 0; iter < 7; ++iter) {
+    float max_diag = -1.F;
+    int split_idx = -1;
+
+    // Find the best candidate to split
+    for (int i = 0; i < child_count; ++i) {
+      uint32_t binary_idx = children[i];
+      if (!BinaryNode::is_leaf(binary_idx, leaf_count)) {
+        // find the inner node with the largest aabb
+        float d = binary_aabbs[binary_idx].radius_sq();
+        if (d > max_diag) {
+          max_diag = d;
+          split_idx = i;
+        }
+      }
+    }
+
+    if (split_idx == -1) {
+      break; // No more internal nodes to split
+    }
+
+    // Split the winner
+    uint32_t node_to_split = children[split_idx];
+    children[split_idx] = binary_nodes[node_to_split].left_child;
+    children[child_count] = binary_nodes[node_to_split].right_child;
+    child_count++;
+  }
+  // count how many internal nodes (non leafs) were found
+  uint32_t internal_node_count = 0;
+  for (uint32_t i = 0; i < child_count; ++i) {
+    if (!BinaryNode::is_leaf(children[i], leaf_count)) {
+      internal_node_count++;
+    }
+  }
+
+  // We need to know where in the bvh8_nodes array to store the children
+  // (child_base) prefix sum over internal node count to find out the offset for
+  // this thread, at least locally in this block.
+  typedef cub::BlockScan<uint32_t, 256>
+      BlockScan; // Assuming 256 threads per block
+  __shared__ typename BlockScan::TempStorage temp_storage;
+
+  uint32_t thread_offset;
+  uint32_t total_internal_in_block;
+  BlockScan(temp_storage)
+      .ExclusiveSum(internal_node_count, thread_offset,
+                    total_internal_in_block);
+
+  // Get device wide offset of this block by claiming the current value from the
+  // global counter. Only done once per block
+  __shared__ uint32_t global_base;
+  if (threadIdx.x == 0) {
+    // next block that claims the counter will leaf space for all internal nodes
+    // in this block.
+    // This counter can be used to find out how long work_queue_out is in the
+    // end.
+    global_base = atomicAdd(global_counter, total_internal_in_block);
+  }
+  __syncthreads();
+
+  // This thread will write its childs at its offset within the block
+  uint32_t my_child_base = global_base + thread_offset + level_offset;
+
+  BVH8Node out_node;
+  uint32_t bvh8_idx = idx + level_offset;
+  AABB parent_aabb = binary_aabbs[my_binary_idx];
+  out_node.parent_aabb = parent_aabb;
+  out_node.child_base = my_child_base;
+
+  // AABB Quantization & Writing out the BVH8Node
+  Vec3 parent_min = parent_aabb.min;
+  Vec3 parent_inv_ext = 255.0f / (parent_aabb.max - parent_aabb.min);
+
+  int internal_found = 0;
+  uint32_t my_leaf_indices[8];
+
+#pragma unroll
+  for (int i = 0; i < 8; ++i) {
+    if (i < child_count) {
+      uint32_t binary_child_idx = children[i];
+      bool is_child_leaf = BinaryNode::is_leaf(binary_child_idx, leaf_count);
+
+      // Quantize Child AABB
+      AABB child_box = binary_aabbs[binary_child_idx];
+
+      out_node.child_aabb_approx[i] =
+          AABB8BitApprox::quantize_aabb(child_box, parent_min, parent_inv_ext);
+
+      if (is_child_leaf) {
+        out_node.child_meta[i] = ChildType::LEAF;
+        uint32_t leaf_raw_idx = binary_child_idx - (leaf_count - 1);
+
+        my_leaf_indices[i] = leaf_raw_idx;
+
+        // Let the leaf know which BVH8Node is its parent
+        bvh8_leaf_parents[leaf_raw_idx] = bvh8_idx;
+      } else {
+        out_node.child_meta[i] = ChildType::INTERNAL;
+        // Calculate the specific global index for this child in the next level
+        uint32_t next_bvh8_idx = my_child_base + internal_found;
+
+        // The work_queue_out points to the inner BinaryNode that must be turned
+        // into BVH8Node in the next kernel call
+        work_queue_out[global_base + thread_offset + internal_found] =
+            binary_child_idx;
+
+        bvh8_internal_parents[next_bvh8_idx] = bvh8_idx;
+
+        my_leaf_indices[i] = 0xFFFFFFFF;
+        internal_found++; // Increment after use
+      }
+    } else {
+      out_node.child_meta[i] = ChildType::EMPTY;
+      my_leaf_indices[i] = 0xFFFFFFFF;
+    }
+  }
+
+  // let the inner nodes know how many childs they have
+  out_node.tailor_coefficients.set_expected_children(child_count);
+
+  // Coalesced Writes
+  bvh8_nodes[bvh8_idx] = out_node;
+
+  // Parallel Leaf Pointers (32-byte vectorized write)
+  auto *leaf_ptr_v4 = reinterpret_cast<uint4 *>(bvh8_leaf_pointers);
+  leaf_ptr_v4[bvh8_idx * 2] =
+      make_uint4(my_leaf_indices[0], my_leaf_indices[1], my_leaf_indices[2],
+                 my_leaf_indices[3]);
+  leaf_ptr_v4[bvh8_idx * 2 + 1] =
+      make_uint4(my_leaf_indices[4], my_leaf_indices[5], my_leaf_indices[6],
+                 my_leaf_indices[7]);
 }
 
 void WinderBackend::initialize_point_data(const float *points,
@@ -472,7 +617,7 @@ void WinderBackend::initialize_point_data(const float *points,
     CUDA_CHECK(cudaGetLastError());
   }
 
-  uint32_t leaf_count = (m_morton_codes.size() + LEAF_SIZE + 1) / LEAF_SIZE;
+  uint32_t leaf_count = (m_morton_codes.size() + LEAF_SIZE - 1) / LEAF_SIZE;
   {
     auto morton_leaf_stride_idx = thrust::make_transform_iterator(
         thrust::make_counting_iterator<uint32_t>(0),
@@ -497,11 +642,80 @@ void WinderBackend::initialize_point_data(const float *points,
     const size_t threads = 256;
     const size_t grid_size = (leaf_count * LEAF_SIZE + threads - 1) / threads;
     populate_binary_tree_aabb_and_leaf_coefficients<<<grid_size, threads>>>(
-        m_sorted_geometry.data().get(), m_leaf_aabb.data().get(),
-        m_leaf_coefficients.data().get(), leaf_count,
-        m_binary_nodes.data().get(), m_binary_aabb.data().get(),
+        m_sorted_geometry.data().get(), m_leaf_coefficients.data().get(),
+        leaf_count, m_binary_nodes.data().get(), m_binary_aabbs.data().get(),
         m_binary_parents.data().get(), m_atomic_counters.data().get(),
         m_sorted_geometry.size());
     CUDA_CHECK(cudaGetLastError());
   }
+  // Convert binary LBVH tree into BVH8 tree
+  {
+    uint32_t max_bvh8_nodes = leaf_count * 0.2;
+    thrust::device_vector<uint32_t> d_leaf_parents(leaf_count, thrust::no_init);
+    thrust::device_vector<uint32_t> d_leaf_pointers(max_bvh8_nodes * 8,
+                                                    thrust::no_init);
+    thrust::device_vector<uint32_t> d_internal_parent_map(max_bvh8_nodes,
+                                                          thrust::no_init);
+
+    // Work queues (there are only leaf_count-1 internal binary nodes)
+    thrust::device_vector<uint32_t> d_work_queue_A(leaf_count - 1,
+                                                   thrust::no_init);
+    thrust::device_vector<uint32_t> d_work_queue_B(leaf_count - 1,
+                                                   thrust::no_init);
+    uint32_t *q_in = thrust::raw_pointer_cast(d_work_queue_A.data());
+    uint32_t *q_out = thrust::raw_pointer_cast(d_work_queue_B.data());
+
+    // Global counter for the NEXT level's size
+    thrust::device_vector<uint32_t> d_global_counter(1, thrust::no_init);
+
+    // Add root to queue
+    uint32_t root_binary_idx = 0;
+    d_work_queue_A[0] = root_binary_idx;
+
+    // Set root parent to 0xFFFFFFFF
+    uint32_t root_parent = 0xFFFFFFFF;
+    d_internal_parent_map[0] = root_parent;
+
+    // Level Creation Loop
+    uint32_t level_offset = 0;
+    uint32_t current_level_width = 1; // start with only root
+    uint32_t total_bvh8_nodes = 1;
+
+    while (current_level_width > 0) {
+      // Reset the counter for the children that will be discovered
+      d_global_counter[0] = 0;
+
+      uint32_t threads = 256;
+      uint32_t blocks = (current_level_width + threads - 1) / threads;
+
+      convert_binary_tree_to_bvh8<<<blocks, threads>>>(
+          m_binary_nodes.data().get(), m_binary_aabbs.data().get(),
+          m_bvh8_nodes.data().get(), d_leaf_parents.data().get(),
+          d_leaf_pointers.data().get(), d_internal_parent_map.data().get(),
+          q_in, current_level_width, q_out, d_global_counter.data().get(),
+          leaf_count, level_offset);
+
+      // Get the number of internal nodes found for the next level
+      uint32_t next_level_width = d_global_counter[0];
+
+      // Update offsets for the next kernel call
+      level_offset = total_bvh8_nodes;
+      total_bvh8_nodes += next_level_width;
+      current_level_width = next_level_width;
+
+      // Swap Work Queues
+      std::swap(q_in, q_out);
+
+      if (total_bvh8_nodes >= max_bvh8_nodes) {
+        throw std::runtime_error(
+            "This shouldn't happen. Maybe we need a floor to compute "
+            "max_bvh8_nodes. Bug is more likely!");
+      }
+    }
+  }
+
+  // TODO:
+  // 1. memory arena
+  // 2. tests for everything!
+  // 3. M2M for tailor coefficients
 }

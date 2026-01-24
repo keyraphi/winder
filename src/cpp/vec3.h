@@ -73,6 +73,9 @@ struct Vec3 {
   __host__ __device__ __forceinline__ auto operator*(float s) const -> Vec3 {
     return {x * s, y * s, z * s};
   }
+  __host__ __device__ __forceinline__ auto operator/(float n) const -> Vec3 {
+    return {x / n, y / n, z / n};
+  }
   __host__ __device__ __forceinline__ auto outer_product(const Vec3 &b) const
       -> Mat3x3 {
     // x*b.x, x*b.y, x*b.z
@@ -102,4 +105,8 @@ __host__ __device__ __forceinline__ auto Vec3_bf16::operator=(const Vec3 &v) {
   x = v.x;
   y = v.y;
   z = v.z;
+}
+
+__host__ __device__ __forceinline__ auto operator/(const float n, const Vec3 &v) -> Vec3 {
+  return {v.x / n, v.y / n, v.z / n};
 }

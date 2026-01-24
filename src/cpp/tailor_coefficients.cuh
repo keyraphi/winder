@@ -53,13 +53,13 @@
   PACK_CORE(SRC, OFFSET, LOW)                                                  \
   PACK_SPILL_##SHOULD_SPILL(OFFSET, HIGH)
 
-__device__ auto TailorCoefficientsQuantized::get_parent_idx() const
+__device__ auto TailorCoefficientsQuantized::get_expected_children() const
     -> uint32_t {
   // use first uint32_t for parent idx
   return tailor_data[0];
 }
 
-__device__ void TailorCoefficientsQuantized::set_parent_idx(uint32_t idx) {
+__device__ void TailorCoefficientsQuantized::set_expected_children(uint32_t idx) {
   // use first uint32_t for parent idx
   tailor_data[0] = idx;
 }

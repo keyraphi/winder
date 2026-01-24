@@ -99,17 +99,16 @@ private:
   thrust::device_vector<float> m_sorted_geometry;
 
   // The BVH8 Tree Structure
-  thrust::device_vector<BVH8Node> m_nodes;
-  // Data attached to leaf nodes
+  thrust::device_vector<BVH8Node> m_bvh8_nodes;
+  // Coefficients attached to leaf nodes
   thrust::device_vector<TailorCoefficientsBf16> m_leaf_coefficients;
-  thrust::device_vector<AABB> m_leaf_aabb;
 
   // Data for auxillary radrix tree construction
   thrust::device_vector<uint32_t> m_morton_codes;
   thrust::device_vector<uint32_t> m_leaf_morton_codes;
   thrust::device_vector<BinaryNode> m_binary_nodes;
   thrust::device_vector<uint32_t> m_binary_parents;
-  thrust::device_vector<AABB> m_binary_aabb;
+  thrust::device_vector<AABB> m_binary_aabbs;
   thrust::device_vector<uint32_t> m_atomic_counters;
 
 };

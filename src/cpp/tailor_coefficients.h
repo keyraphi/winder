@@ -16,12 +16,10 @@
 struct TailorCoefficientsQuantized {
   uint32_t tailor_data[11];
 
-  // During tree construction we use the tailor_data memory for a parent idx
-  // which is used once for a bottom up traversal to spread the aabb and tailor
-  // coefficients to the inner nodes.
-  __device__ inline auto get_parent_idx() const -> uint32_t;
-
-  __device__ inline void set_parent_idx(uint32_t idx);
+  // During tree construction we use the tailor_data memory to temporarily store
+  // how many children the node actually has.
+  __device__ inline auto get_expected_children() const -> uint32_t;
+  __device__ inline void set_expected_children(uint32_t idx);
 
   __device__ inline auto get_shared_scale_factor() const -> float;
 
@@ -29,13 +27,13 @@ struct TailorCoefficientsQuantized {
   set_tailor_coefficients(const Vec3 &zero_order, const Mat3x3 &first_order,
                           const Tensor3_compressed &second_order);
 
-   __device__ inline auto
+  __device__ inline auto
   get_tailor_zero_order(const float shared_scale_factor) const -> Vec3_bf16;
 
-   __device__ inline auto
+  __device__ inline auto
   get_tailor_first_order(const float shared_scale_factor) const -> Mat3x3_bf16;
 
-   __device__ inline auto
+  __device__ inline auto
   get_tailor_second_order(const float shared_scale_factor) const
       -> Tensor3_bf16_compressed;
 };
