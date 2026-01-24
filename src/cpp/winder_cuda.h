@@ -85,7 +85,7 @@ public:
 
   // Used in factories
   void initialize_mesh_data(const float *triangles);
-  void initialize_point_data(const float *points, const float *normals);
+  void initialize_point_data(const float *points, const float *normals, int device_id);
 
 private:
   WinderMode m_mode;
