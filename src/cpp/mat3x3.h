@@ -27,6 +27,16 @@ struct Mat3x3 {
       data[i] = m.data[i];
     }
   }
+  __host__ __device__ __forceinline__ Mat3x3 &operator+=(const Mat3x3 &m) {
+    for (int i = 0; i < 9; i++) {
+      data[i] += m.data[i];
+    }
+    return *this;
+  }
+  __host__ __device__ __forceinline__ auto operator+(const Mat3x3 &m) const {
+    Mat3x3 result = *this;
+    return result += m;
+  }
 };
 
 __host__ __device__ __forceinline__ auto

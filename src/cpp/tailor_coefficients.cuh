@@ -69,15 +69,8 @@ TailorCoefficientsQuantized::get_shared_scale_factor() const -> float {
   const uint8_t *last_word =
       reinterpret_cast<const uint8_t *>(&tailor_data[10]);
   const uint32_t shared_exponent = last_word[3];
-  float scale_factor;
-  asm volatile(".reg .u32 exp_bits;\n\t"
-               "max.u32 exp_bits, %1, 9;\n\t"
-               "sub.u32 exp_bits, exp_bits, 9;\n\t"
-               "shl.b32 exp_bits, exp_bits, 23;\n\t"
-               "mov.b32 %0, exp_bits;\n\t"
-               : "=f"(scale_factor)
-               : "r"(shared_exponent));
-  return scale_factor;
+  float shared_scale_factor = __int_as_float(((int)shared_exponent - 9) << 23);
+  return shared_scale_factor;
 }
 
 __device__ inline void TailorCoefficientsQuantized::set_tailor_coefficients(

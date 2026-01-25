@@ -42,7 +42,7 @@ template <typename T> using CudaUniquePtr = std::unique_ptr<T[], CudaDeleter>;
 enum class WinderMode : uint8_t { Point, Triangle };
 
 struct LeafPointers{
-  uint32_t p[8];
+  uint32_t indices[8];
 };
 
 struct BVH8View {
