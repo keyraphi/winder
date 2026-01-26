@@ -3,6 +3,11 @@
 #include "tailor_coefficients.h"
 #include <cstdint>
 
+// Leafs have an extra LeafPointer to the actual geometry array
+struct LeafPointers{
+  uint32_t indices[8];
+};
+
 // Info what each of the childs are
 enum class ChildType : uint8_t { EMPTY = 0, INTERNAL = 1, LEAF = 2 };
 

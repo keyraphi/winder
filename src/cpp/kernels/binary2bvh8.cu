@@ -4,6 +4,7 @@
 #include "bvh8.h"
 #include "common.cuh"
 #include "vec3.h"
+#include <cmath>
 #include <cooperative_groups.h>
 #include <cooperative_groups/scan.h>
 #include <cstdint>
@@ -14,6 +15,7 @@
 #include <cuda_runtime_api.h>
 #include <device_atomic_functions.h>
 #include <driver_types.h>
+#include <stdexcept>
 #include <vector_functions.h>
 #include <vector_types.h>
 
@@ -24,6 +26,7 @@ convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
 
   cg::grid_group grid = cg::this_grid();
   cg::thread_block block = cg::this_thread_block();
+
   // These stay in registers, consistent across the whole grid
   uint32_t current_level_width = 1;
   uint32_t current_level_offset = 0;
@@ -33,7 +36,7 @@ convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
   if (grid.thread_rank() == 0) {
     params.work_queue_A[0] = 0;
     params.bvh8_internal_parents[0] = 0xFFFFFFFF;
-    *(params.global_counter) = 1;
+    *(params.global_counter) = 0;
   }
   grid.sync();
 
@@ -46,48 +49,57 @@ convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
     grid.sync();
 
     // level_width could be > number of threads in grid
-    for (uint32_t idx = grid.thread_rank(); idx < current_level_width;
-         idx += grid.size()) {
+    // for (uint32_t idx = grid.thread_rank(); idx < current_level_width;
+    //      idx += grid.size()) {
+    uint32_t level_width_blocks =
+        (current_level_width + blockDim.x - 1) / blockDim.x;
+    for (uint32_t idx = grid.thread_rank();
+         idx < level_width_blocks * blockDim.x; idx += grid.size()) {
 
-      uint32_t children[8];
-      uint32_t my_binary_idx = work_queue_in[idx];
-      children[0] = my_binary_idx;
+      uint32_t internal_node_count = 0;
+      uint32_t my_binary_idx = 0;
       uint32_t child_count = 1;
-      for (int iter = 0; iter < 7; ++iter) {
-        float max_diag = -1.F;
-        int split_idx = -1;
+      uint32_t children[8];
+      if (idx < current_level_width) {
+        my_binary_idx = work_queue_in[idx];
+        children[0] = my_binary_idx;
+        for (int iter = 0; iter < 7; ++iter) {
+          float max_diag = -1.F;
+          int split_idx = -1;
 
-        // Find the best candidate to split
-        for (int i = 0; i < child_count; ++i) {
-          uint32_t binary_idx = children[i];
-          if (!BinaryNode::is_leaf(binary_idx, params.leaf_count)) {
-            // find the inner node with the largest aabb
-            float d = params.binary_aabbs[binary_idx].radius_sq();
-            if (d > max_diag) {
-              max_diag = d;
-              split_idx = i;
+          // Find the best candidate to split
+          for (int i = 0; i < child_count; ++i) {
+            uint32_t binary_idx = children[i];
+            if (!BinaryNode::is_leaf(binary_idx, params.leaf_count)) {
+              // find the inner node with the largest aabb
+              float d = params.binary_aabbs[binary_idx].radius_sq();
+              if (d > max_diag) {
+                max_diag = d;
+                split_idx = i;
+              }
             }
           }
-        }
 
-        if (split_idx == -1) {
-          break; // No more internal nodes to split
-        }
+          if (split_idx == -1) {
+            break; // No more internal nodes to split
+          }
 
-        // Split the winner
-        uint32_t node_to_split = children[split_idx];
-        children[split_idx] = params.binary_nodes[node_to_split].left_child;
-        children[child_count] = params.binary_nodes[node_to_split].right_child;
-        child_count++;
+          // Split the winner
+          uint32_t node_to_split = children[split_idx];
+          children[split_idx] = params.binary_nodes[node_to_split].left_child;
+          children[child_count] =
+              params.binary_nodes[node_to_split].right_child;
+          child_count++;
+        }
+        // count how many internal nodes (non leafs) were found
+        for (uint32_t i = 0; i < child_count; ++i) {
+          if (!BinaryNode::is_leaf(children[i], params.leaf_count)) {
+            internal_node_count++;
+          }
+        }
       }
-      // count how many internal nodes (non leafs) were found
-      uint32_t internal_node_count = 0;
-      for (uint32_t i = 0; i < child_count; ++i) {
-        if (!BinaryNode::is_leaf(children[i], params.leaf_count)) {
-          internal_node_count++;
-        }
-      }
 
+      // At this point it is guaranteed that a full block is running
       // We need to know where in the bvh8_nodes array to store the children
       // (child_base) prefix sum over internal node count to find out the offset
       // for this thread, at least locally in this block.
@@ -112,6 +124,11 @@ convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
       }
       block.sync();
 
+      // we don't need the full block in this for loop anymore
+      if (idx >= current_level_width) {
+        break;
+      }
+
       // index for this bvh8 node
       uint32_t bvh8_idx = current_level_offset + idx;
       // This thread will write its childs at its offset within the block
@@ -127,6 +144,8 @@ convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
 
       // AABB Quantization & Writing out the BVH8Node
       Vec3 parent_min = parent_aabb.min;
+      // Note: can be inf - doesn't matter because of implementation of
+      // quantize_aabb
       Vec3 parent_inv_ext = 255.F / (parent_aabb.max - parent_aabb.min);
 
       int internal_found = 0;
@@ -211,15 +230,22 @@ convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
 void convert_binary_tree_to_bvh8(ConvertBinary2BVH8Params params,
                                  const int device_id) {
   int threads = 256;
-  int numBlocksPerSm = 0;
+  int blocks_per_sm = 0;
+
   cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-      &numBlocksPerSm, convert_binary_tree_to_bvh8, threads, 0);
+      &blocks_per_sm, convert_binary_tree_to_bvh8_kernel, threads, 0);
+
   cudaDeviceProp deviceProp;
   cudaGetDeviceProperties(&deviceProp, device_id);
-  int blocks = numBlocksPerSm * deviceProp.multiProcessorCount;
+  int blocks = blocks_per_sm * deviceProp.multiProcessorCount;
+
+  // Check if the device actually supports cooperative launch
+  if (!deviceProp.cooperativeLaunch) {
+    throw std::runtime_error("Device does not support Cooperative Launch");
+  }
 
   void *args[] = {&params};
-  cudaLaunchCooperativeKernel((void *)convert_binary_tree_to_bvh8, blocks,
-                              threads, args);
+  cudaLaunchCooperativeKernel((void *)convert_binary_tree_to_bvh8_kernel,
+                              blocks, threads, args);
   CUDA_CHECK(cudaGetLastError());
 }

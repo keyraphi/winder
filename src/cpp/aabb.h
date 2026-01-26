@@ -23,11 +23,6 @@ struct AABB {
   static __host__ __device__ __forceinline__ auto empty() -> AABB {
     return {{INFINITY, INFINITY, INFINITY}, {-INFINITY, -INFINITY, -INFINITY}};
   }
-  // factory for AABB for a single point
-  static __host__ __device__ __forceinline__ auto from_point(const Vec3 &p)
-      -> AABB {
-    return {p, p};
-  }
 
   __device__ __forceinline__ static auto
   from_approximation(const AABB &parent, const AABB8BitApprox &approx) -> AABB {
@@ -71,16 +66,38 @@ struct AABB {
   }
 };
 
+__host__ __device__ __forceinline__ auto Vec3::get_aabb() const -> AABB {
+  return {*this, *this};
+}
+
+// only for cuda compiler:
+#ifdef __CUDACC__
+
+__device__ __forceinline__ auto quantize_value(float value, float p_min,
+                                               float p_inv_ext) {
+
+  // catch infinite p_inv_ext. NaN results are flushed to positive zero.
+  float normalized = __saturatef((value - p_min) * p_inv_ext) * 255.F;
+  return (uint8_t)__float2uint_rn(normalized);
+}
+
 __device__ __forceinline__ auto
 AABB8BitApprox::quantize_aabb(const AABB &aabb, const Vec3 &parent_min,
                               const Vec3 &parent_inv_extend) -> AABB8BitApprox {
-
   AABB8BitApprox result;
-  result.qmin[0] = (uint8_t)((aabb.min.x - parent_min.x) * parent_inv_extend.x);
-  result.qmin[1] = (uint8_t)((aabb.min.y - parent_min.y) * parent_inv_extend.y);
-  result.qmin[2] = (uint8_t)((aabb.min.z - parent_min.z) * parent_inv_extend.z);
-  result.qmax[0] = (uint8_t)((aabb.max.x - parent_min.x) * parent_inv_extend.x);
-  result.qmax[1] = (uint8_t)((aabb.max.y - parent_min.y) * parent_inv_extend.y);
-  result.qmax[2] = (uint8_t)((aabb.max.z - parent_min.z) * parent_inv_extend.z);
+  result.qmin[0] =
+      quantize_value(aabb.min.x, parent_min.x, parent_inv_extend.x);
+  result.qmin[1] =
+      quantize_value(aabb.min.y, parent_min.y, parent_inv_extend.y);
+  result.qmin[2] =
+      quantize_value(aabb.min.z, parent_min.z, parent_inv_extend.z);
+  result.qmax[0] =
+      quantize_value(aabb.max.x, parent_min.x, parent_inv_extend.x);
+  result.qmax[1] =
+      quantize_value(aabb.max.y, parent_min.y, parent_inv_extend.y);
+  result.qmax[2] =
+      quantize_value(aabb.max.z, parent_min.z, parent_inv_extend.z);
   return result;
 }
+
+#endif

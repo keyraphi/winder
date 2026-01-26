@@ -10,17 +10,16 @@ void interleave_gather_geometry(const float *__restrict__ points,
                                 const float *__restrict__ normals,
                                 const uint32_t *__restrict__ indices,
                                 float *__restrict__ out_geometry,
-                                uint32_t count, uint32_t threads,
-                                uint32_t blocks);
+                                uint32_t count);
 
 void build_binary_topology(const uint32_t *__restrict__ morton_codes,
                            BinaryNode *nodes, uint32_t *parents,
-                           uint32_t leaf_count, uint32_t threads,
-                           uint32_t blocks);
+                           uint32_t leaf_count);
 
+template <typename Geometry>
 void populate_binary_tree_aabb_and_leaf_coefficients(
-    const float *__restrict__ sorted_geometry,
+    const Geometry *__restrict__ sorted_geometry,
     TailorCoefficientsBf16 *leaf_coefficients, uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, uint32_t *atomic_counters,
-    uint32_t point_count, uint32_t threads, uint32_t blocks);
+    uint32_t point_count);

@@ -19,7 +19,7 @@
 #include <vector_functions.h>
 #include <vector_types.h>
 
-__global__ void compute_internal_tailor_coefficients_m2m(
+__global__ void compute_internal_tailor_coefficients_m2m_kernel(
     const BVH8Node *nodes, const uint32_t *internal_parent_map,
     const AABB *leaf_aabbs, const TailorCoefficientsBf16 *leaf_coefficients,
     const uint32_t *leaf_parents, const LeafPointers *leaf_pointers,
@@ -209,9 +209,10 @@ void compute_internal_tailor_coefficients_m2m(
     const BVH8Node *nodes, const uint32_t *internal_parent_map,
     const AABB *leaf_aabbs, const TailorCoefficientsBf16 *leaf_coefficients,
     const uint32_t *leaf_parents, const LeafPointers *leaf_pointers,
-    const uint32_t leaf_count, uint32_t *atomic_counters,
-    const uint32_t threads, const uint32_t blocks) {
-  compute_internal_tailor_coefficients_m2m<<<blocks, threads>>>(
+    const uint32_t leaf_count, uint32_t *atomic_counters) {
+  uint32_t threads = 256;
+  uint32_t blocks = (leaf_count + threads - 1) / threads;
+  compute_internal_tailor_coefficients_m2m_kernel<<<blocks, threads>>>(
       nodes, internal_parent_map, leaf_aabbs, leaf_coefficients, leaf_parents,
       leaf_pointers, leaf_count, atomic_counters);
   CUDA_CHECK(cudaGetLastError());

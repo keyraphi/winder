@@ -3,6 +3,7 @@
 #include "binary_node.h"
 #include "bvh8.h"
 #include "tailor_coefficients.h"
+#include "geometry.h"
 #include <cstddef>
 #include <cstdint>
 #include <cuda_runtime_api.h>
@@ -40,10 +41,6 @@ struct CudaDeleter {
 template <typename T> using CudaUniquePtr = std::unique_ptr<T[], CudaDeleter>;
 
 enum class WinderMode : uint8_t { Point, Triangle };
-
-struct LeafPointers{
-  uint32_t indices[8];
-};
 
 struct BVH8View {
   const BVH8Node *nodes;
@@ -85,7 +82,8 @@ public:
 
   // Used in factories
   void initialize_mesh_data(const float *triangles);
-  void initialize_point_data(const float *points, const float *normals, int device_id);
+  void initialize_point_data(const float *points, const float *normals,
+                             int device_id);
 
 private:
   WinderMode m_mode;
@@ -135,7 +133,7 @@ private:
   // --- BVH8 Construction & M2M Support ---
   uint32_t *m_bvh8_leaf_parents; // [L] Map: Leaf index -> Parent BVH8Node index
   LeafPointers *m_bvh8_leaf_pointers; // [0.2L] Map: BVH8Node slot -> Leaf index
-                                  // (for traversal)
+                                      // (for traversal)
   uint32_t *m_bvh8_internal_parent_map; // [0.2L] Map: BVH8Node -> Parent
                                         // BVH8Node index (for M2M climb)
   uint32_t *m_bvh8_work_queue_A; // [L-1] Double-buffer for level-by-level tree
@@ -144,4 +142,8 @@ private:
                                  // conversion
   uint32_t *m_global_counter;    // [1] Atomic counter for work queue management
                                  // and node allocation
+
+  // private helpers
+  template <typename Geometry>
+  auto initializeMortonCodes(const Geometry *geometry) -> void;
 };

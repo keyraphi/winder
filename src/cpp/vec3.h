@@ -5,6 +5,7 @@
 #include <vector_types.h>
 
 struct Vec3;
+struct AABB;
 
 struct Vec3_bf16 {
   nv_bfloat16 x, y, z;
@@ -58,6 +59,12 @@ struct Vec3 {
     return result;
   }
 
+  __host__ __device__ __forceinline__ auto get_aabb() const -> AABB;
+
+  __host__ __device__ __forceinline__ auto centroid() const -> Vec3 {
+    return *this;
+  }
+
   __host__ __device__ __forceinline__ auto operator+(const Vec3 &b) const
       -> Vec3 {
     return {x + b.x, y + b.y, z + b.z};
@@ -83,7 +90,13 @@ struct Vec3 {
     return {x * s, y * s, z * s};
   }
   __host__ __device__ __forceinline__ auto operator/(float n) const -> Vec3 {
-    return {x / n, y / n, z / n};
+    float inv = 1.F / n;
+    return {x * inv, y * inv, z * inv};
+  }
+  // elementwise division
+  __host__ __device__ __forceinline__ auto operator/(const Vec3 &v) const
+      -> Vec3 {
+    return {x / v.x, y / v.x, z / v.x};
   }
   __host__ __device__ __forceinline__ auto outer_product(const Vec3 &b) const
       -> Mat3x3 {
@@ -101,6 +114,11 @@ struct Vec3 {
     m.data[7] = z * b.y;
     m.data[8] = z * b.z;
     return m;
+  }
+  __host__ __device__ __forceinline__ static auto cross(const Vec3 &a,
+                                                        const Vec3 &b) -> Vec3 {
+    return {a.y * b.z - a.z * b.x, a.z * b.x - a.x * b.z,
+            a.x * b.y - a.y * b.x};
   }
 
   __host__ __device__ __forceinline__ auto operator=(const Vec3_bf16 &v) {

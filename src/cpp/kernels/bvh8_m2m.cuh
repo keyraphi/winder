@@ -9,5 +9,4 @@ void compute_internal_tailor_coefficients_m2m(
     const BVH8Node *nodes, const uint32_t *internal_parent_map,
     const AABB *leaf_aabbs, const TailorCoefficientsBf16 *leaf_coefficients,
     const uint32_t *leaf_parents, const LeafPointers *leaf_pointers,
-    uint32_t leaf_count, uint32_t *atomic_counters, uint32_t threads,
-    uint32_t blocks);
+    uint32_t leaf_count, uint32_t *atomic_counters);

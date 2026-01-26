@@ -1,5 +1,4 @@
 #include "../mat3x3.h"
-#include "../tailor_coefficients.cuh"
 #include "../tailor_coefficients.h"
 #include "../tensor3.h"
 #include "../vec3.h"

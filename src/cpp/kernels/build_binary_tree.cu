@@ -1,6 +1,7 @@
 #include "aabb.h"
 #include "binary_node.h"
 #include "common.cuh"
+#include "geometry.h"
 #include "mat3x3.h"
 #include "tailor_coefficients.h"
 #include "tensor3.h"
@@ -9,15 +10,16 @@
 #include <cstdint>
 #include <cub/block/block_scan.cuh>
 #include <cub/util_type.cuh>
+#include <cuda/atomic>
 #include <cuda_device_runtime_api.h>
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
 #include <device_atomic_functions.h>
 #include <driver_types.h>
+#include <thrust/copy.h>
+#include <thrust/device_ptr.h>
 #include <vector_functions.h>
 #include <vector_types.h>
-#include <cooperative_groups.h>
-#include <cooperative_groups/scan.h>
 
 __global__ void __launch_bounds__(256)
     interleave_gather_geometry_kernel(const float *__restrict__ points,
@@ -33,33 +35,33 @@ __global__ void __launch_bounds__(256)
   const uint32_t src_idx = indices[idx];
   const uint32_t src_offset = src_idx * 3;
 
-  // Vectorized Loads (Uncoalesced, but fewer instructions)
-  // We treat the float3 as a float2 + float1 to hit the 64-bit and 32-bit paths
-  // This is faster than 3 individual float loads.
-  float2 p_xy = reinterpret_cast<const float2 *>(points + src_offset)[0];
+  float p_x = points[src_offset];
+  float p_y = points[src_offset + 1];
   float p_z = points[src_offset + 2];
-
-  float2 n_xy = reinterpret_cast<const float2 *>(normals + src_offset)[0];
+  float n_x = normals[src_offset + 0];
+  float n_y = normals[src_offset + 1];
   float n_z = normals[src_offset + 2];
 
-  // We write 24 bytes as 3 float2 transactions
   const uint32_t dst_offset = idx * 6;
-  const float2 out1 = make_float2(p_xy.x, p_xy.y);
-  const float2 out2 = make_float2(p_z, n_xy.x);
-  const float2 out3 = make_float2(n_xy.y, n_z);
-
-  float2 *f2_base_ptr = reinterpret_cast<float2 *>(out_geometry + dst_offset);
-  f2_base_ptr[0] = out1;
-  f2_base_ptr[1] = out2;
-  f2_base_ptr[2] = out3;
+  out_geometry[dst_offset] = p_x;
+  out_geometry[dst_offset + 1] = p_y;
+  out_geometry[dst_offset + 2] = p_z;
+  out_geometry[dst_offset + 3] = n_x;
+  out_geometry[dst_offset + 4] = n_y;
+  out_geometry[dst_offset + 5] = n_z;
 }
 
 void interleave_gather_geometry(const float *__restrict__ points,
                                 const float *__restrict__ normals,
                                 const uint32_t *__restrict__ indices,
                                 float *__restrict__ out_geometry,
-                                const uint32_t count, const uint32_t threads,
-                                const uint32_t blocks) {
+                                const uint32_t count) {
+  if (count < 1) {
+    return;
+  }
+  // one thread per point
+  const uint32_t threads = 256;
+  const uint32_t blocks = (count + threads - 1) / threads;
   interleave_gather_geometry_kernel<<<blocks, threads>>>(
       points, normals, indices, out_geometry, count);
   CUDA_CHECK(cudaGetLastError());
@@ -159,11 +161,22 @@ __global__ void build_binary_topology_kernel(
 
 void build_binary_topology(const uint32_t *__restrict__ morton_codes,
                            BinaryNode *nodes, uint32_t *parents,
-                           const uint32_t leaf_count, const uint32_t threads,
-                           const uint32_t blocks) {
-  build_binary_topology_kernel<<<blocks, threads>>>(morton_codes, nodes,
-                                                    parents, leaf_count);
-  CUDA_CHECK(cudaGetLastError());
+                           const uint32_t leaf_count) {
+
+  if (leaf_count < 1) {
+    return;
+  }
+  if (leaf_count > 1) {
+    const uint32_t threads = 256;
+    const uint32_t blocks = (leaf_count - 1 + threads - 1) / threads;
+    build_binary_topology_kernel<<<blocks, threads>>>(morton_codes, nodes,
+                                                      parents, leaf_count);
+    CUDA_CHECK(cudaGetLastError());
+  }
+
+  // the root node gets a unique value for its parent
+  uint32_t root_parent = 0xFFFFFFFF;
+  thrust::copy_n(&root_parent, 1, thrust::device_pointer_cast(parents));
 }
 
 __device__ __forceinline__ auto warp_reduce_add_down(float val) -> float {
@@ -174,41 +187,30 @@ __device__ __forceinline__ auto warp_reduce_add_down(float val) -> float {
   return val;
 }
 
+template <typename Geometry>
 __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
-    const float *__restrict__ sorted_geometry,
+    const Geometry *__restrict__ sorted_geometry,
     TailorCoefficientsBf16 *leaf_coefficients, const uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, uint32_t *atomic_counters,
-    const uint32_t point_count) {
-  uint32_t point_idx = threadIdx.x + blockIdx.x * blockDim.x;
-  uint32_t leaf_idx = point_idx / 32;
+    const uint32_t geometry_count) {
+  uint32_t geometry_idx = threadIdx.x + blockIdx.x * blockDim.x;
+  uint32_t leaf_idx = geometry_idx / 32;
   if (leaf_idx >= leaf_count)
     return;
 
-  uint32_t lane_id = point_idx % 32;
+  uint32_t lane_id = geometry_idx % 32;
 
-  Vec3 p, n;
-  bool is_thread_active = point_idx < point_count;
-  if (is_thread_active) {
-    const auto *base =
-        reinterpret_cast<const float2 *>(sorted_geometry + point_idx * 6);
-
-    float2 chunk0 = base[0]; // px, py
-    float2 chunk1 = base[1]; // pz, nx
-    float2 chunk2 = base[2]; // ny, nz
-
-    p = {chunk0.x, chunk0.y, chunk1.x};
-    n = {chunk1.y, chunk2.x, chunk2.y};
-  } else {
-    p = {1e38F, 1e38F, 1e38F}; // neutral element for min reduction
-    n = {0.F, 0.F, 0.F};
-  }
+  Geometry g = sorted_geometry[geometry_idx].load(sorted_geometry, geometry_idx,
+                                                  geometry_count);
 
   // Compute AABB
-  Vec3 p_min = p;
+  bool is_thread_active = geometry_idx < geometry_count;
+  AABB geometry_aabb = g.get_aabb();
+  Vec3 p_min = geometry_aabb.min;
   Vec3 p_max =
       is_thread_active
-          ? p
+          ? geometry_aabb.max
           : Vec3{-1e38F, -1e38F, -1e38F}; // netural element for max reduction
 
 #pragma unroll
@@ -231,8 +233,15 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
   // first and second order use aabb center
   Vec3 center = (p_min + p_max) * 0.5;
 
+  // geometry dependent terms used to compute tailor coefficients
+  Vec3 d, n;
+  SymMat3x3 Ct;
+  g.get_tailor_terms(center, n, d, Ct);
+
   // Zero order
   //\sum_{i=1}^m a_i n_i
+  // points: a_i*n_i is scaled normal
+  // triangles: a_i*n_i is surface area * normal
   // for inactive threads neutral element wrt. +
   Vec3 zero_order = is_thread_active ? n : Vec3{0.F, 0.F, 0.F};
   zero_order.x = warp_reduce_add_down(zero_order.x);
@@ -244,9 +253,10 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
     leaf_coefficients[leaf_idx].zero_order = zero_order;
   }
 
-  Vec3 d = p - center;
   // First order
-  // \sum_{i=1}^m a_i(p_i-p_center)\otimes n_i
+  // \sum_{i=1}^m a_i*d_i \otimes n_i
+  // points: d_i = p_i-center
+  // triangles: d_i = triangle_centroid_i - center
   // for inactive threads neutral element wrt. +
   Mat3x3 first_order =
       is_thread_active ? d.outer_product(n)
@@ -263,36 +273,34 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
   }
 
   // second order
-  // 1/2 (\sum_{i=1}^m a_i(p_i - p_center)\otimes (p_i-p_center) \otimes n)
+  // 1/2 (\sum_{i=1}^m Ct \otimes n)
+  // points: Ct = a_i (p_i-center) \odot (p_i-center)
+  // triangles: d_i = 1/3(1/2(x_i+xj-p')\odot(1/2(x_i+x_j)-p') +
+  // 1/3(1/2(x_j+x_k)-p')\odot(1/2(x_j+x_k)-p') +
+  // 1/3(1/2(x_k+x_i)-p')\odot(1/2(x_k+x_i)-p')
+  // Note: Ct is symetric. It contains only 6 unique values
+  // For that reason second_order also only contains 18 unique values. We don't
+  // compute/store duplicates.
   Tensor3_compressed second_order;
   if (is_thread_active) {
-    second_order.data[0] = d.x * d.x * n.x;
-    second_order.data[1] = d.x * d.x * n.y;
-    second_order.data[2] = d.x * d.x * n.z;
-    second_order.data[3] = d.x * d.y * n.x;
-    second_order.data[4] = d.x * d.y * n.y;
-    second_order.data[5] = d.x * d.y * n.z;
-    second_order.data[6] = d.x * d.z * n.x;
-    second_order.data[7] = d.x * d.z * n.y;
-    second_order.data[8] = d.x * d.z * n.z;
-    // t[-] = d.y*d.x*n.x = t[3]  not store twice
-    // t[-] = d.y*d.x*n.y = t[4]
-    // t[-] = d.y*d.x*n.z = t[5]
-    second_order.data[9] = d.y * d.y * n.x;
-    second_order.data[10] = d.y * d.y * n.y;
-    second_order.data[11] = d.y * d.y * n.z;
-    second_order.data[12] = d.y * d.z * n.x;
-    second_order.data[13] = d.y * d.z * n.y;
-    second_order.data[14] = d.y * d.z * n.z;
-    // t[-] = d.z*d.x*n.x = t[6]
-    // t[-] = d.z*d.x*n.y = t[7]
-    // t[-] = d.z*d.x*n.z = t[8]
-    // t[-] = d.z*d.y*n.x = t[12]
-    // t[-] = d.z*d.y*n.y = t[13]
-    // t[-] = d.z*d.y*n.z = t[14]
-    second_order.data[15] = d.z * d.z * n.x;
-    second_order.data[16] = d.z * d.z * n.y;
-    second_order.data[17] = d.z * d.z * n.z;
+    second_order.data[0] = Ct.data[0] * n.x;
+    second_order.data[1] = Ct.data[0] * n.y;
+    second_order.data[2] = Ct.data[0] * n.z;
+    second_order.data[3] = Ct.data[1] * n.x;
+    second_order.data[4] = Ct.data[1] * n.y;
+    second_order.data[5] = Ct.data[1] * n.z;
+    second_order.data[6] = Ct.data[2] * n.x;
+    second_order.data[7] = Ct.data[2] * n.y;
+    second_order.data[8] = Ct.data[2] * n.z;
+    second_order.data[9] = Ct.data[3] * n.x;
+    second_order.data[10] = Ct.data[3] * n.y;
+    second_order.data[11] = Ct.data[3] * n.z;
+    second_order.data[12] = Ct.data[4] * n.x;
+    second_order.data[13] = Ct.data[4] * n.y;
+    second_order.data[14] = Ct.data[4] * n.z;
+    second_order.data[15] = Ct.data[5] * n.x;
+    second_order.data[16] = Ct.data[5] * n.y;
+    second_order.data[17] = Ct.data[5] * n.z;
   } else {
     // for inactive threads neutral element wrt. +
 #pragma unroll
@@ -315,6 +323,10 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
   if (lane_id == 0) {
     uint32_t current_idx = leaf_idx + leaf_count - 1;
     uint32_t current_parent_idx = binary_parents[current_idx];
+    // If this leaf's parent is the root marker, we are done.
+    if (current_parent_idx == 0xFFFFFFFF) {
+      return;
+    }
 
     // atomicAdd returns the value BEFORE the addition.
     // If it returns 0, we are the first child to arrive -> Terminate.
@@ -347,14 +359,37 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
   }
 }
 
+template <typename Geometry>
 void populate_binary_tree_aabb_and_leaf_coefficients(
-    const float *__restrict__ sorted_geometry,
+    const Geometry *__restrict__ sorted_geometry,
     TailorCoefficientsBf16 *leaf_coefficients, const uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, uint32_t *atomic_counters,
-    const uint32_t point_count, const uint32_t threads, const uint32_t blocks) {
-  populate_binary_tree_aabb_and_leaf_coefficients_kernel<<<blocks, threads>>>(
-      sorted_geometry, leaf_coefficients, leaf_count, binary_nodes,
-      binary_aabbs, binary_parents, atomic_counters, point_count);
+    const uint32_t geometry_count) {
+  if (geometry_count == 0) {
+    return;
+  }
+
+  const uint32_t threads = 256;
+  const uint32_t blocks = (leaf_count * 32 + threads - 1) / threads;
+  populate_binary_tree_aabb_and_leaf_coefficients_kernel<Geometry>
+      <<<blocks, threads>>>(sorted_geometry, leaf_coefficients, leaf_count,
+                            binary_nodes, binary_aabbs, binary_parents,
+                            atomic_counters, geometry_count);
   CUDA_CHECK(cudaGetLastError());
 }
+
+// Tell the compiler to generate the code for these types
+template void populate_binary_tree_aabb_and_leaf_coefficients<PointNormal>(
+    const PointNormal *__restrict__ sorted_geometry,
+    TailorCoefficientsBf16 *leaf_coefficients, uint32_t leaf_count,
+    const BinaryNode *binary_nodes, AABB *binary_aabbs,
+    const uint32_t *binary_parents, uint32_t *atomic_counters,
+    uint32_t geometry_count);
+
+template void populate_binary_tree_aabb_and_leaf_coefficients<Triangle>(
+    const Triangle *__restrict__ sorted_geometry,
+    TailorCoefficientsBf16 *leaf_coefficients, uint32_t leaf_count,
+    const BinaryNode *binary_nodes, AABB *binary_aabbs,
+    const uint32_t *binary_parents, uint32_t *atomic_counters,
+    uint32_t geometry_count);
