@@ -228,7 +228,8 @@ convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
 }
 
 void convert_binary_tree_to_bvh8(ConvertBinary2BVH8Params params,
-                                 const int device_id) {
+                                 const int device_id,
+                                 const cudaStream_t &stream) {
   int threads = 256;
   int blocks_per_sm = 0;
 
@@ -246,6 +247,6 @@ void convert_binary_tree_to_bvh8(ConvertBinary2BVH8Params params,
 
   void *args[] = {&params};
   cudaLaunchCooperativeKernel((void *)convert_binary_tree_to_bvh8_kernel,
-                              blocks, threads, args);
+                              blocks, threads, args, 0, stream);
   CUDA_CHECK(cudaGetLastError());
 }

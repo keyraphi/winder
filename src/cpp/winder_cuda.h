@@ -2,15 +2,17 @@
 #include "aabb.h"
 #include "binary_node.h"
 #include "bvh8.h"
-#include "tailor_coefficients.h"
 #include "geometry.h"
+#include "tailor_coefficients.h"
+#include "vec3.h"
 #include <cstddef>
 #include <cstdint>
 #include <cuda_runtime_api.h>
+#include <driver_types.h>
 #include <memory>
 #include <thrust/detail/raw_pointer_cast.h>
-#include <thrust/device_vector.h>
 #include <thrust/execution_policy.h>
+#include <thrust/system/cuda/detail/par.h>
 #include <vector_types.h>
 
 // one warp per leaf
@@ -53,6 +55,8 @@ struct BVH8View {
 class WinderBackend {
 
 public:
+  ~WinderBackend();
+
   static auto CreateFromMesh(const float *triangles, size_t triangle_count,
                              int device_id) -> std::unique_ptr<WinderBackend>;
 
@@ -63,8 +67,9 @@ public:
   static auto CreateForSolver(const float *points, size_t point_count,
                               int device_id) -> std::unique_ptr<WinderBackend>;
 
-  [[nodiscard]] auto compute(const float *queries, size_t query_count) const
+  auto compute(const float *queries, size_t query_count) const
       -> CudaUniquePtr<float>;
+
   [[nodiscard]] auto get_normals() const -> CudaUniquePtr<float>;
   [[nodiscard]] auto grad_normals(const float *grad_output,
                                   size_t n_queries) const
@@ -82,13 +87,15 @@ public:
 
   // Used in factories
   void initialize_mesh_data(const float *triangles);
-  void initialize_point_data(const float *points, const float *normals,
-                             int device_id);
+  void initialize_point_data(const float *points, const float *normals);
 
 private:
   WinderMode m_mode;
   size_t m_count;
   int m_device;
+  cudaStream_t m_stream_0, m_stream_1;
+  thrust::cuda_cub::execute_on_stream m_stream_0_policy;
+  thrust::cuda_cub::execute_on_stream m_stream_1_policy;
   uint32_t m_bvh8_node_count;
 
   // Private constructor used in factories. Allocates vectors but doesn't fill
@@ -98,8 +105,8 @@ private:
   // provide a view on the BVH8 data for kernel launches
   auto get_bvh_view() -> BVH8View;
 
-  // memory arena
-  thrust::device_vector<uint8_t> m_memory_arena;
+  // memory arena on gpu
+  uint8_t *m_memory_arena;
 
   /** * MEMORY ARENA POINTERS
    * All pointers below refer to segments within m_memory_arena.

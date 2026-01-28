@@ -55,14 +55,14 @@ void interleave_gather_geometry(const float *__restrict__ points,
                                 const float *__restrict__ normals,
                                 const uint32_t *__restrict__ indices,
                                 float *__restrict__ out_geometry,
-                                const uint32_t count) {
+                                const uint32_t count, const cudaStream_t &stream) {
   if (count < 1) {
     return;
   }
   // one thread per point
   const uint32_t threads = 256;
   const uint32_t blocks = (count + threads - 1) / threads;
-  interleave_gather_geometry_kernel<<<blocks, threads>>>(
+  interleave_gather_geometry_kernel<<<blocks, threads, 0, stream>>>(
       points, normals, indices, out_geometry, count);
   CUDA_CHECK(cudaGetLastError());
 }
@@ -161,7 +161,7 @@ __global__ void build_binary_topology_kernel(
 
 void build_binary_topology(const uint32_t *__restrict__ morton_codes,
                            BinaryNode *nodes, uint32_t *parents,
-                           const uint32_t leaf_count) {
+                           const uint32_t leaf_count, const cudaStream_t &stream) {
 
   if (leaf_count < 1) {
     return;
@@ -169,7 +169,7 @@ void build_binary_topology(const uint32_t *__restrict__ morton_codes,
   if (leaf_count > 1) {
     const uint32_t threads = 256;
     const uint32_t blocks = (leaf_count - 1 + threads - 1) / threads;
-    build_binary_topology_kernel<<<blocks, threads>>>(morton_codes, nodes,
+    build_binary_topology_kernel<<<blocks, threads, 0, stream>>>(morton_codes, nodes,
                                                       parents, leaf_count);
     CUDA_CHECK(cudaGetLastError());
   }
@@ -365,7 +365,7 @@ void populate_binary_tree_aabb_and_leaf_coefficients(
     TailorCoefficientsBf16 *leaf_coefficients, const uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, uint32_t *atomic_counters,
-    const uint32_t geometry_count) {
+    const uint32_t geometry_count, const cudaStream_t &stream) {
   if (geometry_count == 0) {
     return;
   }
@@ -373,7 +373,7 @@ void populate_binary_tree_aabb_and_leaf_coefficients(
   const uint32_t threads = 256;
   const uint32_t blocks = (leaf_count * 32 + threads - 1) / threads;
   populate_binary_tree_aabb_and_leaf_coefficients_kernel<Geometry>
-      <<<blocks, threads>>>(sorted_geometry, leaf_coefficients, leaf_count,
+      <<<blocks, threads, 0, stream>>>(sorted_geometry, leaf_coefficients, leaf_count,
                             binary_nodes, binary_aabbs, binary_parents,
                             atomic_counters, geometry_count);
   CUDA_CHECK(cudaGetLastError());
@@ -385,11 +385,11 @@ template void populate_binary_tree_aabb_and_leaf_coefficients<PointNormal>(
     TailorCoefficientsBf16 *leaf_coefficients, uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, uint32_t *atomic_counters,
-    uint32_t geometry_count);
+    uint32_t geometry_count, const cudaStream_t &stream);
 
 template void populate_binary_tree_aabb_and_leaf_coefficients<Triangle>(
     const Triangle *__restrict__ sorted_geometry,
     TailorCoefficientsBf16 *leaf_coefficients, uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, uint32_t *atomic_counters,
-    uint32_t geometry_count);
+    uint32_t geometry_count, const cudaStream_t &stream);

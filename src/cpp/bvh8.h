@@ -3,7 +3,7 @@
 #include "tailor_coefficients.h"
 #include <cstdint>
 
-// Leafs have an extra LeafPointer to the actual geometry array
+// Leafs have an extra LeafPointer to the actual leaf indices
 struct LeafPointers{
   uint32_t indices[8];
 };

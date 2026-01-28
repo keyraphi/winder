@@ -5,6 +5,7 @@
 #include "bvh8.h"
 #include "winder_cuda.h"
 #include <cstdint>
+#include <driver_types.h>
 
 struct ConvertBinary2BVH8Params {
   uint32_t *work_queue_A;
@@ -19,4 +20,5 @@ struct ConvertBinary2BVH8Params {
   LeafPointers *bvh8_leaf_pointers;
 };
 
-void convert_binary_tree_to_bvh8(ConvertBinary2BVH8Params params, int device_id);
+void convert_binary_tree_to_bvh8(ConvertBinary2BVH8Params params, int device_id,
+                                 const cudaStream_t &stream = 0);
