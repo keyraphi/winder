@@ -67,6 +67,10 @@ struct Vec3 {
     return result;
   }
 
+  __host__ __device__ __forceinline__ auto dot(const Vec3 &v) {
+    return x * v.x + y * v.y + z * v.z;
+  }
+
   __host__ __device__ __forceinline__ auto get_aabb() const -> AABB;
 
   __host__ __device__ __forceinline__ auto centroid() const -> Vec3 {

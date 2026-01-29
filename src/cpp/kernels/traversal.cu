@@ -41,11 +41,21 @@ __device__ __forceinline__ auto to_bits(const nv_bfloat16 bf16) -> short {
   return result;
 }
 
+// DEBUG /////////////////////////
+// #define STRINGIFY(x) #x
+// #define TOSTRING(x) STRINGIFY(x)
+//
+// #ifdef __CUDA_ARCH__
+// #pragma message("Targeting CUDA Architecture: " TOSTRING(__CUDA_ARCH__))
+// #endif
+// DEBUG /////////////////////////
+
 // TODO: Write a test for this!
 __device__ __forceinline__ auto
 computeZeroOrderContribution(const Vec3_bf16 &coeff, const Vec3_bf16 &r,
                              const nv_bfloat16 inv_r3 // 1/(4 pi |r|^3)
                              ) -> float {
+#if __CUDA_ARCH__ >= 800
   // Pack bf16s into 32-bit registers
   nv_bfloat162 c_xy = __halves2bfloat162(coeff.x, coeff.y);
   nv_bfloat162 c_z = __halves2bfloat162(coeff.z, __float2bfloat16(0.0f));
@@ -56,24 +66,28 @@ computeZeroOrderContribution(const Vec3_bf16 &coeff, const Vec3_bf16 &r,
   uint32_t result;
   uint32_t zero = 0;
 
-  // PTX for enforced packed fma logic
+  // use bf16x2 for math
   asm("{\n\t"
-      " .reg .b16 lo, hi;\n\t"
+      ".reg .b16 lo, hi;\n\t"
       // %0 = (cx*rx, cy*ry) + 0
-      " fma.rn.bf16x2 %0, %1, %2, %6;\n\t"
-      // %0 = (cz*rz, 0) + %0
+      "fma.rn.bf16x2 %0, %1, %2, %6;\n\t"
       // %0 is [ (cx*rx + cz*rz) | (cy*ry) ]
-      " fma.rn.bf16x2 %0, %3, %4, %0;\n\t"
-      // Destructure %0 into two 16-bit regs
-      " mov.b32 {lo, hi}, %0;\n\t"
-      // hi = lo + hi = (cx*rx+cz*rz) + (cy*ry)
-      " add.bf16 hi, lo, hi;\n\t"
-      // hi = hi * scale
-      " mul.bf16 hi, hi, %5;\n\t"
-      // 'hi' in the bottom 16 bits
+      "fma.rn.bf16x2 %0, %3, %4, %0;\n\t"
+      "mov.b32 {lo, hi}, %0;\n\t"
+#if __CUDA_ARCH__ >= 900
+      "add.bf16 hi, lo, hi;\n\t"
+      "mul.bf16 hi, hi, %5;\n\t"
+#else
+      ".reg .b16 tmp;\n\t"
+      "cvt.rn.bf16.f32 tmp, 1.0;\n\t"    // tmp = 1
+      "fma.rn.bf16 hi, lo, tmp, hi;\n\t" // hi = lo * 1.0 + hi
+      "cvt.rn.bf16.f32 tmp, 0.0;\n\t"    // tmp = 0
+      "fma.rn.bf16 hi, hi, %5, tmp;\n\t" // hi = hi * inv_r3 + 0.0
+#endif
+      // move 'hi' in the bottom 16 bits of the result
       // mov.b32 d {a, b}:
       // d = a.x | (a.y << 16)
-      " mov.b32 %0, {hi, 0};\n\t"
+      "mov.b32 %0, {hi, 0};\n\t"
       "}"
       : "=r"(result)          // %0
       : "r"(to_bits(c_xy)),   // %1
@@ -84,6 +98,21 @@ computeZeroOrderContribution(const Vec3_bf16 &coeff, const Vec3_bf16 &r,
         "r"(zero));           // %6
 
   return __bfloat162float(*(nv_bfloat16 *)&result);
+#else
+  float cx = __bfloat162float(coeff.x);
+  float cy = __bfloat162float(coeff.y);
+  float cz = __bfloat162float(coeff.z);
+
+  float rx = __bfloat162float(r.x);
+  float ry = __bfloat162float(r.y);
+  float rz = __bfloat162float(r.z);
+
+  float ir3 = __bfloat162float(inv_r3);
+
+  float dot = (cx * rx + cy * ry) + (cz * rz);
+
+  return dot * ir3;
+#endif
 }
 
 // TODO: Write a test for this!
@@ -101,6 +130,7 @@ computeFirstOrderContribution(const Mat3x3_bf16 &C, const Vec3_bf16 &r,
                               const nv_bfloat16 inv_r3, // 1 / (4 pi |r|^3)
                               const nv_bfloat16 inv_r5  // 3 / (4 pi |r|^5)
                               ) -> float {
+#if __CUDA_ARCH__ >= 800
   nv_bfloat16 three = __float2bfloat16(3.F);
   // After unrolling and factoring we compute:
   // Contribution = (C_11+C_22+C_33)/(4pi||r||^3) -
@@ -139,22 +169,33 @@ computeFirstOrderContribution(const Mat3x3_bf16 &C, const Vec3_bf16 &r,
       "fma.rn.bf16x2 %0, %1, %2, %10;\n\t"
       "fma.rn.bf16x2 %0, %3, %4, %0;\n\t"
       "fma.rn.bf16x2 %0, %5, %6, %0;\n\t"
-
-      // add the two bf16 together
-      // final_sum = Cxx*rx*rx + Czz*rz*rz + (Cxz+Czy)*rx*rz +
-      //             Cyy*ry*ry + (Cxy+Cyx)*rx*ry + (Cyz+Czy)*ry*rz
       "mov.b32 {lo, hi}, %0;\n\t"
-      "add.bf16 final_sum, lo, hi;\n\t"
-
+#if __CUDA_ARCH__ >= 900
+      // hi = (Cxx*rx*rx + Czz*rz*rz + (Cxz+Czy)*rx*rz +
+      //       Cyy*ry*ry + (Cxy+Cyx)*rx*ry + (Cyz+Czy)*ry*rz) * inv_5
+      "add.bf16 hi, lo, hi;\n\t"
+      "mul.bf16 hi, hi, %9;\n\t"
       // lo = (Cxx+Cyy+Czz) * inv_3
       "mul.bf16 lo, %7, %8;\n\t"
-      // hi = final_sum * inv_5
-      "mul.bf16 hi, final_sum, %9;\n\t"
-      // final_sum = lo - hi
-      "sub.bf16 final_sum, lo, hi;\n\t"
+      // hi = lo - hi
+      "sub.bf16 hi, lo, hi;\n\t"
+#else
+      ".reg .b16 tmp;\n\t"
+      // "add.bf16 hi, lo, hi;\n\t"
+      "cvt.rn.bf16.f32 tmp, 1.0;\n\t" // tmp = 1
+      "fma.rn.bf16 hi, lo, tmp, hi;\n\t"
+      // "mul.bf16 hi, hi, %9;\n\t"
+      "cvt.rn.bf16.f32 tmp, 0.0;\n\t" // tmp = 0
+      "fma.rn.bf16 hi, hi, %9, tmp;\n\t"
+      // "mul.bf16 lo, %7, %8;\n\t"
+      "fma.rn.bf16 lo, %7, %8, tmp;\n\t"
+      // "sub.bf16 hi, lo, hi;\n\t"
+      "cvt.rn.bf16.f32 tmp, -1.0;\n\t"   // tmp = -1
+      "fma.rn.bf16 hi, tmp, hi, lo;\n\t" // hi = -1*hi+lo
+#endif
 
       // write out result (lowest 16 bit are the same for bf16)
-      "mov.b32 %0, {final_sum, 0};\n\t"
+      "mov.b32 %0, {hi, 0};\n\t"
       "}"
       : "=r"(result)            // %0
       : "r"(to_bits(c_xy)),     // %1
@@ -170,27 +211,53 @@ computeFirstOrderContribution(const Mat3x3_bf16 &C, const Vec3_bf16 &r,
   );
 
   return __bfloat162float(*(nv_bfloat16 *)&result);
+#else
+  // Explicitly promote to float once to prevent forward and backward casting
+  float c0 = C.data[0];
+  float c4 = C.data[4];
+  float c8 = C.data[8];
+  float c1_3 = __bfloat162float(C.data[1]) + __bfloat162float(C.data[3]);
+  float c2_6 = __bfloat162float(C.data[2]) + __bfloat162float(C.data[6]);
+  float c5_7 = __bfloat162float(C.data[5]) + __bfloat162float(C.data[7]);
+
+  float rx = r.x;
+  float ry = r.y;
+  float rz = r.z;
+  float ir3 = inv_r3;
+  float ir5 = inv_r5;
+
+  float diagonal_sum = (c0 + c4 + c8) * ir3;
+
+  float quadratic = (c0 * rx * rx + c4 * ry * ry + c8 * rz * rz) +
+                    (c1_3 * rx * ry + c2_6 * rx * rz + c5_7 * ry * rz);
+
+  return diagonal_sum - (quadratic * ir5);
+
+#endif
 }
 
 // TODO: Write a test for this!
 /**
  * Computes the Second Order Taylor contribution to the Winding Number.
  *
- * Mathematically, this is the contraction between the second-order 
- * coefficient tensor C (rank 3) and the third-order field gradient tensor G (rank 3):
+ * Mathematically, this is the contraction between the second-order
+ * coefficient tensor C (rank 3) and the third-order field gradient tensor G
+ * (rank 3):
  * * Contribution = C : G = sum_{i,j,k} C_ijk * G_ijk
  * * where the field gradient tensor G is:
- * G(r) = [ 15 * (r \otimes r \otimes r) / |r|^7 ] - [ 3 * (r \otimes I)_sym / |r|^5 ]
+ * G(r) = [ 15 * (r \otimes r \otimes r) / |r|^7 ] - [ 3 * (r \otimes I)_sym /
+ * |r|^5 ]
  * * Here:
  * - I is the Identity matrix (I_jk = \delta_jk).
  * - \delta is the Kronecker delta (\delta_jk = 1 if j=k, else 0).
  * - \otimes is the outer product.
- * - (r \otimes I)_sym is the symmetric combination: (r_i \delta_jk + r_j \delta_ik + r_k \delta_ij).
+ * - (r \otimes I)_sym is the symmetric combination: (r_i \delta_jk + r_j
+ * \delta_ik + r_k \delta_ij).
  *
- * Implementation note: Due to the partial symmetry of C (C_ijk = C_ikj) and the 
- * cross-plane symmetries in this specific Taylor expansion, the 27-term 
- * contraction reduces to 18 unique terms stored in the compressed format. 
- * The second term (involving \delta) simplifies to a dot product between r and 
+ * Implementation note: Due to the partial symmetry of C (C_ijk = C_ikj) and the
+ * cross-plane symmetries in this specific Taylor expansion, the 27-term
+ * contraction reduces to 18 unique terms stored in the compressed format.
+ * The second term (involving \delta) simplifies to a dot product between r and
  * the partial vector-trace of C.
  */
 __device__ __forceinline__ auto
@@ -198,7 +265,8 @@ computeSecondOrderContribution(const Tensor3_bf16_compressed &C,
                                const Vec3_bf16 &r,
                                const nv_bfloat16 inv_r5, // 3.0f / (4pi * |r|^5)
                                const nv_bfloat16 inv_r7 // 15.0f / (4pi * |r|^7)
-) -> float{
+                               ) -> float {
+#if __CUDA_ARCH__ >= 800
   const nv_bfloat16 two = __float2bfloat16(2.0f);
 
   // Vector Trace V
@@ -238,29 +306,42 @@ computeSecondOrderContribution(const Tensor3_bf16_compressed &C,
   uint32_t zero = 0;
 
   asm("{\n\t"
-      " .reg .b16 lo, hi;\n\t"
+      ".reg .b16 lo, hi;\n\t"
 
       // 9 Vector FMAs for 18 terms (8 instructions)
-      " fma.rn.bf16x2 %0, %1,  %2,  %19;\n\t"
-      " fma.rn.bf16x2 %0, %3,  %4,  %0;\n\t"
-      " fma.rn.bf16x2 %0, %5,  %6,  %0;\n\t"
-      " fma.rn.bf16x2 %0, %7,  %8,  %0;\n\t"
-      " fma.rn.bf16x2 %0, %9,  %10, %0;\n\t"
-      " fma.rn.bf16x2 %0, %11, %12, %0;\n\t"
-      " fma.rn.bf16x2 %0, %13, %14, %0;\n\t"
-      " fma.rn.bf16x2 %0, %15, %16, %0;\n\t"
-      " fma.rn.bf16x2 %0, %17, %18, %0;\n\t"
-
+      "fma.rn.bf16x2 %0, %1,  %2,  %19;\n\t"
+      "fma.rn.bf16x2 %0, %3,  %4,  %0;\n\t"
+      "fma.rn.bf16x2 %0, %5,  %6,  %0;\n\t"
+      "fma.rn.bf16x2 %0, %7,  %8,  %0;\n\t"
+      "fma.rn.bf16x2 %0, %9,  %10, %0;\n\t"
+      "fma.rn.bf16x2 %0, %11, %12, %0;\n\t"
+      "fma.rn.bf16x2 %0, %13, %14, %0;\n\t"
+      "fma.rn.bf16x2 %0, %15, %16, %0;\n\t"
+      "fma.rn.bf16x2 %0, %17, %18, %0;\n\t"
+      "mov.b32 {lo, hi}, %0;\n\t"
+#if __CUDA_ARCH__ >= 900
       // add together both results for the r^3 part
-      " mov.b32 {lo, hi}, %0;\n\t"
-      " add.bf16 lo, lo, hi;\n\t"
-
+      "add.bf16 lo, lo, hi;\n\t"
       // Final Scale: (lo * inv_r7) - (v_dot_r * inv_r5)
-      " mul.bf16 lo, lo, %20;\n\t"
-      " mul.bf16 hi, %21, %22;\n\t"
-      " sub.bf16 lo, lo, hi;\n\t"
+      "mul.bf16 lo, lo, %20;\n\t"
+      "mul.bf16 hi, %21, %22;\n\t"
+      "sub.bf16 lo, lo, hi;\n\t"
+#else
+      ".reg .b16 tmp;\n\t"
+      // "add.bf16 lo, lo, hi;\n\t"
+      "cvt.rn.bf16.f32 tmp, 1.0;\n\t"    // tmp = 1
+      "fma.rn.bf16 lo, lo, tmp, hi;\n\t" // lo = lo*1 + hi
+      // "mul.bf16 lo, lo, %20;\n\t"
+      "cvt.rn.bf16.f32 tmp, 0.0;\n\t"     // tmp = 0
+      "fma.rn.bf16 lo, lo, %20, tmp;\n\t" // lo = lo * inv_r7
+      // "mul.bf16 hi, %21, %22;\n\t"
+      "fma.rn.bf16 hi, %21, %22, tmp;\n\t"
+      // "sub.bf16 lo, lo, hi;\n\t"
+      "cvt.rn.bf16.f32 tmp, -1.0;\n\t"   // tmp = -1
+      "fma.rn.bf16 lo, tmp, hi, lo;\n\t" // lo = -1*hi+lo
+#endif
 
-      " mov.b32 %0, {lo, 0};\n\t"
+      "mov.b32 %0, {lo, 0};\n\t"
       "}"
       : "=r"(res_raw)                                               // %0
       : "r"(to_bits(__halves2bfloat162(C.data[0], C.data[1]))),     // %1
@@ -288,6 +369,38 @@ computeSecondOrderContribution(const Tensor3_bf16_compressed &C,
   );
 
   return __bfloat162float(*(nv_bfloat16 *)&res_raw);
+#else
+  // convert to float once
+  Tensor3_compressed C_f = Tensor3_compressed::from_bf16(C);
+  Vec3 r_f = Vec3::from_bf16(r);
+  float inv_r5_f = __bfloat162float(inv_r5);
+  float inv_r7_f = __bfloat162float(inv_r7);
+  Vec3 v{(C_f.data[0] + C_f.data[4]) + C_f.data[8],
+         (C_f.data[3] + C_f.data[10]) + C_f.data[14],
+         (C_f.data[6] + C_f.data[13]) + C_f.data[17]};
+  float v_dot_r = v.dot(r_f);
+
+  float r3_part = 0.f;
+  r3_part+= r_f.x * r_f.x * r_f.x *C_f.data[0];
+  r3_part+= r_f.x * r_f.x * r_f.y * C_f.data[1];
+  r3_part+= r_f.x * r_f.x * r_f.z * C_f.data[2];
+  r3_part+= (r_f.y * r_f.x * r_f.x) * 2.F * C_f.data[3];
+  r3_part+= (r_f.x * r_f.y * r_f.y) * 2.F * C_f.data[4];
+  r3_part+= (r_f.x * r_f.y * r_f.z) * 2.F * C_f.data[5];
+  r3_part+= (r_f.z * r_f.x * r_f.x) * 2.F * C_f.data[6];
+  r3_part+= (r_f.z * r_f.x * r_f.y) * 2.F * C_f.data[7];
+  r3_part+= (r_f.z * r_f.x * r_f.z) * 2.F * C_f.data[8];
+  r3_part+= r_f.y * r_f.y * r_f.x * C_f.data[9];
+  r3_part+= r_f.y * r_f.y * r_f.y * C_f.data[10];
+  r3_part+= r_f.y * r_f.y * r_f.z * C_f.data[11];
+  r3_part+= (r_f.y * r_f.z * r_f.x) * 2.F * C_f.data[12];
+  r3_part+= (r_f.z * r_f.y * r_f.y) * 2.F * C_f.data[13];
+  r3_part+= (r_f.y * r_f.z * r_f.z) * 2.F * C_f.data[14];
+  r3_part+= r_f.z * r_f.z * r_f.x * C_f.data[15];
+  r3_part+= r_f.z * r_f.z * r_f.y * C_f.data[16];
+  r3_part+= r_f.z * r_f.z * r_f.z * C_f.data[17];
+  return r3_part * inv_r7_f - v_dot_r * inv_r5_f;
+#endif
 }
 
 template <typename Geometry>
@@ -439,6 +552,7 @@ void compute_winding_numbers(const Vec3 *queries,
   compute_winding_numbers_kernel<Geometry><<<blocks, threads, 0, stream>>>(
       queries, sort_indirections, bvh8_nodes, bvh8_leaf_pointers,
       leaf_coefficients, sorted_geometry, query_count, winding_numbers, beta_2);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 template void compute_winding_numbers<PointNormal>(

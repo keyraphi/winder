@@ -17,7 +17,7 @@ find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 # Enable CUDA
 enable_language(CUDA)
 # set(CUDA_ARCHITECTURES 75 80 86 89 90)
-set(CUDA_ARCHITECTURES 90) # TEMPORAYR for faster compilation
+set(CUDA_ARCHITECTURES 75 80 90) # TEMPORAYR for faster compilation
 set(CMAKE_CUDA_ARCHITECTURES ${CUDA_ARCHITECTURES})
 
 # Include nanobind

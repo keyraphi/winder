@@ -4,6 +4,7 @@ CompileFlags:
     - -I/opt/cuda/include
     - -Wextra
     - -fopenmp
+    - --cuda-gpu-arch=sm_75
   Remove:
     - --expt-relaxed-constexpr
     - --default-stream
