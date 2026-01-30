@@ -45,7 +45,12 @@ struct Triangle {
         fmaxf(v0.y, fmaxf(v1.y, v2.y)),
         fmaxf(v0.z, fmaxf(v1.z, v2.z)),
     };
-    return {min, max};
+    AABB result;
+    result.min = min;
+    result.max = max;
+    result.setCenterOfMass(centroid());
+    result.setMaxDistanceToCenterOfMass(0.F);
+    return result;
   }
   __host__ __device__ __forceinline__ auto centroid() const -> Vec3 {
     return (v0 + v1 + v2) / 3.F;
@@ -62,7 +67,8 @@ struct Triangle {
                                                    SymMat3x3 &out_Ct) const
       -> void;
 
-  __device__ __forceinline__ auto contributionToQuery(const Vec3 &query, float inf_epsilon) const
+  __device__ __forceinline__ auto contributionToQuery(const Vec3 &query,
+                                                      float inf_epsilon) const
       -> float;
 };
 
@@ -172,8 +178,8 @@ PointNormal::get_tailor_terms(const Vec3 &p_center, Vec3 &out_n, Vec3 &out_d,
 #define INV_FOUR_PI 0.07957747154F
 #define INV_TWO_PI 0.15915494309F
 
-__device__ __forceinline__ auto
-Triangle::contributionToQuery(const Vec3 &query, [[maybe_unused]] const float unused) const -> float {
+__device__ __forceinline__ auto Triangle::contributionToQuery(
+    const Vec3 &query, [[maybe_unused]] const float unused) const -> float {
   const Vec3 a = v0 - query;
   const Vec3 b = v1 - query;
   const Vec3 c = v2 - query;

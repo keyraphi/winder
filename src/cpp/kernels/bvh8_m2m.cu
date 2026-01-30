@@ -44,7 +44,7 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
     }
 
     // only one thread for current node survives
-    Vec3 parent_center = node.parent_aabb.center();
+    Vec3 parent_center = node.parent_aabb.geometryc_center();
 
     Vec3 zero_order = {0.F, 0.F, 0.F};
     Mat3x3 first_order = {0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F};
@@ -55,20 +55,20 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
     uint32_t internal_child_count = 0;
 #pragma unroll
     for (uint32_t i = 0; i < 8; ++i) {
-      if (node.child_meta[i] == ChildType::EMPTY) {
+      if (node.getChildMeta(i) == ChildType::EMPTY) {
         continue;
       }
       Vec3 child_center;
       TailorCoefficientsBf16 child_coefficients;
-      if (node.child_meta[i] == ChildType::LEAF) {
+      if (node.getChildMeta(i) == ChildType::LEAF) {
         uint32_t leaf_idx = leaf_pointers[current_node_idx].indices[i];
-        child_center = leaf_aabbs[leaf_idx].center();
+        child_center = leaf_aabbs[leaf_idx].geometryc_center();
         child_coefficients = leaf_coefficients[leaf_idx];
       } else {
         uint32_t child_idx = node.child_base + internal_child_count;
         internal_child_count++;
         BVH8Node child_node = nodes[child_idx];
-        child_center = child_node.parent_aabb.center();
+        child_center = child_node.parent_aabb.geometryc_center();
         float shared_scale =
             child_node.tailor_coefficients.get_shared_scale_factor();
         child_coefficients.zero_order =

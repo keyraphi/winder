@@ -20,13 +20,35 @@
 #include <vector_functions.h>
 #include <vector_types.h>
 
-// TODO: instead of using the max distance from the centor of mass to any of the
-// contained elements we use the aabbs radius (half the diagonal).
-__device__ __forceinline__ auto should_node_be_aproximated(const Vec3 &query,
-                                                           const AABB &aabb,
-                                                           const float beta_2)
-    -> bool {
-  return (query - aabb.center()).length2() > aabb.radius_sq() * beta_2;
+// For leaf we don't have the center of mass or the max_distance
+// We can still make conservative asumptions based on the aabb.
+// If in doubt we don't approximate.
+__device__ __forceinline__ auto
+should_leaf_node_be_aproximated(const Vec3 &query, const AABB &leaf_aabb,
+                                const float beta_2) -> bool {
+  // Conservative assumption:
+  // center of mass is at the aabb corner with the greatest distance.
+  float dx =
+      fmaxf(0.0f, fmaxf(leaf_aabb.min.x - query.x, query.x - leaf_aabb.max.x));
+  float dy =
+      fmaxf(0.0f, fmaxf(leaf_aabb.min.y - query.y, query.y - leaf_aabb.max.y));
+  float dz =
+      fmaxf(0.0f, fmaxf(leaf_aabb.min.z - query.z, query.z - leaf_aabb.max.z));
+  float dist_sq_to_box_corner = dx * dx + dy * dy + dz * dz;
+
+  // The maximum possible radius within an AABB relative to ANY center of mass
+  // is the full diagonal of the box.
+  float max_possible_R_sq = leaf_aabb.diagonal().length2();
+
+  return dist_sq_to_box_corner > max_possible_R_sq * beta_2;
+}
+
+__device__ __forceinline__ auto
+should_inner_node_be_aproximated(const Vec3 &query, const AABB &aabb,
+                                 const float beta_2) -> bool {
+  float max_distance_to_center = aabb.getMaxDistanceToCenterOfMass();
+  return (query - aabb.getCenterOfMass()).length2() >
+         max_distance_to_center * max_distance_to_center * beta_2;
 }
 
 __device__ __forceinline__ auto to_bits(const nv_bfloat162 bf16x2) -> uint32_t {
@@ -552,7 +574,7 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
 
       // process current node
       // Check the nodes parent_aabb. If it is too far away
-      if (is_active && should_node_be_aproximated(
+      if (is_active && should_inner_node_be_aproximated(
                            my_query, current_node.parent_aabb, beta_2)) {
         // Get tailor_coefficients
         float scale_factor =
@@ -575,8 +597,8 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
         // In the fast winding numbers paper the tailor approximation is made
         // around the "center of mass" not the aabb center
         my_winding_number += compute_node_approximation(
-            my_query, current_node.parent_aabb.center(), zero_order_coeff,
-            first_order_coeff, second_order_coeff);
+            my_query, current_node.parent_aabb.geometryc_center(),
+            zero_order_coeff, first_order_coeff, second_order_coeff);
 
         // Remember that I have the full contribution of this node already.
         my_required_stack_depth = stack_ptr;
@@ -589,7 +611,7 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
       }
       // load leaf ptrs to shared memory
       bool is_leaf = lane_id < 8
-                         ? current_node.child_meta[lane_id] == ChildType::LEAF
+                         ? current_node.getChildMeta(lane_id) == ChildType::LEAF
                          : false;
       bool leaf_mask = __ballot_sync(0x000000FF, is_leaf);
       if (leaf_mask > 0) {
@@ -602,7 +624,7 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
       uint32_t added_inner_node_counter = 0;
 #pragma unroll
       for (uint32_t child_idx = 0; child_idx < 8; ++child_idx) {
-        ChildType child_type = current_node.child_meta[child_idx];
+        ChildType child_type = current_node.getChildMeta(child_idx);
         if (child_type == ChildType::EMPTY) {
           continue;
         }
@@ -613,15 +635,16 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
               current_node.child_aabb_approx[child_idx]);
           bool is_detail_eval_needed = true;
           if (is_still_active &&
-              should_node_be_aproximated(my_query, child_aabb, beta_2)) {
+              should_leaf_node_be_aproximated(my_query, child_aabb, beta_2)) {
             // load leaf tailor coefficient from global memory
             // 60 bytes
             // TODO is it worth approximating leafs or is the brute force
             // heavy detail computation faster, considering we have to load the
             // leaf_coefficients here - test this
-            const TailorCoefficientsBf16 &current_leaf_coefficients = leaf_coefficients[leaf_idx];
+            const TailorCoefficientsBf16 &current_leaf_coefficients =
+                leaf_coefficients[leaf_idx];
             my_winding_number += compute_node_approximation(
-                my_query, child_aabb.center(),
+                my_query, child_aabb.geometryc_center(),
                 current_leaf_coefficients.zero_order,
                 current_leaf_coefficients.first_order,
                 current_leaf_coefficients.second_order);

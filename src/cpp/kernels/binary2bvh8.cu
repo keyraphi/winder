@@ -165,7 +165,7 @@ convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
               child_box, parent_min, parent_inv_ext);
 
           if (is_child_leaf) {
-            out_node.child_meta[i] = ChildType::LEAF;
+            out_node.setChildMeta(i, ChildType::LEAF);
             uint32_t leaf_raw_idx = binary_child_idx - (params.leaf_count - 1);
 
             my_leaf_indices[i] = leaf_raw_idx;
@@ -173,7 +173,7 @@ convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
             // Let the leaf know which BVH8Node is its parent
             params.bvh8_leaf_parents[leaf_raw_idx] = bvh8_idx;
           } else {
-            out_node.child_meta[i] = ChildType::INTERNAL;
+            out_node.setChildMeta(i, ChildType::INTERNAL);
             // Calculate the specific global index for this child in the next
             // level
             uint32_t next_bvh8_idx = my_child_base + internal_found;
@@ -189,7 +189,7 @@ convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
             internal_found++;
           }
         } else {
-          out_node.child_meta[i] = ChildType::EMPTY;
+          out_node.setChildMeta(i, ChildType::EMPTY);
           my_leaf_indices[i] = 0xFFFFFFFF;
         }
       }

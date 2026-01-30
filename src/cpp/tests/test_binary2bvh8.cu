@@ -93,7 +93,7 @@ TEST(BVH8Conversion, BalancedCollapse) {
   // Verify Child Meta and Leaf Pointers (Order Independent)
   std::vector<uint32_t> found_indices;
   for (int i = 0; i < 8; ++i) {
-    EXPECT_EQ(root.child_meta[i], ChildType::LEAF);
+    EXPECT_EQ(root.getChildMeta(i), ChildType::LEAF);
     found_indices.push_back(h_leaf_ptrs[0].indices[i]);
   }
 
@@ -184,9 +184,9 @@ TEST(BVH8Conversion, UniformLinearLeaves) {
   uint32_t leaves_found = 0;
   uint32_t internal_found = 0;
   for (int i = 0; i < 8; ++i) {
-    if (h_bvh8[0].child_meta[i] == ChildType::LEAF)
+    if (h_bvh8[0].getChildMeta(i) == ChildType::LEAF)
       leaves_found++;
-    if (h_bvh8[0].child_meta[i] == ChildType::INTERNAL)
+    if (h_bvh8[0].getChildMeta(i) == ChildType::INTERNAL)
       internal_found++;
   }
   EXPECT_EQ(leaves_found, 7);
@@ -197,7 +197,7 @@ TEST(BVH8Conversion, UniformLinearLeaves) {
 
   // 1. Verify Topology
   EXPECT_EQ(h_bvh8[0].child_base, 1);
-  EXPECT_EQ(h_bvh8[0].child_meta[7], ChildType::INTERNAL);
+  EXPECT_EQ(h_bvh8[0].getChildMeta(7), ChildType::INTERNAL);
 
   // 2. Verify Leaf-to-Parent Mapping
   // In a chain, Leaf 0-6 should be children of BVH8 Node 0 (Root)
@@ -285,7 +285,7 @@ TEST(BVH8Conversion, NonUniformHeuristic) {
   // Verify the quantization of Leaf 0 within the Root Node
   // Leaf 0 is at [0, 1], Root is at [0, 16] (approx, based on your merge)
   for (int i = 0; i < 8; ++i) {
-    if (root.child_meta[i] == ChildType::LEAF) {
+    if (root.getChildMeta(i) == ChildType::LEAF) {
       uint32_t leaf_idx = h_leaf_ptrs[0].indices[i];
       AABB original_leaf_box = h_bin_aabbs[internal_count + leaf_idx];
 
@@ -349,14 +349,14 @@ TEST(BVH8Conversion, DegeneratePointCluster64) {
   // 3. Verification
   // The Root (0) should have 8 internal children (Nodes 1-8)
   for (int i = 0; i < 8; ++i) {
-    EXPECT_EQ(h_bvh8[0].child_meta[i], ChildType::INTERNAL);
+    EXPECT_EQ(h_bvh8[0].getChildMeta(i), ChildType::INTERNAL);
   }
   EXPECT_EQ(h_bvh8[0].child_base, 1);
 
   // 4. Level 1 (Nodes 1-8) should contain ONLY leaves
   for (int n = 1; n <= 8; ++n) {
     for (int c = 0; c < 8; ++c) {
-      EXPECT_EQ(h_bvh8[n].child_meta[c], ChildType::LEAF);
+      EXPECT_EQ(h_bvh8[n].getChildMeta(c), ChildType::LEAF);
     }
     // Since nodes 1-8 have NO internal children, their child_base
     // points to the start of the (non-existent) Level 2.
@@ -373,7 +373,12 @@ TEST(BVH8Conversion, SingleLeafBaseCase) {
   const uint32_t leaf_count = 1;
   std::vector<BinaryNode> h_bin_nodes(0); // No internal nodes
   std::vector<AABB> h_bin_aabbs(1);
-  h_bin_aabbs[0] = {{1, 1, 1}, {2, 2, 2}};
+  AABB h_aabb;
+  h_aabb.min = Vec3{1, 1, 1};
+  h_aabb.max = Vec3{2, 2, 2};
+  h_aabb.setCenterOfMass({1.5F, 1.5F, 1.5F});
+  h_aabb.setMaxDistanceToCenterOfMass(0.5F);
+  h_bin_aabbs[0] = h_aabb;
 
   // Setup BVH8 Params
   thrust::device_vector<uint32_t> d_qA(leaf_count * 2, 0);
@@ -402,20 +407,20 @@ TEST(BVH8Conversion, SingleLeafBaseCase) {
   thrust::host_vector<LeafPointers> h_leaf_ptrs = d_leaf_pointers;
 
   // Verification
-  EXPECT_EQ(h_bvh8[0].child_meta[0], ChildType::LEAF);
-  EXPECT_EQ(h_bvh8[0].child_meta[1], ChildType::EMPTY);
+  EXPECT_EQ(h_bvh8[0].getChildMeta(0), ChildType::LEAF);
+  EXPECT_EQ(h_bvh8[0].getChildMeta(1), ChildType::EMPTY);
   EXPECT_EQ(h_bvh8[0].parent_aabb.min.x, 1.0f);
 
   BVH8Node root = h_bvh8[0];
   LeafPointers root_leafs = h_leaf_ptrs[0];
 
   // Verify active slot
-  EXPECT_EQ(root.child_meta[0], ChildType::LEAF);
+  EXPECT_EQ(root.getChildMeta(0), ChildType::LEAF);
   EXPECT_EQ(root_leafs.indices[0], 0);
 
   // Verify all 7 other slots are strictly neutralized
   for (int i = 1; i < 8; ++i) {
-    EXPECT_EQ(root.child_meta[i], ChildType::EMPTY)
+    EXPECT_EQ(root.getChildMeta(i), ChildType::EMPTY)
         << "Slot " << i << " should be EMPTY";
     EXPECT_EQ(root_leafs.indices[i], 0xFFFFFFFF)
         << "Slot " << i << " leaf pointer should be null";
