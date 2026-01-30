@@ -67,7 +67,7 @@ struct Vec3 {
     return result;
   }
 
-  __host__ __device__ __forceinline__ auto dot(const Vec3 &v) {
+  __host__ __device__ __forceinline__ auto dot(const Vec3 &v) const {
     return x * v.x + y * v.y + z * v.z;
   }
 

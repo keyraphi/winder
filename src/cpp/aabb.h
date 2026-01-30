@@ -13,6 +13,7 @@ struct AABB8BitApprox {
   __device__ __forceinline__ static auto
   quantize_aabb(const AABB &aabb, const Vec3 &parent_min,
                 const Vec3 &parent_inv_extend) -> AABB8BitApprox;
+
 };
 
 struct AABB {

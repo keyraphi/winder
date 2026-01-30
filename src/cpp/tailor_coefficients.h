@@ -27,14 +27,14 @@ struct TailorCoefficientsQuantized {
   set_tailor_coefficients(const Vec3 &zero_order, const Mat3x3 &first_order,
                           const Tensor3_compressed &second_order);
 
-  __device__ inline auto
-  get_tailor_zero_order(const float shared_scale_factor) const -> Vec3_bf16;
+  __device__ inline auto get_tailor_zero_order(float shared_scale_factor) const
+      -> Vec3_bf16;
+
+  __device__ inline auto get_tailor_first_order(float shared_scale_factor) const
+      -> Mat3x3_bf16;
 
   __device__ inline auto
-  get_tailor_first_order(const float shared_scale_factor) const -> Mat3x3_bf16;
-
-  __device__ inline auto
-  get_tailor_second_order(const float shared_scale_factor) const
+  get_tailor_second_order(float shared_scale_factor) const
       -> Tensor3_bf16_compressed;
 };
 

@@ -16,14 +16,12 @@
 #include <cuda_runtime_api.h>
 #include <device_atomic_functions.h>
 #include <driver_types.h>
+#include <limits>
 #include <vector_functions.h>
 #include <vector_types.h>
 
-// Note instead of using the max distance from the aabb_center to any of its
-// contained elements we use the aabbs radius (half the diagonal). This is a
-// conservative overestimation, leading to slightly less approximation compared
-// to the Fast Winding Numbers method. However it prevents an aditional 4 byte
-// load and should not lead to significantly more computations.
+// TODO: instead of using the max distance from the centor of mass to any of the
+// contained elements we use the aabbs radius (half the diagonal).
 __device__ __forceinline__ auto should_node_be_aproximated(const Vec3 &query,
                                                            const AABB &aabb,
                                                            const float beta_2)
@@ -40,15 +38,6 @@ __device__ __forceinline__ auto to_bits(const nv_bfloat16 bf16) -> short {
   short result = *(short *)&bf16;
   return result;
 }
-
-// DEBUG /////////////////////////
-// #define STRINGIFY(x) #x
-// #define TOSTRING(x) STRINGIFY(x)
-//
-// #ifdef __CUDA_ARCH__
-// #pragma message("Targeting CUDA Architecture: " TOSTRING(__CUDA_ARCH__))
-// #endif
-// DEBUG /////////////////////////
 
 // TODO: Write a test for this!
 __device__ __forceinline__ auto
@@ -381,26 +370,93 @@ computeSecondOrderContribution(const Tensor3_bf16_compressed &C,
   float v_dot_r = v.dot(r_f);
 
   float r3_part = 0.f;
-  r3_part+= r_f.x * r_f.x * r_f.x *C_f.data[0];
-  r3_part+= r_f.x * r_f.x * r_f.y * C_f.data[1];
-  r3_part+= r_f.x * r_f.x * r_f.z * C_f.data[2];
-  r3_part+= (r_f.y * r_f.x * r_f.x) * 2.F * C_f.data[3];
-  r3_part+= (r_f.x * r_f.y * r_f.y) * 2.F * C_f.data[4];
-  r3_part+= (r_f.x * r_f.y * r_f.z) * 2.F * C_f.data[5];
-  r3_part+= (r_f.z * r_f.x * r_f.x) * 2.F * C_f.data[6];
-  r3_part+= (r_f.z * r_f.x * r_f.y) * 2.F * C_f.data[7];
-  r3_part+= (r_f.z * r_f.x * r_f.z) * 2.F * C_f.data[8];
-  r3_part+= r_f.y * r_f.y * r_f.x * C_f.data[9];
-  r3_part+= r_f.y * r_f.y * r_f.y * C_f.data[10];
-  r3_part+= r_f.y * r_f.y * r_f.z * C_f.data[11];
-  r3_part+= (r_f.y * r_f.z * r_f.x) * 2.F * C_f.data[12];
-  r3_part+= (r_f.z * r_f.y * r_f.y) * 2.F * C_f.data[13];
-  r3_part+= (r_f.y * r_f.z * r_f.z) * 2.F * C_f.data[14];
-  r3_part+= r_f.z * r_f.z * r_f.x * C_f.data[15];
-  r3_part+= r_f.z * r_f.z * r_f.y * C_f.data[16];
-  r3_part+= r_f.z * r_f.z * r_f.z * C_f.data[17];
+  r3_part += r_f.x * r_f.x * r_f.x * C_f.data[0];
+  r3_part += r_f.x * r_f.x * r_f.y * C_f.data[1];
+  r3_part += r_f.x * r_f.x * r_f.z * C_f.data[2];
+  r3_part += (r_f.y * r_f.x * r_f.x) * 2.F * C_f.data[3];
+  r3_part += (r_f.x * r_f.y * r_f.y) * 2.F * C_f.data[4];
+  r3_part += (r_f.x * r_f.y * r_f.z) * 2.F * C_f.data[5];
+  r3_part += (r_f.z * r_f.x * r_f.x) * 2.F * C_f.data[6];
+  r3_part += (r_f.z * r_f.x * r_f.y) * 2.F * C_f.data[7];
+  r3_part += (r_f.z * r_f.x * r_f.z) * 2.F * C_f.data[8];
+  r3_part += r_f.y * r_f.y * r_f.x * C_f.data[9];
+  r3_part += r_f.y * r_f.y * r_f.y * C_f.data[10];
+  r3_part += r_f.y * r_f.y * r_f.z * C_f.data[11];
+  r3_part += (r_f.y * r_f.z * r_f.x) * 2.F * C_f.data[12];
+  r3_part += (r_f.z * r_f.y * r_f.y) * 2.F * C_f.data[13];
+  r3_part += (r_f.y * r_f.z * r_f.z) * 2.F * C_f.data[14];
+  r3_part += r_f.z * r_f.z * r_f.x * C_f.data[15];
+  r3_part += r_f.z * r_f.z * r_f.y * C_f.data[16];
+  r3_part += r_f.z * r_f.z * r_f.z * C_f.data[17];
   return r3_part * inv_r7_f - v_dot_r * inv_r5_f;
 #endif
+}
+
+__device__ __forceinline__ auto compute_node_approximation(
+    const Vec3 &query, const Vec3 &aabb_center,
+    const Vec3_bf16 &zero_order_coeff, const Mat3x3_bf16 &first_order_coeff,
+    const Tensor3_bf16_compressed &second_order_coeff) -> float {
+  Vec3 r = aabb_center - query;
+  float norm_r = rsqrt(r.length2());
+  float norm_r3 = norm_r * norm_r * norm_r;
+  float norm_r5 = norm_r3 * norm_r * norm_r;
+  float norm_r7 = norm_r5 * norm_r * norm_r;
+
+  // 1/(4*pi)
+  float inv_4pi = (0.07957747154F);
+
+  float inv_4_pi_normr3 = inv_4pi / norm_r3;
+  float inv_4_pi_normr5 = (3.F) * inv_4pi / norm_r5;
+  float inv_4_pi_normr7 = (15.F) * inv_4pi / norm_r7;
+
+  Vec3_bf16 r_bf16 = Vec3_bf16::from_float(r);
+  float result = 0.F;
+  // Zero Order
+  result +=
+      computeZeroOrderContribution(zero_order_coeff, r_bf16, inv_4_pi_normr3);
+  // First Order
+  result += computeFirstOrderContribution(first_order_coeff, r_bf16,
+                                          inv_4_pi_normr3, inv_4_pi_normr5);
+  // Second order
+  result += computeSecondOrderContribution(second_order_coeff, r_bf16,
+                                           inv_4_pi_normr5, inv_4_pi_normr7);
+  return result;
+}
+
+__device__ __forceinline__ auto warp_reduce_add_xor(float val) -> float {
+#pragma unroll
+  for (int offset = 16; offset > 0; offset /= 2) {
+    val += __shfl_xor_sync(0xFFFFFFFF, val, offset);
+  }
+  return val;
+}
+
+template <typename T>
+__device__ __forceinline__ void
+load_shared_cooperative(T *shared_dst, const T *global_src, uint32_t lane_id) {
+  // Treat the structure as an array of uint32_t
+  // BVH8Node is 128 bytes = 32 x 4 bytes. Perfect mapping for 32 threads.
+  static_assert(sizeof(T) % 4 == 0, "Structure must be 4-byte aligned size");
+  const uint32_t words = sizeof(T) / 4;
+
+  auto *dst_u32 = reinterpret_cast<uint32_t *>(shared_dst);
+  const auto *src_u32 = reinterpret_cast<const uint32_t *>(global_src);
+
+  // If structure is exactly 128 bytes (BVH8Node)
+  if (words == 32) {
+    dst_u32[lane_id] = src_u32[lane_id];
+  }
+  // If structure is 32 bytes (LeafPointers)
+  else if (words == 8) {
+    if (lane_id < 8) {
+      dst_u32[lane_id] = src_u32[lane_id];
+    }
+  } else {
+    // Generic fallback
+    for (uint32_t i = lane_id; i < words; i += 32) {
+      dst_u32[i] = src_u32[i];
+    }
+  }
 }
 
 template <typename Geometry>
@@ -409,7 +465,8 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
     const BVH8Node *bvh8_nodes, const LeafPointers *bvh8_leaf_pointers,
     const TailorCoefficientsBf16 *leaf_coefficients,
     const Geometry *sorted_geometry, const uint32_t query_count,
-    float *winding_numbers, const float beta_2) {
+    const uint32_t geometry_count, const uint32_t leaf_count,
+    float *winding_numbers, const float beta_2, const float inv_epsilon) {
 
   const uint32_t warp_id = threadIdx.x / 32;
   const uint32_t lane_id = threadIdx.x % 32;
@@ -418,9 +475,9 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
   // Each block of 128 threads works on one tile at a time.
   // 4 warps per 128 threads
   // Each warp has its own shared traversal stack.
-  __shared__ uint32_t
-      shared_stack[4][12]; // TODO find minimum required stack size
+  __shared__ uint32_t shared_stack[4][64];
   __shared__ BVH8Node current_node_cache[4];
+  __shared__ LeafPointers shared_leaf_ptrs[4];
 
   static __device__ uint32_t global_device_idx = 0;
   __shared__ uint32_t tile_base;
@@ -434,17 +491,30 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
     }
     __syncthreads();
 
+    // keep track of what subtrees have been approximated for this query
+    int my_required_stack_depth = std::numeric_limits<int>::max();
+
     uint32_t my_query_idx = tile_base + threadIdx.x;
-    if (my_query_idx > query_count) {
-      return; // TODO make sure full warp stays alife
+    Vec3 my_query{0.F, 0.F, 0.F};
+    uint32_t original_query_idx = 0xFFFFFFFF;
+    if (my_query_idx >= query_count) {
+      uint32_t query_count_warpstep = 32 * ((query_count + 32 - 1) / 32);
+      if (my_query_idx >= query_count_warpstep) {
+        // The entire warp is out of bounds and can safely return.
+        return;
+      }
+      // This thread has no query, but still needs to help the others in the
+      // warp with their computations
+      my_required_stack_depth = -1;
+    } else {
+      // load query with sort indirections
+      original_query_idx = sort_indirections[my_query_idx];
+      my_query = queries[original_query_idx];
     }
-    // load query with sort indirections
-    uint32_t original_query_idx = sort_indirections[my_query_idx];
-    Vec3 my_query = queries[original_query_idx];
     float my_winding_number = 0.F;
 
     // Always start traversal on root
-    uint32_t stack_ptr = 0;
+    int stack_ptr = 0;
     if (lane_id == 0) {
       shared_stack[warp_id][stack_ptr++] = 0;
     }
@@ -455,62 +525,166 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
       uint32_t stack_not_empty_mask = __ballot_sync(0xFFFFFFFF, stack_ptr > 0);
       // stop if all warps are done
       if (stack_not_empty_mask == 0) {
-        break;
+        break; // this tile is done
       }
-      // warp leader pops next node
+      // warp leader pops next node into cache
+      uint32_t current_node_idx;
       if (lane_id == 0) {
-        uint32_t current_node_idx = shared_stack[warp_id][--stack_ptr];
-        current_node_cache[warp_id] = bvh8_nodes[current_node_idx];
+        current_node_idx = shared_stack[warp_id][--stack_ptr];
+      }
+      // load current node to shared cache
+      load_shared_cooperative<BVH8Node>(&current_node_cache[warp_id],
+                                        bvh8_nodes + current_node_idx, lane_id);
+      __syncwarp();
+
+      // share current_node_idx with the rest
+      current_node_idx = __shfl_sync(0xFFFFFFFF, current_node_idx, 0);
+      const BVH8Node &current_node = current_node_cache[warp_id];
+
+      // Check if this thread needs to process the current node
+      bool is_active = stack_ptr < my_required_stack_depth;
+      if (is_active) {
+        // this node is interested in the current subtree and will also have to
+        // look at everything that will be put onto the stack to traverse this
+        // subtree.
+        my_required_stack_depth = std::numeric_limits<int>::max();
       }
 
       // process current node
-      // 1. Check the nodes parent_aabb. If it is too far away
-      if (should_node_be_aproximated(
-              my_query, current_node_cache[warp_id].parent_aabb, beta_2)) {
-        // compute approximation in bf16
-        Vec3 p = current_node_cache[warp_id].parent_aabb.center();
-        Vec3_bf16 r = Vec3_bf16::from_float(p - my_query);
-        nv_bfloat16 norm_r = hrsqrt(r.length2());
-        nv_bfloat16 norm_r3 = norm_r * norm_r * norm_r;
-        nv_bfloat16 norm_r5 = norm_r3 * norm_r * norm_r;
-        nv_bfloat16 norm_r7 = norm_r5 * norm_r * norm_r;
-
-        // 1/(4*pi)
-        nv_bfloat16 inv_4pi = __float2bfloat16(0.07957747154);
-
-        nv_bfloat16 inv_4_pi_normr3 = inv_4pi / norm_r3;
-        nv_bfloat16 inv_4_pi_normr5 = __float2bfloat16(3.F) * inv_4pi / norm_r5;
-        nv_bfloat16 inv_4_pi_normr7 =
-            __float2bfloat16(15.F) * inv_4pi / norm_r7;
-
-        // Shared scale factor of quantized tailor coefficients
-        float scale_factor = current_node_cache[warp_id]
-                                 .tailor_coefficients.get_shared_scale_factor();
+      // Check the nodes parent_aabb. If it is too far away
+      if (is_active && should_node_be_aproximated(
+                           my_query, current_node.parent_aabb, beta_2)) {
+        // Get tailor_coefficients
+        float scale_factor =
+            current_node.tailor_coefficients.get_shared_scale_factor();
         // Zero Order
         Vec3_bf16 zero_order_coeff =
-            current_node_cache[warp_id]
-                .tailor_coefficients.get_tailor_zero_order(scale_factor);
-        my_winding_number +=
-            computeZeroOrderContribution(zero_order_coeff, r, inv_4_pi_normr3);
+            current_node.tailor_coefficients.get_tailor_zero_order(
+                scale_factor);
         // First Order
         Mat3x3_bf16 first_order_coeff =
-            current_node_cache[warp_id]
-                .tailor_coefficients.get_tailor_first_order(scale_factor);
-        my_winding_number += computeFirstOrderContribution(
-            first_order_coeff, r, inv_4_pi_normr3, inv_4_pi_normr5);
+            current_node.tailor_coefficients.get_tailor_first_order(
+                scale_factor);
         // Second order
         Tensor3_bf16_compressed second_order_coeff =
-            current_node_cache[warp_id]
-                .tailor_coefficients.get_tailor_second_order(scale_factor);
-        my_winding_number += computeSecondOrderContribution(
-            second_order_coeff, r, inv_4_pi_normr5, inv_4_pi_normr7);
-      } else {
-        // TODO handle children in lock step!
-        // continue here
+            current_node.tailor_coefficients.get_tailor_second_order(
+                scale_factor);
+
+        // Do actual approximation
+        // TODO:
+        // In the fast winding numbers paper the tailor approximation is made
+        // around the "center of mass" not the aabb center
+        my_winding_number += compute_node_approximation(
+            my_query, current_node.parent_aabb.center(), zero_order_coeff,
+            first_order_coeff, second_order_coeff);
+
+        // Remember that I have the full contribution of this node already.
+        my_required_stack_depth = stack_ptr;
       }
+      bool is_still_active = my_required_stack_depth > stack_ptr;
+      uint32_t interest_mask = __ballot_sync(0xFFFFFFFF, is_still_active);
+      if (interest_mask == 0) {
+        // This subtree is done for all threads in the warp.
+        continue;
+      }
+      // load leaf ptrs to shared memory
+      bool is_leaf = lane_id < 8
+                         ? current_node.child_meta[lane_id] == ChildType::LEAF
+                         : false;
+      bool leaf_mask = __ballot_sync(0x000000FF, is_leaf);
+      if (leaf_mask > 0) {
+        load_shared_cooperative(&shared_leaf_ptrs[warp_id],
+                                &bvh8_leaf_pointers[current_node_idx], lane_id);
+        __syncwarp();
+      }
+
+      // Go through all childs together
+      uint32_t added_inner_node_counter = 0;
+#pragma unroll
+      for (uint32_t child_idx = 0; child_idx < 8; ++child_idx) {
+        ChildType child_type = current_node.child_meta[child_idx];
+        if (child_type == ChildType::EMPTY) {
+          continue;
+        }
+        if (child_type == ChildType::LEAF) {
+          uint32_t leaf_idx = shared_leaf_ptrs[warp_id].indices[child_idx];
+          AABB child_aabb = AABB::from_approximation(
+              current_node.parent_aabb,
+              current_node.child_aabb_approx[child_idx]);
+          bool is_detail_eval_needed = true;
+          if (is_still_active &&
+              should_node_be_aproximated(my_query, child_aabb, beta_2)) {
+            // load leaf tailor coefficient from global memory
+            // 60 bytes
+            // TODO is it worth approximating leafs or is the brute force
+            // heavy detail computation faster, considering we have to load the
+            // leaf_coefficients here - test this
+            const TailorCoefficientsBf16 &current_leaf_coefficients = leaf_coefficients[leaf_idx];
+            my_winding_number += compute_node_approximation(
+                my_query, child_aabb.center(),
+                current_leaf_coefficients.zero_order,
+                current_leaf_coefficients.first_order,
+                current_leaf_coefficients.second_order);
+            is_detail_eval_needed = false;
+          }
+          uint32_t detailed_leaf_evaluation_mask = __ballot_sync(
+              0xFFFFFFFF, is_detail_eval_needed && is_still_active);
+
+          if (detailed_leaf_evaluation_mask == 0) {
+            // leaf contribution was approximated by all interested threads.
+            // Continue with next child.
+            continue;
+          }
+          // Detailed evaluation of leaf is needed for some threads.
+          uint32_t my_geometry_idx = leaf_idx * 32 + lane_id;
+          bool is_my_geometry_in_bounds = my_geometry_idx < geometry_count;
+          Geometry my_geometry;
+          my_geometry =
+              Geometry::load(sorted_geometry, my_geometry_idx, geometry_count);
+          // Use full warp to compute contributions of interested queries one by
+          // one
+          Vec3 shared_query;
+          while (detailed_leaf_evaluation_mask > 0) {
+            int current_leader = __ffs(detailed_leaf_evaluation_mask) - 1;
+            // set current leader bit to 0
+            detailed_leaf_evaluation_mask =
+                detailed_leaf_evaluation_mask & (~(1u << current_leader));
+            // Get the query from leader
+            shared_query.x =
+                __shfl_sync(0xFFFFFFFF, my_query.x, current_leader);
+            shared_query.y =
+                __shfl_sync(0xFFFFFFFF, my_query.y, current_leader);
+            shared_query.z =
+                __shfl_sync(0xFFFFFFFF, my_query.z, current_leader);
+            // compute the winding number contribution from my geometry
+            float my_contribution = 0.F;
+            if (is_my_geometry_in_bounds) {
+              my_contribution =
+                  my_geometry.contributionToQuery(shared_query, inv_epsilon);
+            }
+            // sum up all contributions in warp
+            float total_contribution = warp_reduce_add_xor(my_contribution);
+            // only leader adds that contribution
+            if ((int)lane_id == current_leader) {
+              my_winding_number += total_contribution;
+            }
+          }
+        } else {
+          // Child is inner node
+          if (lane_id == 0) {
+            uint32_t child_node_idx =
+                current_node.child_base + added_inner_node_counter;
+            added_inner_node_counter++;
+            shared_stack[warp_id][stack_ptr++] = child_node_idx;
+          }
+        }
+      } // child for
+    } // traversal while
+    // winding number computation is complete
+    if (my_required_stack_depth >= 0) {
+      winding_numbers[original_query_idx] = my_winding_number;
     }
-    winding_numbers[original_query_idx] = my_winding_number;
-  }
+  } // grid while
 }
 
 // defaults for beta
@@ -522,15 +696,14 @@ template <> struct GeometryTraits<PointNormal> {
 };
 
 template <typename Geometry>
-void compute_winding_numbers(const Vec3 *queries,
-                             const uint32_t *sort_indirections,
-                             const BVH8Node *bvh8_nodes,
-                             const LeafPointers *bvh8_leaf_pointers,
-                             const TailorCoefficientsBf16 *leaf_coefficients,
-                             const Geometry *sorted_geometry,
-                             const uint32_t query_count, float *winding_numbers,
-                             const int device_id, const cudaStream_t &stream,
-                             float beta) {
+void compute_winding_numbers(
+    const Vec3 *queries, const uint32_t *sort_indirections,
+    const BVH8Node *bvh8_nodes, const LeafPointers *bvh8_leaf_pointers,
+    const TailorCoefficientsBf16 *leaf_coefficients,
+    const Geometry *sorted_geometry, const uint32_t query_count,
+    const uint32_t geometry_count, const uint32_t leaf_count,
+    float *winding_numbers, const int device_id, const cudaStream_t &stream,
+    const float beta, const float epsilon) {
   if (query_count == 0) {
     return;
   }
@@ -538,6 +711,8 @@ void compute_winding_numbers(const Vec3 *queries,
   float actual_beta =
       beta < 0.F ? GeometryTraits<Geometry>{}.default_beta : beta;
   float beta_2 = actual_beta * actual_beta;
+
+  float inv_epsilon = 1.F / epsilon;
 
   int threads = 128;
   int blocks_per_sm = 0;
@@ -551,7 +726,8 @@ void compute_winding_numbers(const Vec3 *queries,
 
   compute_winding_numbers_kernel<Geometry><<<blocks, threads, 0, stream>>>(
       queries, sort_indirections, bvh8_nodes, bvh8_leaf_pointers,
-      leaf_coefficients, sorted_geometry, query_count, winding_numbers, beta_2);
+      leaf_coefficients, sorted_geometry, query_count, leaf_count,
+      geometry_count, winding_numbers, beta_2, inv_epsilon);
   CUDA_CHECK(cudaGetLastError());
 }
 
@@ -560,12 +736,14 @@ template void compute_winding_numbers<PointNormal>(
     const BVH8Node *bvh8_nodes, const LeafPointers *bvh8_leaf_pointers,
     const TailorCoefficientsBf16 *leaf_coefficients,
     const PointNormal *sorted_geometry, const uint32_t query_count,
+    const uint32_t point_count, const uint32_t leaf_count,
     float *winding_numbers, const int device_id, const cudaStream_t &stream,
-    float beta);
+    const float beta, const float epsilon);
 template void compute_winding_numbers<Triangle>(
     const Vec3 *queries, const uint32_t *sort_indirections,
     const BVH8Node *bvh8_nodes, const LeafPointers *bvh8_leaf_pointers,
     const TailorCoefficientsBf16 *leaf_coefficients,
     const Triangle *sorted_geometry, const uint32_t query_count,
+    const uint32_t triangle_count, const uint32_t leaf_count,
     float *winding_numbers, const int device_id, const cudaStream_t &stream,
-    float beta);
+    const float beta, const float epsilon);
