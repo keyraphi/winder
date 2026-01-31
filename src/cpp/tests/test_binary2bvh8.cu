@@ -148,7 +148,7 @@ TEST(BVH8Conversion, UniformLinearLeaves) {
   // Bottom-up manual refit for internal nodes
   for (int i = internal_count - 1; i >= 0; --i) {
     h_bin_aabbs[i] = AABB::merge(h_bin_aabbs[h_bin_nodes[i].left_child],
-                                 h_bin_aabbs[h_bin_nodes[i].right_child]);
+                               h_bin_aabbs[h_bin_nodes[i].right_child]);
   }
 
   // Setup BVH8 Params
@@ -376,8 +376,6 @@ TEST(BVH8Conversion, SingleLeafBaseCase) {
   AABB h_aabb;
   h_aabb.min = Vec3{1, 1, 1};
   h_aabb.max = Vec3{2, 2, 2};
-  h_aabb.setCenterOfMass({1.5F, 1.5F, 1.5F});
-  h_aabb.setMaxDistanceToCenterOfMass(0.5F);
   h_bin_aabbs[0] = h_aabb;
 
   // Setup BVH8 Params

@@ -207,13 +207,13 @@ WinderBackend<Geometry>::WinderBackend(size_t size, int device_id)
 }
 
 template <typename Geometry> struct GeometryToAABB {
-  __host__ __device__ auto operator()(const Geometry &g) const -> AABB {
+  __device__ auto operator()(const Geometry &g) const -> AABB {
     return g.get_aabb();
   }
 };
 
 struct MergeAABB {
-  __host__ __device__ auto operator()(const AABB &a, const AABB &b) const
+  __device__ auto operator()(const AABB &a, const AABB &b) const
       -> AABB {
     return AABB::merge(a, b);
   }
@@ -446,7 +446,6 @@ auto WinderBackend<Geometry>::compute(const float *queries, size_t query_count,
          construction_elapsed_time_ms);
   // END DBUG optimize
 
-  uint32_t leaf_count = (m_count + LEAF_SIZE - 1) / LEAF_SIZE;
 
   if (beta < 0.F) {
     // defaults from Fast Winding Numbers paper
@@ -463,7 +462,6 @@ auto WinderBackend<Geometry>::compute(const float *queries, size_t query_count,
                                                m_leaf_coefficients,
                                                m_sorted_geometry,
                                                (uint32_t)query_count,
-                                               leaf_count,
                                                (uint32_t)m_count,
                                                winding_numbers,
                                                beta,

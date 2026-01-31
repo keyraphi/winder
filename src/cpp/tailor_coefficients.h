@@ -1,5 +1,6 @@
 #pragma once
 
+#include "center_of_mass.h"
 #include "mat3x3.h"
 #include "tensor3.h"
 #include "vec3.h"
@@ -39,10 +40,13 @@ struct TailorCoefficientsQuantized {
 };
 
 // For leaf nodes
+// 64 byte
 struct TailorCoefficientsBf16 {
   Vec3_bf16 zero_order;
   Mat3x3_bf16 first_order;
   Tensor3_bf16_compressed second_order;
+  // 60 bytes
+  CenterOfMass_quantized center_of_mass; // 4 bytes
 };
 
 // only for cuda compiler:

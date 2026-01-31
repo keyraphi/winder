@@ -110,13 +110,13 @@ TEST_F(GatherTest, ScatteredGatherLarge) {
 }
 
 struct PointToAABB {
-  __host__ __device__ AABB operator()(const Vec3 &point) const {
+  __device__ AABB operator()(const Vec3 &point) const {
     return point.get_aabb();
   }
 };
 
 struct MergeAABB {
-  __host__ __device__ AABB operator()(const AABB &a, const AABB &b) const {
+  __device__ AABB operator()(const AABB &a, const AABB &b) const {
     return AABB::merge(a, b);
   }
 };
@@ -365,8 +365,8 @@ TEST(BinaryTreeRefit, BottomUpAABB) {
 
 TEST(BinaryTreeRefit, EdgeCaseZero) {
   // Case: 0 Points / 0 Leaves
-  populate_binary_tree_aabb_and_leaf_coefficients<PointNormal>(nullptr, nullptr, 0, nullptr,
-                                                  nullptr, nullptr, nullptr, 0);
+  populate_binary_tree_aabb_and_leaf_coefficients<PointNormal>(
+      nullptr, nullptr, 0, nullptr, nullptr, nullptr, nullptr, 0);
 }
 
 TEST(BinaryTreeRefit, SingleLeafCoefficients) {
@@ -416,5 +416,3 @@ TEST(BinaryTreeRefit, SingleLeafCoefficients) {
   EXPECT_NEAR(zero_order.y, 0.0f, 1e-2f);
   EXPECT_NEAR(zero_order.z, 32.0f, 1e-1f);
 }
-
-

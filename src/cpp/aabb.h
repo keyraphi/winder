@@ -1,4 +1,5 @@
 #pragma once
+#include "center_of_mass.h"
 #include "vec3.h"
 #include <cmath>
 #include <cstdint>
@@ -20,17 +21,13 @@ struct AABB {
   Vec3 min;
   Vec3 max;
 
-  // quantized center of mass and max distance of elements to center
-  uint8_t _center_of_mass[3];
-  uint8_t _max_distance_to_center;
+  CenterOfMass_quantized center_of_mass;
 
   // factory for empty AABB
   static __host__ __device__ __forceinline__ auto empty() -> AABB {
     AABB result;
     result.min = Vec3{INFINITY, INFINITY, INFINITY};
     result.max = Vec3{-INFINITY, -INFINITY, -INFINITY};
-    result.setCenterOfMass({0.F,0.F,0.F});
-    result.setMaxDistanceToCenterOfMass(0);
     return result;
   }
 
@@ -46,37 +43,6 @@ struct AABB {
             parent.min + (Vec3{(float)approx.qmax[0], (float)approx.qmax[1],
                                (float)approx.qmax[2]} *
                           s * extent)};
-  }
-
-  __host__ __device__ __forceinline__ auto getCenterOfMass() const -> Vec3 {
-    Vec3 extent = diagonal();
-    return {min.x + (static_cast<float>(_center_of_mass[0]) / 255.F) * extent.x,
-            min.y + (static_cast<float>(_center_of_mass[1]) / 255.F) * extent.y,
-            min.z +
-                (static_cast<float>(_center_of_mass[2]) / 255.F) * extent.z};
-  }
-
-  __host__ __device__ __forceinline__ auto
-  setCenterOfMass(const Vec3 &center_of_mass) -> void {
-    Vec3 extent = diagonal();
-    _center_of_mass[0] = static_cast<uint8_t>(fminf(
-        255.F, fmaxf(0.F, ((center_of_mass.x - min.x) / extent.x) * 255.F)));
-    _center_of_mass[1] = static_cast<uint8_t>(fminf(
-        255.F, fmaxf(0.F, ((center_of_mass.y - min.y) / extent.y) * 255.F)));
-    _center_of_mass[2] = static_cast<uint8_t>(fminf(
-        255.F, fmaxf(0.F, ((center_of_mass.z - min.z) / extent.z) * 255.F)));
-  }
-
-  __host__ __device__ __forceinline__ auto getMaxDistanceToCenterOfMass() const
-      -> float {
-    return (static_cast<float>(_max_distance_to_center) / 255.F) *
-           diagonal().length();
-  }
-
-  __host__ __device__ __forceinline__ auto
-  setMaxDistanceToCenterOfMass(const float distance) -> void {
-    _max_distance_to_center = static_cast<uint8_t>(
-        fminf(255.F, fmaxf(0.F, distance / diagonal().length()) * 255.F));
   }
 
   __host__ __device__ __forceinline__ auto geometryc_center() const -> Vec3 {
@@ -110,18 +76,19 @@ struct AABB {
     uint32_t total_element_count = a_element_count + b_element_count;
     float a_factor = (float)a_element_count / (float)total_element_count;
     float b_factor = (float)b_element_count / (float)total_element_count;
-    Vec3 com_a = a.getCenterOfMass();
-    Vec3 com_b = b.getCenterOfMass();
+    Vec3 com_a = a.center_of_mass.get(a.min, a.diagonal());
+    Vec3 com_b = b.center_of_mass.get(b.min, b.diagonal());
     Vec3 com_new = com_a * a_factor + com_b * b_factor;
-    result.setCenterOfMass(com_new);
+    result.center_of_mass.set(com_new, result.min,
+                                          1.F / result.diagonal());
     // Calculate shift-adjusted radius
     // this is an upper bound
     float dist_a =
-        (com_new - com_a).length() + a.getMaxDistanceToCenterOfMass();
+        (com_new - com_a).length() + a.center_of_mass.getMaxDistance(a.diagonal().length());
     float dist_b =
-        (com_new - com_b).length() + b.getMaxDistanceToCenterOfMass();
+        (com_new - com_b).length() + b.center_of_mass.getMaxDistance(b.diagonal().length());
 
-    result.setMaxDistanceToCenterOfMass(fmaxf(dist_a, dist_b));
+    result.center_of_mass.setMaxDistance(fmaxf(dist_a, dist_b), result.diagonal().inv_length());
     return result;
   }
 };
@@ -130,8 +97,8 @@ __host__ __device__ __forceinline__ auto Vec3::get_aabb() const -> AABB {
   AABB result;
   result.min = *this;
   result.max = *this;
-  result.setCenterOfMass(*this);
-  result.setMaxDistanceToCenterOfMass(0.F);
+  result.center_of_mass.set(*this, *this, Vec3{INFINITY, INFINITY, INFINITY});
+  result.center_of_mass.setMaxDistance(0.F, 0.F);
   return result;
 }
 

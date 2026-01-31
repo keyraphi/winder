@@ -83,6 +83,9 @@ struct Vec3 {
   __host__ __device__ __forceinline__ auto length() const -> float {
     return sqrtf(length2());
   }
+  __host__ __device__ __forceinline__ auto inv_length() const -> float {
+    return rsqrtf(length2());
+  }
 
   __host__ __device__ __forceinline__ auto operator+(const Vec3 &b) const
       -> Vec3 {

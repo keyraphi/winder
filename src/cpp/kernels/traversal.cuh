@@ -14,7 +14,6 @@ template <typename Geometry> struct ComputeWindingNumbersParams {
   const Geometry *sorted_geometry;
   uint32_t query_count;
   uint32_t geometry_count;
-  uint32_t leaf_count;
   float *winding_numbers;
   float beta;
   float epsilon;

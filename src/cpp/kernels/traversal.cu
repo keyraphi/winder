@@ -47,8 +47,10 @@ should_leaf_node_be_aproximated(const Vec3 &query, const AABB &leaf_aabb,
 __device__ __forceinline__ auto
 should_inner_node_be_aproximated(const Vec3 &query, const AABB &aabb,
                                  const float beta_2) -> bool {
-  float max_distance_to_center = aabb.getMaxDistanceToCenterOfMass();
-  return (query - aabb.getCenterOfMass()).length2() >
+  float max_distance_to_center =
+      aabb.center_of_mass.getMaxDistance(aabb.diagonal().length());
+  return (query - aabb.center_of_mass.get(aabb.min, aabb.diagonal()))
+             .length2() >
          max_distance_to_center * max_distance_to_center * beta_2;
 }
 
@@ -417,11 +419,11 @@ computeSecondOrderContribution(const Tensor3_bf16_compressed &C,
 }
 
 __device__ __forceinline__ auto compute_node_approximation(
-    const Vec3 &query, const Vec3 &aabb_center,
+    const Vec3 &query, const Vec3 &center_of_mass,
     const Vec3_bf16 &zero_order_coeff, const Mat3x3_bf16 &first_order_coeff,
     const Tensor3_bf16_compressed &second_order_coeff) -> float {
-  Vec3 r = aabb_center - query;
-  float norm_r = rsqrt(r.length2());
+  Vec3 r = center_of_mass - query;
+  float norm_r = r.inv_length();
   float norm_r3 = norm_r * norm_r * norm_r;
   float norm_r5 = norm_r3 * norm_r * norm_r;
   float norm_r7 = norm_r5 * norm_r * norm_r;
@@ -429,7 +431,8 @@ __device__ __forceinline__ auto compute_node_approximation(
   // 1/(4*pi)
   float inv_4pi = (0.07957747154F);
 
-  float inv_4_pi_normr3 = inv_4pi / norm_r3;
+  float inv_4_pi_normr3 =
+      inv_4pi / norm_r3; // Doublecheck this might have to be a * instead!
   float inv_4_pi_normr5 = (3.F) * inv_4pi / norm_r5;
   float inv_4_pi_normr7 = (15.F) * inv_4pi / norm_r7;
 
@@ -489,8 +492,8 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
     const BVH8Node *bvh8_nodes, const LeafPointers *bvh8_leaf_pointers,
     const TailorCoefficientsBf16 *leaf_coefficients,
     const Geometry *sorted_geometry, const uint32_t query_count,
-    const uint32_t geometry_count, const uint32_t leaf_count,
-    float *winding_numbers, const float beta_2, const float inv_epsilon) {
+    const uint32_t geometry_count, float *winding_numbers, const float beta_2,
+    const float inv_epsilon) {
 
   const uint32_t warp_id = threadIdx.x / 32;
   const uint32_t lane_id = threadIdx.x % 32;
@@ -595,11 +598,11 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
                 scale_factor);
 
         // Do actual approximation
-        // TODO:
-        // In the fast winding numbers paper the tailor approximation is made
-        // around the "center of mass" not the aabb center
         my_winding_number += compute_node_approximation(
-            my_query, current_node.parent_aabb.geometryc_center(),
+            my_query,
+            current_node.parent_aabb.center_of_mass.get(
+                current_node.parent_aabb.min,
+                current_node.parent_aabb.diagonal()),
             zero_order_coeff, first_order_coeff, second_order_coeff);
 
         // Remember that I have the full contribution of this node already.
@@ -645,8 +648,11 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
             // leaf_coefficients here - test this
             const TailorCoefficientsBf16 &current_leaf_coefficients =
                 leaf_coefficients[leaf_idx];
+            const Vec3 leaf_center_of_mass =
+                current_leaf_coefficients.center_of_mass.get(
+                    child_aabb.min, child_aabb.diagonal());
             my_winding_number += compute_node_approximation(
-                my_query, child_aabb.geometryc_center(),
+                my_query, leaf_center_of_mass,
                 current_leaf_coefficients.zero_order,
                 current_leaf_coefficients.first_order,
                 current_leaf_coefficients.second_order);
@@ -712,7 +718,6 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
   } // grid while
 }
 
-
 template <typename Geometry>
 void compute_winding_numbers(
     const ComputeWindingNumbersParams<Geometry> &params, int device_id,
@@ -738,7 +743,7 @@ void compute_winding_numbers(
   compute_winding_numbers_kernel<Geometry><<<blocks, threads, 0, stream>>>(
       params.queries, params.sort_indirections, params.bvh8_nodes,
       params.bvh8_leaf_pointers, params.leaf_coefficients,
-      params.sorted_geometry, params.query_count, params.leaf_count,
+      params.sorted_geometry, params.query_count,
       params.geometry_count, params.winding_numbers, beta_2, inv_epsilon);
   CUDA_CHECK(cudaGetLastError());
 }

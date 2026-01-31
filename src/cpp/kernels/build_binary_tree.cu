@@ -248,14 +248,17 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
   if (lane_id == 0) {
     binary_aabbs[leaf_idx + leaf_count - 1].min = p_min;
     binary_aabbs[leaf_idx + leaf_count - 1].max = p_max;
-    binary_aabbs[leaf_idx + leaf_count - 1].setCenterOfMass(center_of_mass);
-    binary_aabbs[leaf_idx + leaf_count - 1].setMaxDistanceToCenterOfMass(
-        dist_to_com);
+    Vec3 diagonal = p_max - p_min;
+    Vec3 inv_extend = 1.F/diagonal;
+    float inv_diagonal_length = 1.F / diagonal.length2();
+    binary_aabbs[leaf_idx + leaf_count - 1].center_of_mass.set(center_of_mass, p_min, inv_extend);
+    binary_aabbs[leaf_idx + leaf_count - 1].center_of_mass.setMaxDistance(dist_to_com, inv_diagonal_length);
+    leaf_coefficients[leaf_idx].center_of_mass.set(center_of_mass, p_min, inv_extend);
+    leaf_coefficients[leaf_idx].center_of_mass.setMaxDistance(dist_to_com, inv_diagonal_length);
   }
 
   // Compute tailor coefficients
   // first and second order use center of mass
-
   // geometry dependent terms used to compute tailor coefficients
   Vec3 d, n;
   SymMat3x3 Ct;

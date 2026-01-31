@@ -48,8 +48,9 @@ struct Triangle {
     AABB result;
     result.min = min;
     result.max = max;
-    result.setCenterOfMass(centroid());
-    result.setMaxDistanceToCenterOfMass(0.F);
+    Vec3 diagonal = max-min;
+    result.center_of_mass.set(centroid(), min, 1.F / diagonal);
+    result.center_of_mass.setMaxDistance(0.F, diagonal.inv_length());
     return result;
   }
   __host__ __device__ __forceinline__ auto centroid() const -> Vec3 {
@@ -102,7 +103,7 @@ __device__ __forceinline__ auto Triangle::load(const Triangle *base,
     const Vec3 *ptr = reinterpret_cast<const Vec3 *>(base + idx);
     return {ptr[0], ptr[1], ptr[2]};
   }
-  return {{1e38f, 1e38f, 1e38f}, {1e38f, 1e38f, 1e38f}, {1e38f, 1e38f, 1e38f}};
+  return {{1e38F, 1e38F, 1e38F}, {1e38F, 1e38F, 1e38F}, {1e38F, 1e38F, 1e38F}};
 }
 
 __device__ __forceinline__ auto Triangle::get_scaled_normal() const -> Vec3 {

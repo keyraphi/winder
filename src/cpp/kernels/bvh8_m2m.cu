@@ -44,7 +44,8 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
     }
 
     // only one thread for current node survives
-    Vec3 parent_center = node.parent_aabb.getCenterOfMass();
+    Vec3 parent_center = node.parent_aabb.center_of_mass.get(
+        node.parent_aabb.min, node.parent_aabb.diagonal());
 
     Vec3 zero_order = {0.F, 0.F, 0.F};
     Mat3x3 first_order = {0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F};
@@ -62,13 +63,16 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
       TailorCoefficientsBf16 child_coefficients;
       if (node.getChildMeta(i) == ChildType::LEAF) {
         uint32_t leaf_idx = leaf_pointers[current_node_idx].indices[i];
-        child_center = leaf_aabbs[leaf_idx].getCenterOfMass();
+        const AABB &leaf_aabb = leaf_aabbs[leaf_idx];
+        child_center =
+            leaf_aabb.center_of_mass.get(leaf_aabb.min, leaf_aabb.diagonal());
         child_coefficients = leaf_coefficients[leaf_idx];
       } else {
         uint32_t child_idx = node.child_base + internal_child_count;
         internal_child_count++;
         BVH8Node child_node = nodes[child_idx];
-        child_center = child_node.parent_aabb.getCenterOfMass();
+        child_center = child_node.parent_aabb.center_of_mass.get(
+            child_node.parent_aabb.min, child_node.parent_aabb.diagonal());
         float shared_scale =
             child_node.tailor_coefficients.get_shared_scale_factor();
         child_coefficients.zero_order =
@@ -182,10 +186,12 @@ void compute_internal_tailor_coefficients_m2m(
     const BVH8Node *nodes, const uint32_t *internal_parent_map,
     const AABB *leaf_aabbs, const TailorCoefficientsBf16 *leaf_coefficients,
     const uint32_t *leaf_parents, const LeafPointers *leaf_pointers,
-    const uint32_t leaf_count, uint32_t *atomic_counters, const cudaStream_t &stream) {
+    const uint32_t leaf_count, uint32_t *atomic_counters,
+    const cudaStream_t &stream) {
   uint32_t threads = 256;
   uint32_t blocks = (leaf_count + threads - 1) / threads;
-  compute_internal_tailor_coefficients_m2m_kernel<<<blocks, threads, 0, stream>>>(
+  compute_internal_tailor_coefficients_m2m_kernel<<<blocks, threads, 0,
+                                                    stream>>>(
       nodes, internal_parent_map, leaf_aabbs, leaf_coefficients, leaf_parents,
       leaf_pointers, leaf_count, atomic_counters);
   CUDA_CHECK(cudaGetLastError());

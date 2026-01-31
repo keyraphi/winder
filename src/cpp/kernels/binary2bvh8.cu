@@ -146,7 +146,7 @@ convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
       Vec3 parent_min = parent_aabb.min;
       // Note: can be inf - doesn't matter because of implementation of
       // quantize_aabb
-      Vec3 parent_inv_ext = 255.F / (parent_aabb.max - parent_aabb.min);
+      Vec3 parent_inv_ext = 1.F / (parent_aabb.max - parent_aabb.min);
 
       int internal_found = 0;
       uint32_t my_leaf_indices[8];
