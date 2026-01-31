@@ -25,7 +25,7 @@ __global__ void __launch_bounds__(256)
     interleave_gather_geometry_kernel(const float *__restrict__ points,
                                       const float *__restrict__ normals,
                                       const uint32_t *__restrict__ indices,
-                                      float *__restrict__ out_geometry,
+                                      PointNormal *__restrict__ out_geometry,
                                       const uint32_t count) {
   const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= count) {
@@ -42,20 +42,20 @@ __global__ void __launch_bounds__(256)
   float n_y = normals[src_offset + 1];
   float n_z = normals[src_offset + 2];
 
-  const uint32_t dst_offset = idx * 6;
-  out_geometry[dst_offset] = p_x;
-  out_geometry[dst_offset + 1] = p_y;
-  out_geometry[dst_offset + 2] = p_z;
-  out_geometry[dst_offset + 3] = n_x;
-  out_geometry[dst_offset + 4] = n_y;
-  out_geometry[dst_offset + 5] = n_z;
+  out_geometry[idx].p.x = p_x;
+  out_geometry[idx].p.y = p_y;
+  out_geometry[idx].p.z = p_z;
+  out_geometry[idx].n.x = n_x;
+  out_geometry[idx].n.y = n_y;
+  out_geometry[idx].n.z = n_z;
 }
 
 void interleave_gather_geometry(const float *__restrict__ points,
                                 const float *__restrict__ normals,
                                 const uint32_t *__restrict__ indices,
-                                float *__restrict__ out_geometry,
-                                const uint32_t count, const cudaStream_t &stream) {
+                                PointNormal *__restrict__ out_geometry,
+                                const uint32_t count,
+                                const cudaStream_t &stream) {
   if (count < 1) {
     return;
   }
@@ -161,7 +161,8 @@ __global__ void build_binary_topology_kernel(
 
 void build_binary_topology(const uint32_t *__restrict__ morton_codes,
                            BinaryNode *nodes, uint32_t *parents,
-                           const uint32_t leaf_count, const cudaStream_t &stream) {
+                           const uint32_t leaf_count,
+                           const cudaStream_t &stream) {
 
   if (leaf_count < 1) {
     return;
@@ -169,8 +170,8 @@ void build_binary_topology(const uint32_t *__restrict__ morton_codes,
   if (leaf_count > 1) {
     const uint32_t threads = 256;
     const uint32_t blocks = (leaf_count - 1 + threads - 1) / threads;
-    build_binary_topology_kernel<<<blocks, threads, 0, stream>>>(morton_codes, nodes,
-                                                      parents, leaf_count);
+    build_binary_topology_kernel<<<blocks, threads, 0, stream>>>(
+        morton_codes, nodes, parents, leaf_count);
     CUDA_CHECK(cudaGetLastError());
   }
 
@@ -201,18 +202,23 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
 
   uint32_t lane_id = geometry_idx % 32;
 
-  Geometry g = sorted_geometry[geometry_idx].load(sorted_geometry, geometry_idx,
-                                                  geometry_count);
+  Geometry geometry =
+      Geometry::load(sorted_geometry, geometry_idx, geometry_count);
 
   // Compute AABB
   bool is_thread_active = geometry_idx < geometry_count;
-  AABB geometry_aabb = g.get_aabb();
-  Vec3 p_min = geometry_aabb.min;
-  Vec3 p_max =
-      is_thread_active
-          ? geometry_aabb.max
-          : Vec3{-1e38F, -1e38F, -1e38F}; // netural element for max reduction
-
+  AABB geometry_aabb;
+  Vec3 center_of_mass;
+  if (is_thread_active) {
+    geometry_aabb = geometry.get_aabb();
+    center_of_mass = geometry.centroid();
+  } else {
+    geometry_aabb.min = Vec3{1e38F, 1e38F, 1e38F};
+    geometry_aabb.max = Vec3{-1e38F, -1e38F, -1e38F};
+    center_of_mass = Vec3{0.F, 0.F, 0.F};
+  }
+  Vec3 &p_min = geometry_aabb.min;
+  Vec3 &p_max = geometry_aabb.max;
 #pragma unroll
   for (int offset = 16; offset > 0; offset /= 2) {
     p_min.x = fminf(p_min.x, __shfl_xor_sync(0xFFFFFFFF, p_min.x, offset));
@@ -222,21 +228,38 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
     p_max.x = fmaxf(p_max.x, __shfl_xor_sync(0xFFFFFFFF, p_max.x, offset));
     p_max.y = fmaxf(p_max.y, __shfl_xor_sync(0xFFFFFFFF, p_max.y, offset));
     p_max.z = fmaxf(p_max.z, __shfl_xor_sync(0xFFFFFFFF, p_max.z, offset));
+
+    center_of_mass.x += __shfl_xor_sync(0xFFFFFFFF, center_of_mass.x, offset);
+    center_of_mass.y += __shfl_xor_sync(0xFFFFFFFF, center_of_mass.y, offset);
+    center_of_mass.z += __shfl_xor_sync(0xFFFFFFFF, center_of_mass.z, offset);
+  }
+  // compute center of mass
+  uint32_t geo_count_in_leaf = min(32U, geometry_count - (leaf_idx * 32U));
+  float inv_geo_count_in_leaf = 1.F / (float)geo_count_in_leaf;
+  center_of_mass *= inv_geo_count_in_leaf;
+  // find max distance of center of mass to any element inside
+  float dist_to_com = (geometry.centroid() - center_of_mass).length();
+#pragma unroll
+  for (int offset = 16; offset > 0; offset /= 2) {
+    dist_to_com =
+        fmaxf(dist_to_com, __shfl_xor_sync(0xFFFFFFFF, dist_to_com, offset));
   }
   // write aggregated AABB for leaf
   if (lane_id == 0) {
     binary_aabbs[leaf_idx + leaf_count - 1].min = p_min;
     binary_aabbs[leaf_idx + leaf_count - 1].max = p_max;
+    binary_aabbs[leaf_idx + leaf_count - 1].setCenterOfMass(center_of_mass);
+    binary_aabbs[leaf_idx + leaf_count - 1].setMaxDistanceToCenterOfMass(
+        dist_to_com);
   }
 
   // Compute tailor coefficients
-  // first and second order use aabb center
-  Vec3 center = (p_min + p_max) * 0.5;
+  // first and second order use center of mass
 
   // geometry dependent terms used to compute tailor coefficients
   Vec3 d, n;
   SymMat3x3 Ct;
-  g.get_tailor_terms(center, n, d, Ct);
+  geometry.get_tailor_terms(center_of_mass, n, d, Ct);
 
   // Zero order
   //\sum_{i=1}^m a_i n_i
@@ -328,19 +351,29 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
       return;
     }
 
-    // atomicAdd returns the value BEFORE the addition.
-    // If it returns 0, we are the first child to arrive -> Terminate.
-    // If it returns 1, we are the second child -> We own the parent.
-    if (atomicAdd(&atomic_counters[current_parent_idx], 1) == 0) {
+    // race to top
+    // get number of elements in other child of current parent
+    uint32_t geo_count_left_child =
+        atomicAdd(&atomic_counters[current_parent_idx], geo_count_in_leaf);
+    if (geo_count_left_child == 0) {
       return;
     }
+    uint32_t geo_countr_right_child = geo_count_in_leaf;
+
     while (current_parent_idx != 0xFFFFFFFF) {
       BinaryNode parent_node = binary_nodes[current_parent_idx];
+
+      if (parent_node.left_child == current_idx) {
+        uint32_t tmp = geo_count_left_child;
+        geo_count_left_child = geo_countr_right_child;
+        geo_countr_right_child = tmp;
+      }
 
       // merge child aabbs
       binary_aabbs[current_parent_idx] =
           AABB::merge(binary_aabbs[parent_node.left_child],
-                      binary_aabbs[parent_node.right_child]);
+                      binary_aabbs[parent_node.right_child],
+                      geo_count_left_child, geo_countr_right_child);
       // make sure that aabb has been written before the counter is incremented
       cuda::atomic_thread_fence(cuda::memory_order_seq_cst,
                                 cuda::thread_scope_device);
@@ -350,8 +383,11 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
       if (next_parent == 0xFFFFFFFF) {
         return;
       }
-
-      if (atomicAdd(&atomic_counters[next_parent], 1) == 0) {
+      geo_countr_right_child += geo_count_left_child; // new count for this node
+      geo_count_left_child =
+          atomicAdd(&atomic_counters[next_parent],
+                    geo_countr_right_child); // count from other node
+      if (geo_count_left_child == 0) {
         return;
       }
       current_parent_idx = next_parent;
@@ -373,9 +409,9 @@ void populate_binary_tree_aabb_and_leaf_coefficients(
   const uint32_t threads = 256;
   const uint32_t blocks = (leaf_count * 32 + threads - 1) / threads;
   populate_binary_tree_aabb_and_leaf_coefficients_kernel<Geometry>
-      <<<blocks, threads, 0, stream>>>(sorted_geometry, leaf_coefficients, leaf_count,
-                            binary_nodes, binary_aabbs, binary_parents,
-                            atomic_counters, geometry_count);
+      <<<blocks, threads, 0, stream>>>(
+          sorted_geometry, leaf_coefficients, leaf_count, binary_nodes,
+          binary_aabbs, binary_parents, atomic_counters, geometry_count);
   CUDA_CHECK(cudaGetLastError());
 }
 

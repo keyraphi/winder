@@ -44,7 +44,7 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
     }
 
     // only one thread for current node survives
-    Vec3 parent_center = node.parent_aabb.geometryc_center();
+    Vec3 parent_center = node.parent_aabb.getCenterOfMass();
 
     Vec3 zero_order = {0.F, 0.F, 0.F};
     Mat3x3 first_order = {0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F};
@@ -62,13 +62,13 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
       TailorCoefficientsBf16 child_coefficients;
       if (node.getChildMeta(i) == ChildType::LEAF) {
         uint32_t leaf_idx = leaf_pointers[current_node_idx].indices[i];
-        child_center = leaf_aabbs[leaf_idx].geometryc_center();
+        child_center = leaf_aabbs[leaf_idx].getCenterOfMass();
         child_coefficients = leaf_coefficients[leaf_idx];
       } else {
         uint32_t child_idx = node.child_base + internal_child_count;
         internal_child_count++;
         BVH8Node child_node = nodes[child_idx];
-        child_center = child_node.parent_aabb.geometryc_center();
+        child_center = child_node.parent_aabb.getCenterOfMass();
         float shared_scale =
             child_node.tailor_coefficients.get_shared_scale_factor();
         child_coefficients.zero_order =
@@ -136,15 +136,6 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
           0.5F * (shift_vector.x * child_first.data[8] +
                   shift_vector.z * child_first.data[2]) +
           0.5F * shift_vector.x * shift_vector.z * zero_child.z;
-      // second_order.data[-] += child_second.data[-] + 0.5F * (shift_vector.y *
-      // child_first.data[0] + shift_vector.x * child_first.data[3]) + 0.5F *
-      // shift_vector.y * shift_vector.x *zero_child.x // not stored
-      // second_order.data[-] += child_second.data[-] + 0.5F * (shift_vector.y *
-      // child_first.data[1] + shift_vector.x * child_first.data[4]) + 0.5F *
-      // shift_vector.y * shift_vector.x *zero_child.y // not stored
-      // second_order.data[-] += child_second.data[-] + 0.5F * (shift_vector.y *
-      // child_first.data[2] + shift_vector.x * child_first.data[5]) + 0.5F *
-      // shift_vector.y * shift_vector.x *zero_child.z // not stored
       second_order.data[9] +=
           child_second.data[9] + shift_vector.y * child_first.data[3] +
           0.5F * shift_vector.y * shift_vector.y * zero_child.x;
@@ -169,24 +160,6 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
           0.5F * (shift_vector.y * child_first.data[8] +
                   shift_vector.z * child_first.data[5]) +
           0.5F * shift_vector.y * shift_vector.z * zero_child.z;
-      // second_order.data[-] += child_second.data[-] + 0.5F * (shift_vector.z *
-      // child_first.data[0] + shift_vector.x * child_first.data[6]) + 0.5F *
-      // shift_vector.z * shift_vector.x *zero_child.x // not stored
-      // second_order.data[-] += child_second.data[-] + 0.5F * (shift_vector.z *
-      // child_first.data[1] + shift_vector.x * child_first.data[7]) + 0.5F *
-      // shift_vector.z * shift_vector.x *zero_child.y // not stored
-      // second_order.data[-] += child_second.data[-] + 0.5F * (shift_vector.z *
-      // child_first.data[2] + shift_vector.x * child_first.data[8]) + 0.5F *
-      // shift_vector.z * shift_vector.x *zero_child.z // not stored
-      // second_order.data[-] += child_second.data[-] + 0.5F * (shift_vector.z *
-      // child_first.data[3] + shift_vector.y * child_first.data[6]) + 0.5F *
-      // shift_vector.z * shift_vector.y *zero_child.x // not stored
-      // second_order.data[-] += child_second.data[-] + 0.5F * (shift_vector.z *
-      // child_first.data[4] + shift_vector.y * child_first.data[7]) + 0.5F *
-      // shift_vector.z * shift_vector.y *zero_child.y // not stored
-      // second_order.data[-] += child_second.data[-] + 0.5F * (shift_vector.z *
-      // child_first.data[5] + shift_vector.y * child_first.data[8]) + 0.5F *
-      // shift_vector.z * shift_vector.y *zero_child.z // not stored
       second_order.data[15] +=
           child_second.data[15] + shift_vector.z * child_first.data[6] +
           0.5F * shift_vector.z * shift_vector.z * zero_child.x;

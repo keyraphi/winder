@@ -38,7 +38,7 @@ protected:
     thrust::device_vector<float> d_points = h_points_in;
     thrust::device_vector<float> d_normals = h_normals_in;
     thrust::device_vector<uint32_t> d_indices = h_indices_in;
-    thrust::device_vector<float> d_out(count * 6);
+    thrust::device_vector<PointNormal> d_out(count);
 
     // 2. Launch (Wrapper now handles blocks/threads)
     interleave_gather_geometry(thrust::raw_pointer_cast(d_points.data()),
@@ -47,26 +47,26 @@ protected:
                                thrust::raw_pointer_cast(d_out.data()), count);
 
     // 3. Transfe
-    thrust::host_vector<float> h_out = d_out;
+    thrust::host_vector<PointNormal> h_out = d_out;
 
     // 4. Verification
     for (uint32_t i = 0; i < count; ++i) {
       uint32_t src_idx = h_indices_in[i];
 
       // Expected Point (XYZ)
-      EXPECT_FLOAT_EQ(h_out[i * 6 + 0], h_points_in[src_idx * 3 + 0])
+      EXPECT_FLOAT_EQ(h_out[i].p.x, h_points_in[src_idx * 3 + 0])
           << "Point X mismatch at index " << i;
-      EXPECT_FLOAT_EQ(h_out[i * 6 + 1], h_points_in[src_idx * 3 + 1])
+      EXPECT_FLOAT_EQ(h_out[i].p.y, h_points_in[src_idx * 3 + 1])
           << "Point Y mismatch at index " << i;
-      EXPECT_FLOAT_EQ(h_out[i * 6 + 2], h_points_in[src_idx * 3 + 2])
+      EXPECT_FLOAT_EQ(h_out[i].p.z, h_points_in[src_idx * 3 + 2])
           << "Point Z mismatch at index " << i;
 
       // Expected Normal (XYZ)
-      EXPECT_FLOAT_EQ(h_out[i * 6 + 3], h_normals_in[src_idx * 3 + 0])
+      EXPECT_FLOAT_EQ(h_out[i].n.x, h_normals_in[src_idx * 3 + 0])
           << "Normal X mismatch at index " << i;
-      EXPECT_FLOAT_EQ(h_out[i * 6 + 4], h_normals_in[src_idx * 3 + 1])
+      EXPECT_FLOAT_EQ(h_out[i].n.y, h_normals_in[src_idx * 3 + 1])
           << "Normal Y mismatch at index " << i;
-      EXPECT_FLOAT_EQ(h_out[i * 6 + 5], h_normals_in[src_idx * 3 + 2])
+      EXPECT_FLOAT_EQ(h_out[i].n.z, h_normals_in[src_idx * 3 + 2])
           << "Normal Z mismatch at index " << i;
     }
   }

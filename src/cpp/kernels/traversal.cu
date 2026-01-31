@@ -5,6 +5,7 @@
 #include "mat3x3.h"
 #include "tailor_coefficients.h"
 #include "tensor3.h"
+#include "traversal.cuh"
 #include "vec3.h"
 #include <cooperative_groups.h>
 #include <cooperative_groups/scan.h>
@@ -110,6 +111,7 @@ computeZeroOrderContribution(const Vec3_bf16 &coeff, const Vec3_bf16 &r,
 
   return __bfloat162float(*(nv_bfloat16 *)&result);
 #else
+  // there is no bfloat hardware before sm80
   float cx = __bfloat162float(coeff.x);
   float cy = __bfloat162float(coeff.y);
   float cz = __bfloat162float(coeff.z);
@@ -710,32 +712,18 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
   } // grid while
 }
 
-// defaults for beta
-template <typename T> struct GeometryTraits {
-  static constexpr float default_beta = 2.3F;
-};
-template <> struct GeometryTraits<PointNormal> {
-  static constexpr float default_beta = 2.0F;
-};
 
 template <typename Geometry>
 void compute_winding_numbers(
-    const Vec3 *queries, const uint32_t *sort_indirections,
-    const BVH8Node *bvh8_nodes, const LeafPointers *bvh8_leaf_pointers,
-    const TailorCoefficientsBf16 *leaf_coefficients,
-    const Geometry *sorted_geometry, const uint32_t query_count,
-    const uint32_t geometry_count, const uint32_t leaf_count,
-    float *winding_numbers, const int device_id, const cudaStream_t &stream,
-    const float beta, const float epsilon) {
-  if (query_count == 0) {
+    const ComputeWindingNumbersParams<Geometry> &params, int device_id,
+    const cudaStream_t &stream) {
+  if (params.query_count == 0) {
     return;
   }
   // if beta is negative initialize with default value
-  float actual_beta =
-      beta < 0.F ? GeometryTraits<Geometry>{}.default_beta : beta;
-  float beta_2 = actual_beta * actual_beta;
+  float beta_2 = params.beta * params.beta;
 
-  float inv_epsilon = 1.F / epsilon;
+  float inv_epsilon = 1.F / params.epsilon;
 
   int threads = 128;
   int blocks_per_sm = 0;
@@ -748,25 +736,16 @@ void compute_winding_numbers(
   int blocks = blocks_per_sm * deviceProp.multiProcessorCount;
 
   compute_winding_numbers_kernel<Geometry><<<blocks, threads, 0, stream>>>(
-      queries, sort_indirections, bvh8_nodes, bvh8_leaf_pointers,
-      leaf_coefficients, sorted_geometry, query_count, leaf_count,
-      geometry_count, winding_numbers, beta_2, inv_epsilon);
+      params.queries, params.sort_indirections, params.bvh8_nodes,
+      params.bvh8_leaf_pointers, params.leaf_coefficients,
+      params.sorted_geometry, params.query_count, params.leaf_count,
+      params.geometry_count, params.winding_numbers, beta_2, inv_epsilon);
   CUDA_CHECK(cudaGetLastError());
 }
 
 template void compute_winding_numbers<PointNormal>(
-    const Vec3 *queries, const uint32_t *sort_indirections,
-    const BVH8Node *bvh8_nodes, const LeafPointers *bvh8_leaf_pointers,
-    const TailorCoefficientsBf16 *leaf_coefficients,
-    const PointNormal *sorted_geometry, const uint32_t query_count,
-    const uint32_t point_count, const uint32_t leaf_count,
-    float *winding_numbers, const int device_id, const cudaStream_t &stream,
-    const float beta, const float epsilon);
+    const ComputeWindingNumbersParams<PointNormal> &params, int device_id,
+    const cudaStream_t &stream);
 template void compute_winding_numbers<Triangle>(
-    const Vec3 *queries, const uint32_t *sort_indirections,
-    const BVH8Node *bvh8_nodes, const LeafPointers *bvh8_leaf_pointers,
-    const TailorCoefficientsBf16 *leaf_coefficients,
-    const Triangle *sorted_geometry, const uint32_t query_count,
-    const uint32_t triangle_count, const uint32_t leaf_count,
-    float *winding_numbers, const int device_id, const cudaStream_t &stream,
-    const float beta, const float epsilon);
+    const ComputeWindingNumbersParams<Triangle> &params, int device_id,
+    const cudaStream_t &stream);

@@ -1,6 +1,7 @@
 #pragma once
 #include "aabb.h"
 #include "binary_node.h"
+#include "geometry.h"
 #include "tailor_coefficients.h"
 #include <cstdint>
 #include <driver_types.h>
@@ -10,7 +11,7 @@
 void interleave_gather_geometry(const float *__restrict__ points,
                                 const float *__restrict__ normals,
                                 const uint32_t *__restrict__ indices,
-                                float *__restrict__ out_geometry,
+                                PointNormal *__restrict__ out_geometry,
                                 uint32_t count, const cudaStream_t &stream = 0);
 
 void build_binary_topology(const uint32_t *__restrict__ morton_codes,

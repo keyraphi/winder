@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include "geometry.h"
 #include "utils.h"
 #include "winder_cuda.h"
 
@@ -28,7 +29,8 @@ class WinderEngine {
 public:
   // --- Triangle Mesh Constructor ---
   WinderEngine(const Triangle_t &triangles) {
-    m_impl = WinderBackend::CreateFromMesh(triangles.data(), triangles.shape(0), triangles.device_id());
+    m_impl_tri = WinderBackend<Triangle>::CreateFromMesh(triangles.data(), triangles.shape(0),
+                                           triangles.device_id());
   }
 
   // --- Point Cloud Constructor ---
@@ -42,7 +44,8 @@ public:
           "Shape of points must be equal to shape of normals.");
     }
 
-    m_impl = WinderBackend::CreateFromPoints(points.data(), normals.data(), points.shape(0), points.device_id());
+    m_impl_pn = WinderBackend<PointNormal>::CreateFromPoints(
+        points.data(), normals.data(), points.shape(0), points.device_id());
   }
 
   // --- Static Solver (Factory Method) ---
@@ -71,7 +74,8 @@ public:
     Scalar_t points_winding_numbers = winder_cuda::scalar_with_default(
         maybe_points_winding_nubers, points.shape(0), 0.5F);
 
-    auto backend = WinderBackend::CreateForSolver(points.data(), points.shape(0), points.device_id());
+    auto backend = WinderBackend<PointNormal>::CreateForSolver(
+        points.data(), points.shape(0), points.device_id());
 
     backend->solve_for_normals(extra_points.data(), extra_points.shape(0),
                                extra_winding_numbers.data(),
@@ -81,27 +85,29 @@ public:
   }
 
   Vec3_t get_scaled_normals() {
-    auto raw_ptr_unique = m_impl->get_normals();
+    auto raw_ptr_unique = m_impl_pn->get_normals();
 
-    // 3. Handle the Mesh case
     if (!raw_ptr_unique) {
       return {};
     }
 
     float *raw_ptr = raw_ptr_unique.release();
-    nb::capsule owner(raw_ptr, [](void *p) noexcept { winder_cuda::cuda_free(p); });
+    nb::capsule owner(raw_ptr,
+                      [](void *p) noexcept { winder_cuda::cuda_free(p); });
 
-    size_t n_points = m_impl->point_count();
+    size_t n_points = m_impl_pn->point_count();
     return {raw_ptr, {n_points, 3}, owner};
   }
 
-  Scalar_t compute(const Vec3_t &queries) {
+  auto compute(const Vec3_t &queries) -> Scalar_t {
     size_t n = queries.shape(0);
     // todo ensure queries are on same device as m_impl
 
-    auto raw_ptr_unique = m_impl->compute(queries.data(), n);
+    // todo use correct implementation
+    auto raw_ptr_unique = m_impl_pn->compute(queries.data(), n);
     float *raw_ptr = raw_ptr_unique.release();
-    nb::capsule owner(raw_ptr, [](void *p) noexcept { winder_cuda::cuda_free(p); });
+    nb::capsule owner(raw_ptr,
+                      [](void *p) noexcept { winder_cuda::cuda_free(p); });
 
     return {raw_ptr, {n}, owner};
   }
@@ -109,32 +115,38 @@ public:
   Vec3_t get_grad_normals(const Scalar_t &grad_output) {
 
     auto raw_ptr_unique =
-        m_impl->grad_normals(grad_output.data(), grad_output.shape(0));
+        m_impl_pn->grad_normals(grad_output.data(), grad_output.shape(0));
 
     float *raw_ptr = raw_ptr_unique.release();
-    nb::capsule owner(raw_ptr, [](void *p) noexcept { winder_cuda::cuda_free(p); });
+    nb::capsule owner(raw_ptr,
+                      [](void *p) noexcept { winder_cuda::cuda_free(p); });
 
-    size_t n_points = m_impl->point_count();
+    size_t n_points = m_impl_pn->point_count();
     return {raw_ptr, {n_points, 3}, owner};
   }
 
   Vec3_t get_grad_points(const Scalar_t &grad_output) {
 
     auto raw_ptr_unique =
-        m_impl->grad_points(grad_output.data(), grad_output.shape(0));
+        m_impl_pn->grad_points(grad_output.data(), grad_output.shape(0));
     float *raw_ptr = raw_ptr_unique.release();
-    nb::capsule owner(raw_ptr, [](void *p) noexcept { winder_cuda::cuda_free(p); });
+    nb::capsule owner(
+        raw_ptr, [](void *p) noexcept -> void { winder_cuda::cuda_free(p); });
 
-    size_t n_points = m_impl->point_count();
+    size_t n_points = m_impl_pn->point_count();
     return {raw_ptr, {n_points, 3}, nb::handle()};
   }
 
 private:
-  std::unique_ptr<WinderBackend> m_impl;
+  // flag for used backend
+  std::unique_ptr<WinderBackend<PointNormal>> m_impl_pn;
+  std::unique_ptr<WinderBackend<Triangle>> m_impl_tri;
 
   // Internal constructor used by factory methods
-  explicit WinderEngine(std::unique_ptr<WinderBackend> backend)
-      : m_impl(std::move(backend)) {}
+  explicit WinderEngine(std::unique_ptr<WinderBackend<PointNormal>> backend)
+      : m_impl_pn(std::move(backend)) {}
+  explicit WinderEngine(std::unique_ptr<WinderBackend<Triangle>> backend)
+      : m_impl_tri(std::move(backend)) {}
 };
 
 NB_MODULE(winder_backend, m) {

@@ -42,8 +42,6 @@ struct CudaDeleter {
 
 template <typename T> using CudaUniquePtr = std::unique_ptr<T[], CudaDeleter>;
 
-enum class WinderMode : uint8_t { Point, Triangle };
-
 struct BVH8View {
   const BVH8Node *nodes;
   const LeafPointers *leaf_pointers;
@@ -52,22 +50,23 @@ struct BVH8View {
   uint32_t node_count;
 };
 
-class WinderBackend {
+template <typename Geometry> class WinderBackend {
 
 public:
   ~WinderBackend();
 
   static auto CreateFromMesh(const float *triangles, size_t triangle_count,
-                             int device_id) -> std::unique_ptr<WinderBackend>;
+                             int device_id) -> std::unique_ptr<WinderBackend<Triangle>>;
 
   static auto CreateFromPoints(const float *points, const float *scaled_normals,
                                size_t point_count, int device_id)
-      -> std::unique_ptr<WinderBackend>;
+      -> std::unique_ptr<WinderBackend<PointNormal>>;
 
   static auto CreateForSolver(const float *points, size_t point_count,
-                              int device_id) -> std::unique_ptr<WinderBackend>;
+                              int device_id) -> std::unique_ptr<WinderBackend<PointNormal>>;
 
-  auto compute(const float *queries, size_t query_count) const
+  auto compute(const float *queries, size_t query_count, float beta = -1,
+               float epsilon = -1, size_t stream = 0) const
       -> CudaUniquePtr<float>;
 
   [[nodiscard]] auto get_normals() const -> CudaUniquePtr<float>;
@@ -90,21 +89,21 @@ public:
   void initialize_point_data(const float *points, const float *normals);
 
 private:
-  WinderMode m_mode;
   size_t m_count;
   int m_device;
   cudaStream_t m_stream_0, m_stream_1;
+  cudaEvent_t m_start_tree_construction_event;
+  cudaEvent_t m_tree_construction_finished_event;
   thrust::cuda_cub::execute_on_stream m_stream_0_policy;
   thrust::cuda_cub::execute_on_stream m_stream_1_policy;
   uint32_t m_bvh8_node_count;
 
   // Private constructor used in factories. Allocates vectors but doesn't fill
   // them yet
-  WinderBackend(WinderMode mode, size_t size, int device_id);
+  WinderBackend(size_t size, int device_id);
 
   // provide a view on the BVH8 data for kernel launches
   auto get_bvh_view() -> BVH8View;
-
   // memory arena on gpu
   uint8_t *m_memory_arena;
 
@@ -114,10 +113,9 @@ private:
    */
 
   // --- Geometric Data & Permutation Maps ---
-  uint32_t *m_to_internal;  // [N] Map: Original index -> Morton sorted index
-  uint32_t *m_to_canonical; // [N] Map: Morton sorted index -> Original index
-  float *m_sorted_geometry; // [N * floats_per_elem] Interleaved P and N (or
-                            // Triangles)
+  uint32_t *m_to_internal;     // [N] Map: Original index -> Morton sorted index
+  uint32_t *m_to_canonical;    // [N] Map: Morton sorted index -> Original index
+  Geometry *m_sorted_geometry; // [N] Interleaved P and N (or Triangles)
 
   // --- Binary LBVH (Auxiliary Structure for BVH8 Construction) ---
   uint32_t *m_morton_codes; // [N] 30-bit Morton codes for individual points
@@ -151,6 +149,6 @@ private:
                                  // and node allocation
 
   // private helpers
-  template <typename Geometry>
-  auto initializeMortonCodes(const Geometry *geometry) -> void;
+  template <typename PrimitiveGeometry>
+  auto initializeMortonCodes(const PrimitiveGeometry *geometry) -> void;
 };
