@@ -643,9 +643,7 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
               should_leaf_node_be_aproximated(my_query, child_aabb, beta_2)) {
             // load leaf tailor coefficient from global memory
             // 60 bytes
-            // TODO is it worth approximating leafs or is the brute force
-            // heavy detail computation faster, considering we have to load the
-            // leaf_coefficients here - test this
+            // TODO test if it is worth approximating this.
             const TailorCoefficientsBf16 &current_leaf_coefficients =
                 leaf_coefficients[leaf_idx];
             const Vec3 leaf_center_of_mass =
@@ -743,8 +741,8 @@ void compute_winding_numbers(
   compute_winding_numbers_kernel<Geometry><<<blocks, threads, 0, stream>>>(
       params.queries, params.sort_indirections, params.bvh8_nodes,
       params.bvh8_leaf_pointers, params.leaf_coefficients,
-      params.sorted_geometry, params.query_count,
-      params.geometry_count, params.winding_numbers, beta_2, inv_epsilon);
+      params.sorted_geometry, params.query_count, params.geometry_count,
+      params.winding_numbers, beta_2, inv_epsilon);
   CUDA_CHECK(cudaGetLastError());
 }
 

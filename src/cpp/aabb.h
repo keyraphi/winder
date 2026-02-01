@@ -1,5 +1,6 @@
 #pragma once
 #include "center_of_mass.h"
+#include "kernels/common.cuh"
 #include "vec3.h"
 #include <cmath>
 #include <cstdint>
@@ -8,11 +9,13 @@
 #include <vector_types.h>
 
 struct AABB;
+
+// 6 Byte
 struct AABB8BitApprox {
   uint8_t qmin[3]; // quantized min offset
   uint8_t qmax[3]; // quantized max offset
 
-  __device__ __forceinline__ static auto
+  __host__ __device__ __forceinline__ static auto
   quantize_aabb(const AABB &aabb, const Vec3 &parent_min,
                 const Vec3 &parent_inv_extend) -> AABB8BitApprox;
 };
@@ -31,18 +34,22 @@ struct AABB {
     return result;
   }
 
-  __device__ __forceinline__ static auto
+  // Note: no center of mass!
+  __host__ __device__ __forceinline__ static auto
   from_approximation(const AABB &parent, const AABB8BitApprox &approx) -> AABB {
     Vec3 extent = parent.diagonal();
     constexpr float s = 1.0F / 255.0F;
 
-    // This maps to 6 FFMA instructions
-    return {parent.min + (Vec3{(float)approx.qmin[0], (float)approx.qmin[1],
-                               (float)approx.qmin[2]} *
-                          s * extent),
-            parent.min + (Vec3{(float)approx.qmax[0], (float)approx.qmax[1],
-                               (float)approx.qmax[2]} *
-                          s * extent)};
+    AABB result;
+    result.min =
+        parent.min + (Vec3{(float)approx.qmin[0], (float)approx.qmin[1],
+                           (float)approx.qmin[2]} *
+                      s * extent);
+    result.max =
+        parent.min + (Vec3{(float)approx.qmax[0], (float)approx.qmax[1],
+                           (float)approx.qmax[2]} *
+                      s * extent);
+    return result;
   }
 
   __host__ __device__ __forceinline__ auto geometryc_center() const -> Vec3 {
@@ -79,16 +86,16 @@ struct AABB {
     Vec3 com_a = a.center_of_mass.get(a.min, a.diagonal());
     Vec3 com_b = b.center_of_mass.get(b.min, b.diagonal());
     Vec3 com_new = com_a * a_factor + com_b * b_factor;
-    result.center_of_mass.set(com_new, result.min,
-                                          1.F / result.diagonal());
+    result.center_of_mass.set(com_new, result.min, 1.F / result.diagonal());
     // Calculate shift-adjusted radius
     // this is an upper bound
-    float dist_a =
-        (com_new - com_a).length() + a.center_of_mass.getMaxDistance(a.diagonal().length());
-    float dist_b =
-        (com_new - com_b).length() + b.center_of_mass.getMaxDistance(b.diagonal().length());
+    float dist_a = (com_new - com_a).length() +
+                   a.center_of_mass.getMaxDistance(a.diagonal().length());
+    float dist_b = (com_new - com_b).length() +
+                   b.center_of_mass.getMaxDistance(b.diagonal().length());
 
-    result.center_of_mass.setMaxDistance(fmaxf(dist_a, dist_b), result.diagonal().inv_length());
+    result.center_of_mass.setMaxDistance(fmaxf(dist_a, dist_b),
+                                         result.diagonal().inv_length());
     return result;
   }
 };
@@ -102,18 +109,7 @@ __host__ __device__ __forceinline__ auto Vec3::get_aabb() const -> AABB {
   return result;
 }
 
-// only for cuda compiler:
-#ifdef __CUDACC__
-
-__device__ __forceinline__ auto quantize_value(float value, float p_min,
-                                               float p_inv_ext) {
-
-  // catch infinite p_inv_ext. NaN results are flushed to positive zero.
-  float normalized = __saturatef((value - p_min) * p_inv_ext) * 255.F;
-  return (uint8_t)__float2uint_rn(normalized);
-}
-
-__device__ __forceinline__ auto
+__host__ __device__ __forceinline__ auto
 AABB8BitApprox::quantize_aabb(const AABB &aabb, const Vec3 &parent_min,
                               const Vec3 &parent_inv_extend) -> AABB8BitApprox {
   AABB8BitApprox result;
@@ -131,5 +127,3 @@ AABB8BitApprox::quantize_aabb(const AABB &aabb, const Vec3 &parent_min,
       quantize_value(aabb.max.z, parent_min.z, parent_inv_extend.z);
   return result;
 }
-
-#endif

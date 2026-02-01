@@ -28,3 +28,14 @@ __host__ __device__ inline auto morton3D_30bit(uint32_t x, uint32_t y,
                                                uint32_t z) -> uint32_t {
   return (expand_bits(x) << 2) | (expand_bits(y) << 1) | expand_bits(z);
 }
+
+__host__ __device__ __forceinline__ auto quantize_value(float value, float p_min, float p_inv_ext) {
+#ifdef __CUDA_ARCH__
+    float normalized = __saturatef((value - p_min) * p_inv_ext) * 255.F;
+    return (uint8_t)__float2uint_rn(normalized);
+#else
+    float val = (value - p_min) * p_inv_ext;
+    float normalized = std::max(0.F, std::min(1.F, val)) * 255.F;
+    return (uint8_t)(normalized + 0.5F); // round-to-nearest
+#endif
+}

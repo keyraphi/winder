@@ -72,6 +72,10 @@ add_executable(
     test_binary2bvh8
     tests/test_binary2bvh8.cu
 )
+add_executable(
+  test_util_functions
+    tests/test_util_functions.cu
+)
 
 target_link_libraries(
     test_binary_tree_construction
@@ -79,6 +83,10 @@ target_link_libraries(
 )
 target_link_libraries(
     test_binary2bvh8
+    PRIVATE winder_kernels GTest::gtest_main CUDA::cudart
+)
+target_link_libraries(
+    test_util_functions
     PRIVATE winder_kernels GTest::gtest_main CUDA::cudart
 )
 
@@ -90,15 +98,25 @@ target_compile_options(
     test_binary2bvh8
     PRIVATE ${WINDER_CUDA_FLAGS}
 )
+target_compile_options(
+    test_util_functions
+    PRIVATE ${WINDER_CUDA_FLAGS}
+)
+
 target_include_directories(
     test_binary_tree_construction
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 )
 target_include_directories(
     test_binary2bvh8
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_include_directories(
+    test_util_functions
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 enable_testing()
 add_test(NAME BinaryTreeConstructionTest COMMAND test_binary_tree_construction)
 add_test(NAME Binary2BVH8Test COMMAND test_binary2bvh8)
+add_test(NAME UtilFunctions COMMAND test_util_functions)

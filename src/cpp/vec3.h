@@ -84,7 +84,12 @@ struct Vec3 {
     return sqrtf(length2());
   }
   __host__ __device__ __forceinline__ auto inv_length() const -> float {
+
+#ifdef __CUDACC__
     return rsqrtf(length2());
+#else
+    return 1.F / length();
+#endif
   }
 
   __host__ __device__ __forceinline__ auto operator+(const Vec3 &b) const
@@ -165,7 +170,7 @@ __host__ __device__ __forceinline__ auto Vec3_bf16::operator=(const Vec3 &v) {
 
 __host__ __device__ __forceinline__ auto operator/(const float n, const Vec3 &v)
     -> Vec3 {
-  return {v.x / n, v.y / n, v.z / n};
+  return {n / v.x, n / v.y, n / v.z};
 }
 
 __host__ __device__ __forceinline__ auto Vec3_bf16::from_float(const Vec3 &v)
