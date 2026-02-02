@@ -249,55 +249,31 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
     binary_aabbs[leaf_idx + leaf_count - 1].min = p_min;
     binary_aabbs[leaf_idx + leaf_count - 1].max = p_max;
     Vec3 diagonal = p_max - p_min;
-    Vec3 inv_extend = 1.F/diagonal;
+    Vec3 inv_extend = 1.F / diagonal;
     float inv_diagonal_length = 1.F / diagonal.length2();
-    binary_aabbs[leaf_idx + leaf_count - 1].center_of_mass.set(center_of_mass, p_min, inv_extend);
-    binary_aabbs[leaf_idx + leaf_count - 1].center_of_mass.setMaxDistance(dist_to_com, inv_diagonal_length);
-    leaf_coefficients[leaf_idx].center_of_mass.set(center_of_mass, p_min, inv_extend);
-    leaf_coefficients[leaf_idx].center_of_mass.setMaxDistance(dist_to_com, inv_diagonal_length);
+    binary_aabbs[leaf_idx + leaf_count - 1].center_of_mass.set(
+        center_of_mass, p_min, inv_extend);
+    binary_aabbs[leaf_idx + leaf_count - 1].center_of_mass.setMaxDistance(
+        dist_to_com, inv_diagonal_length);
+    leaf_coefficients[leaf_idx].center_of_mass.set(center_of_mass, p_min,
+                                                   inv_extend);
+    leaf_coefficients[leaf_idx].center_of_mass.setMaxDistance(
+        dist_to_com, inv_diagonal_length);
   }
 
   // Compute tailor coefficients
-  // first and second order use center of mass
-  // geometry dependent terms used to compute tailor coefficients
-  Vec3 d, n;
-  SymMat3x3 Ct;
-  geometry.get_tailor_terms(center_of_mass, n, d, Ct);
+  Vec3 zero_order;
+  Mat3x3 first_order;
+  Tensor3_compressed second_order;
 
   // Zero order
   //\sum_{i=1}^m a_i n_i
   // points: a_i*n_i is scaled normal
   // triangles: a_i*n_i is surface area * normal
-  // for inactive threads neutral element wrt. +
-  Vec3 zero_order = is_thread_active ? n : Vec3{0.F, 0.F, 0.F};
-  zero_order.x = warp_reduce_add_down(zero_order.x);
-  zero_order.y = warp_reduce_add_down(zero_order.y);
-  zero_order.z = warp_reduce_add_down(zero_order.z);
-
-  // write aggregated coefficient for leaf
-  if (lane_id == 0) {
-    leaf_coefficients[leaf_idx].zero_order = zero_order;
-  }
-
   // First order
   // \sum_{i=1}^m a_i*d_i \otimes n_i
   // points: d_i = p_i-center
   // triangles: d_i = triangle_centroid_i - center
-  // for inactive threads neutral element wrt. +
-  Mat3x3 first_order =
-      is_thread_active ? d.outer_product(n)
-                       : Mat3x3{0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F};
-
-#pragma unroll
-  for (int i = 0; i < 9; ++i) {
-    first_order.data[i] = warp_reduce_add_down(first_order.data[i]);
-  }
-
-  // write aggregated coefficient for leaf
-  if (lane_id == 0) {
-    leaf_coefficients[leaf_idx].first_order = first_order;
-  }
-
   // second order
   // 1/2 (\sum_{i=1}^m Ct \otimes n)
   // points: Ct = a_i (p_i-center) \odot (p_i-center)
@@ -307,38 +283,33 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
   // Note: Ct is symetric. It contains only 6 unique values
   // For that reason second_order also only contains 18 unique values. We don't
   // compute/store duplicates.
-  Tensor3_compressed second_order;
-  if (is_thread_active) {
-    second_order.data[0] = Ct.data[0] * n.x;
-    second_order.data[1] = Ct.data[0] * n.y;
-    second_order.data[2] = Ct.data[0] * n.z;
-    second_order.data[3] = Ct.data[1] * n.x;
-    second_order.data[4] = Ct.data[1] * n.y;
-    second_order.data[5] = Ct.data[1] * n.z;
-    second_order.data[6] = Ct.data[2] * n.x;
-    second_order.data[7] = Ct.data[2] * n.y;
-    second_order.data[8] = Ct.data[2] * n.z;
-    second_order.data[9] = Ct.data[3] * n.x;
-    second_order.data[10] = Ct.data[3] * n.y;
-    second_order.data[11] = Ct.data[3] * n.z;
-    second_order.data[12] = Ct.data[4] * n.x;
-    second_order.data[13] = Ct.data[4] * n.y;
-    second_order.data[14] = Ct.data[4] * n.z;
-    second_order.data[15] = Ct.data[5] * n.x;
-    second_order.data[16] = Ct.data[5] * n.y;
-    second_order.data[17] = Ct.data[5] * n.z;
-  } else {
-    // for inactive threads neutral element wrt. +
-#pragma unroll
-    for (int i = 0; i < 18; ++i) {
-      second_order.data[i] = 0.F;
-    }
+  // For inactive threads result is 0 (neutral wrt +)
+  geometry.get_tailor_terms(center_of_mass, is_thread_active, zero_order,
+                            first_order, second_order);
+
+  // aggregate zero order
+  zero_order.x = warp_reduce_add_down(zero_order.x);
+  zero_order.y = warp_reduce_add_down(zero_order.y);
+  zero_order.z = warp_reduce_add_down(zero_order.z);
+  // write aggregated coefficient for leaf
+  if (lane_id == 0) {
+    leaf_coefficients[leaf_idx].zero_order = zero_order;
   }
+
+  // aggregate first order
+#pragma unroll
+  for (int i = 0; i < 9; ++i) {
+    first_order.data[i] = warp_reduce_add_down(first_order.data[i]);
+  }
+  // write aggregated coefficient for leaf
+  if (lane_id == 0) {
+    leaf_coefficients[leaf_idx].first_order = first_order;
+  }
+  // aggregate second order
 #pragma unroll
   for (int i = 0; i < 18; ++i) {
     second_order.data[i] = warp_reduce_add_down(second_order.data[i]);
   }
-
   // write aggregated coefficient for leaf
   if (lane_id == 0) {
     leaf_coefficients[leaf_idx].second_order = second_order;
@@ -376,7 +347,7 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
       binary_aabbs[current_parent_idx] =
           AABB::merge(binary_aabbs[parent_node.left_child],
                       binary_aabbs[parent_node.right_child],
-                      geo_count_left_child, geo_countr_right_child);
+                      geo_count_left_child, geo_countr_right_child); // TODO instead of count use summed area
       // make sure that aabb has been written before the counter is incremented
       cuda::atomic_thread_fence(cuda::memory_order_seq_cst,
                                 cuda::thread_scope_device);

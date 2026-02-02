@@ -52,7 +52,8 @@ struct Vec3_bf16 {
     return m;
   }
 
-  __host__ __device__ __forceinline__ auto operator=(const Vec3 &v);
+  __host__ __device__ __forceinline__ auto operator=(const Vec3 &v)
+      -> Vec3_bf16;
 };
 
 struct Vec3 {
@@ -151,7 +152,7 @@ struct Vec3 {
   }
   __host__ __device__ __forceinline__ static auto cross(const Vec3 &a,
                                                         const Vec3 &b) -> Vec3 {
-    return {a.y * b.z - a.z * b.x, a.z * b.x - a.x * b.z,
+    return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z,
             a.x * b.y - a.y * b.x};
   }
 
@@ -162,15 +163,21 @@ struct Vec3 {
   }
 };
 
-__host__ __device__ __forceinline__ auto Vec3_bf16::operator=(const Vec3 &v) {
+__host__ __device__ __forceinline__ auto Vec3_bf16::operator=(const Vec3 &v)
+    -> Vec3_bf16 {
   x = v.x;
   y = v.y;
   z = v.z;
+  return *this;
 }
 
 __host__ __device__ __forceinline__ auto operator/(const float n, const Vec3 &v)
     -> Vec3 {
   return {n / v.x, n / v.y, n / v.z};
+}
+__host__ __device__ __forceinline__ auto operator*(const float n, const Vec3 &v)
+    -> Vec3 {
+  return {n * v.x, n * v.y, n * v.z};
 }
 
 __host__ __device__ __forceinline__ auto Vec3_bf16::from_float(const Vec3 &v)
