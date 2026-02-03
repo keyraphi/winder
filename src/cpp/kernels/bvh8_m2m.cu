@@ -20,7 +20,7 @@
 #include <vector_types.h>
 
 __global__ void compute_internal_tailor_coefficients_m2m_kernel(
-    const BVH8Node *nodes, const uint32_t *internal_parent_map,
+    BVH8Node *nodes, const uint32_t *internal_parent_map,
     const AABB *leaf_aabbs, const TailorCoefficientsBf16 *leaf_coefficients,
     const uint32_t *leaf_parents, const LeafPointers *leaf_pointers,
     const uint32_t leaf_count, uint32_t *atomic_counters) {
@@ -33,11 +33,13 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
   uint32_t current_node_idx = leaf_parents[leaf_idx];
 
   while (current_node_idx != 0xFFFFFFFF) {
-    BVH8Node node = nodes[current_node_idx];
+    BVH8Node &node = nodes[current_node_idx];
     // race to the top
     uint32_t expected_children =
-        nodes[current_node_idx].tailor_coefficients.get_expected_children();
-    __threadfence(); // ensure the tailor coefficients of childs are written
+        node.tailor_coefficients.get_expected_children();
+
+    __threadfence(); // ensure the tailor coefficients of childs are written before continuing with the next
+    
     if (atomicAdd(&atomic_counters[current_node_idx], 1) <
         expected_children - 1) {
       return;
@@ -179,11 +181,12 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
                                                      second_order);
 
     current_node_idx = internal_parent_map[current_node_idx];
+    
   }
 }
 
 void compute_internal_tailor_coefficients_m2m(
-    const BVH8Node *nodes, const uint32_t *internal_parent_map,
+    BVH8Node *nodes, const uint32_t *internal_parent_map,
     const AABB *leaf_aabbs, const TailorCoefficientsBf16 *leaf_coefficients,
     const uint32_t *leaf_parents, const LeafPointers *leaf_pointers,
     const uint32_t leaf_count, uint32_t *atomic_counters,

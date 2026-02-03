@@ -42,13 +42,6 @@ struct CudaDeleter {
 
 template <typename T> using CudaUniquePtr = std::unique_ptr<T[], CudaDeleter>;
 
-struct BVH8View {
-  const BVH8Node *nodes;
-  const LeafPointers *leaf_pointers;
-  const float *geometry;
-
-  uint32_t node_count;
-};
 
 template <IsGeometry Geometry> class WinderBackend {
 
@@ -102,8 +95,6 @@ private:
   // them yet
   WinderBackend(size_t size, int device_id);
 
-  // provide a view on the BVH8 data for kernel launches
-  auto get_bvh_view() -> BVH8View;
   // memory arena on gpu
   uint8_t *m_memory_arena;
 

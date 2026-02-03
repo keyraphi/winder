@@ -39,15 +39,20 @@ target_compile_options(winder_module PRIVATE ${WINDER_CUDA_FLAGS})
 # for clangd and backend host code
 target_include_directories(winder_module PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-if(DEFINED ENV{WINDER_DEV_MODE})
+# Define the option (OFF by default)
+option(WINDER_DEV_MODE "Enable development mode (verbose PTX info)" OFF)
+
+if(WINDER_DEV_MODE)
     message(STATUS "Winder: Development mode enabled (Verbose PTX enabled)")
-    target_compile_options(
-        winder_kernels
-        PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-res-usage>
+    
+    # Define the flags once
+    set(CUDA_DEV_FLAGS "-res-usage" "--source-in-ptx" "-g") # Added source-in-ptx for better debugging
+    
+    target_compile_options(winder_kernels PRIVATE 
+        $<$<COMPILE_LANGUAGE:CUDA>:${CUDA_DEV_FLAGS}>
     )
-    target_compile_options(
-        winder_backend
-        PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-res-usage>
+    target_compile_options(winder_backend PRIVATE 
+        $<$<COMPILE_LANGUAGE:CUDA>:${CUDA_DEV_FLAGS}>
     )
 endif()
 

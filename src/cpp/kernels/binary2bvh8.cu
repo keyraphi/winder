@@ -230,6 +230,15 @@ convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
 void convert_binary_tree_to_bvh8(ConvertBinary2BVH8Params params,
                                  const int device_id,
                                  const cudaStream_t &stream) {
+  if (params.leaf_count <= 1) {
+    if (params.leaf_count == 1) {
+      // The only leaf has no parent.
+      uint32_t sentinel = 0xFFFFFFFF;
+      cudaMemcpyAsync(params.bvh8_leaf_parents, &sentinel, sizeof(uint32_t),
+                      cudaMemcpyHostToDevice, stream);
+    }
+    return;
+  }
   int threads = 256;
   int blocks_per_sm = 0;
 

@@ -234,7 +234,6 @@ __device__ inline void TailorCoefficientsQuantized::set_tailor_coefficients(
 
   auto *last_word = reinterpret_cast<uint8_t *>(&tailor_data[10]);
   last_word[3] = shared_exponent;
-  printf("packing done\n");
 }
 
 __device__ inline auto TailorCoefficientsQuantized::get_tailor_zero_order(

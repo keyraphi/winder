@@ -13,6 +13,7 @@
 #include <device_atomic_functions.h>
 #include <driver_types.h>
 #include <memory>
+#include <ostream>
 #include <stdexcept>
 #include <sys/types.h>
 #include <thrust/copy.h>
@@ -68,12 +69,6 @@ __constant__ SceneParams d_scene_params;
 
 void CudaDeleter::operator()(void *ptr) const { cudaFree(ptr); }
 
-template <IsGeometry Geometry>
-auto WinderBackend<Geometry>::get_bvh_view() -> BVH8View {
-  return BVH8View{m_bvh8_nodes, m_bvh8_leaf_pointers, m_sorted_geometry,
-                  m_bvh8_node_count};
-}
-
 template <typename T>
 T *get_aligned_ptr(void *&current_ptr, size_t count,
                    size_t &remaining_arena_size) {
@@ -127,7 +122,8 @@ WinderBackend<Geometry>::WinderBackend(size_t size, int device_id)
   // Allocate memory arena
   size_t leaf_count = (size + LEAF_SIZE - 1) / LEAF_SIZE;
 
-  uint32_t max_bvh8_nodes = leaf_count * 0.2;
+  uint32_t max_bvh8_nodes =
+      (leaf_count <= 1) ? 0 : (uint32_t)ceil(leaf_count * 0.2F) + 1;
 
   // Compute how much memory is needed, to make every entry 128 byte aligned
   size_t total_required = 0;
@@ -334,6 +330,10 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
   CUDA_CHECK(cudaEventRecord(m_start_tree_construction_event, m_stream_0));
 
   initializeMortonCodes<Vec3>(points_v3);
+  // DEBUG
+  printf("1...\n");
+  CUDA_CHECK(cudaDeviceSynchronize());
+  printf("1!\n");
 
   // sort by morton codes
   thrust::sequence(m_stream_0_policy, m_to_internal, m_to_internal + m_count);
@@ -348,6 +348,10 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
 
   interleave_gather_geometry(points, normals, m_to_internal, m_sorted_geometry,
                              m_count, m_stream_0);
+  // DEBUG
+  printf("2...\n");
+  CUDA_CHECK(cudaDeviceSynchronize());
+  printf("2!\n");
 
   // each leaf contains 32 (LEAF_SIZE) elements
   uint32_t leaf_count = (m_count + LEAF_SIZE - 1) / LEAF_SIZE;
@@ -365,10 +369,18 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
     // build binary radix tree
     build_binary_topology(m_leaf_morton_codes, m_binary_nodes, m_binary_parents,
                           leaf_count, m_stream_0);
+    // DEBUG
+    printf("3...\n");
+    CUDA_CHECK(cudaDeviceSynchronize());
+    printf("3!\n");
   }
   populate_binary_tree_aabb_and_leaf_coefficients<PointNormal>(
       m_sorted_geometry, m_leaf_coefficients, leaf_count, m_binary_nodes,
       m_binary_aabbs, m_binary_parents, m_atomic_counters, m_count, m_stream_0);
+  // DEBUG
+  printf("4...\n");
+  CUDA_CHECK(cudaDeviceSynchronize());
+  printf("4!\n");
   // Convert binary LBVH tree into BVH8 tree
   ConvertBinary2BVH8Params params{
       m_bvh8_work_queue_A, m_bvh8_work_queue_B, m_bvh8_internal_parent_map,
@@ -376,6 +388,10 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
       m_binary_nodes,      m_bvh8_leaf_parents, m_bvh8_nodes,
       m_bvh8_leaf_pointers};
   convert_binary_tree_to_bvh8(params, m_device, m_stream_0);
+  // DEBUG
+  printf("5...\n");
+  CUDA_CHECK(cudaDeviceSynchronize());
+  printf("5!\n");
   // populate BVH8 nodes with tailor coefficients using m2m
   // reset atomic counters to 0
   thrust::fill_n(m_stream_0_policy, m_atomic_counters, leaf_count - 1, 0);
@@ -384,6 +400,10 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
       m_bvh8_nodes, m_bvh8_internal_parent_map, m_binary_aabbs + leaf_count - 1,
       m_leaf_coefficients, m_bvh8_leaf_parents, m_bvh8_leaf_pointers,
       leaf_count, m_atomic_counters, m_stream_0);
+  // DEBUG
+  printf("6...\n");
+  CUDA_CHECK(cudaDeviceSynchronize());
+  printf("2!\n");
 
   CUDA_CHECK(cudaEventRecord(m_tree_construction_finished_event, m_stream_0));
 }
@@ -481,7 +501,6 @@ auto WinderBackend<Geometry>::compute(const float *queries, size_t query_count,
   CUDA_CHECK(cudaStreamSynchronize(compute_stream));
   return result;
 }
-
 template <>
 auto WinderBackend<PointNormal>::CreateFromPoints(const float *points,
                                                   const float *normals,
@@ -525,3 +544,5 @@ auto WinderBackend<PointNormal>::CreateForSolver(const float *points,
   return self;
 }
 
+template class WinderBackend<PointNormal>;
+template class WinderBackend<Triangle>;

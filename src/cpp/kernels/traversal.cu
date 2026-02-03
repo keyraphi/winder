@@ -289,16 +289,63 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
 }
 
 template <IsGeometry Geometry>
+__global__ void compute_winding_numbers_single_leaf_kernel(
+    const Vec3 *queries, const uint32_t *sort_indirections,
+    const Geometry *sorted_geometry, const uint32_t query_count,
+    const uint32_t geometry_count, float *winding_numbers,
+    const float inv_epsilon) {
+  // Global index of the query this thread is responsible for
+  uint32_t my_query_idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+  __shared__ Geometry shared_geometry[32];
+  if (threadIdx.x < geometry_count) {
+    shared_geometry[threadIdx.x].load(sorted_geometry, threadIdx.x, geometry_count);
+  }
+  __syncthreads();
+
+  if (my_query_idx >= query_count)
+    return;
+
+  // Load query
+  uint32_t original_idx = sort_indirections[my_query_idx];
+  Vec3 my_query = queries[original_idx];
+  float my_winding_number = 0.0f;
+
+  // Since there is only one leaf, all geometry (1-32 elements)
+  // is stored at the beginning of sorted_geometry.
+  // Every thread iterates through all available geometry for its specific
+  // query.
+  for (uint32_t i = 0; i < geometry_count; ++i) {
+    my_winding_number += shared_geometry[i].contributionToQuery(my_query, inv_epsilon);
+  }
+
+  // Write out results
+  winding_numbers[original_idx] = my_winding_number;
+}
+
+template <IsGeometry Geometry>
 void compute_winding_numbers(
     const ComputeWindingNumbersParams<Geometry> &params, int device_id,
     const cudaStream_t &stream) {
   if (params.query_count == 0) {
     return;
   }
-  // if beta is negative initialize with default value
-  float beta_2 = params.beta * params.beta;
 
   float inv_epsilon = 1.F / params.epsilon;
+  // There i no tree if there is only one leaf
+  if (params.geometry_count <= 32) {
+    uint32_t threads = 256;
+    uint32_t blocks = (params.query_count + threads - 1) / threads;
+
+    compute_winding_numbers_single_leaf_kernel<Geometry>
+        <<<blocks, threads, 0, stream>>>(
+            params.queries, params.sort_indirections, params.sorted_geometry,
+            params.query_count, params.geometry_count, params.winding_numbers,
+            inv_epsilon);
+    return;
+  }
+
+  float beta_2 = params.beta * params.beta;
 
   int threads = 128;
   int blocks_per_sm = 0;
