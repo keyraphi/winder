@@ -4,7 +4,6 @@
 #include "tensor3.h"
 #include "vec3.h"
 
-
 // For leaf we don't have the center of mass or the max_distance
 // We can still make conservative asumptions based on the aabb.
 // If in doubt we don't approximate.
@@ -407,18 +406,18 @@ __device__ __forceinline__ auto compute_node_approximation(
     const Vec3_bf16 &zero_order_coeff, const Mat3x3_bf16 &first_order_coeff,
     const Tensor3_bf16_compressed &second_order_coeff) -> float {
   Vec3 r = center_of_mass - query;
-  float norm_r = r.inv_length();
-  float norm_r3 = norm_r * norm_r * norm_r;
-  float norm_r5 = norm_r3 * norm_r * norm_r;
-  float norm_r7 = norm_r5 * norm_r * norm_r;
+  float inv_norm_r = r.inv_length();
+  float inv_norm_r3 = inv_norm_r * inv_norm_r * inv_norm_r;
+  float inv_norm_r5 = inv_norm_r3 * inv_norm_r * inv_norm_r;
+  float inv_norm_r7 = inv_norm_r5 * inv_norm_r * inv_norm_r;
 
   // 1/(4*pi)
   float inv_4pi = (0.07957747154F);
 
   float inv_4_pi_normr3 =
-      inv_4pi / norm_r3; // Doublecheck this might have to be a * instead!
-  float inv_4_pi_normr5 = (3.F) * inv_4pi / norm_r5;
-  float inv_4_pi_normr7 = (15.F) * inv_4pi / norm_r7;
+      inv_4pi * inv_norm_r3; // Doublecheck this might have to be a * instead!
+  float inv_4_pi_normr5 = (3.F) * inv_4pi * inv_norm_r5;
+  float inv_4_pi_normr7 = (15.F) * inv_4pi * inv_norm_r7;
 
   Vec3_bf16 r_bf16 = Vec3_bf16::from_float(r);
   float result = 0.F;
@@ -431,5 +430,6 @@ __device__ __forceinline__ auto compute_node_approximation(
   // Second order
   result += computeSecondOrderContribution(second_order_coeff, r_bf16,
                                            inv_4_pi_normr5, inv_4_pi_normr7);
+
   return result;
 }

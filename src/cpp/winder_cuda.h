@@ -50,7 +50,7 @@ struct BVH8View {
   uint32_t node_count;
 };
 
-template <typename Geometry> class WinderBackend {
+template <IsGeometry Geometry> class WinderBackend {
 
 public:
   ~WinderBackend();
@@ -80,7 +80,7 @@ public:
   [[nodiscard]] auto point_count() const -> size_t { return m_count; }
   [[nodiscard]] auto device_id() const -> int { return m_device; }
 
-  void solve_for_normals(const float *extra_p, size_t n_extra,
+  void solve_for_normals(const float *extra_p, size_t extra_count,
                          const float *extra_wn, const float *pc_wn,
                          float alpha);
 
@@ -149,6 +149,6 @@ private:
                                  // and node allocation
 
   // private helpers
-  template <typename PrimitiveGeometry>
+  template <IsPrimitiveGeometry PrimitiveGeometry>
   auto initializeMortonCodes(const PrimitiveGeometry *geometry) -> void;
 };

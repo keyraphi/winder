@@ -22,7 +22,6 @@
 #include <vector_functions.h>
 #include <vector_types.h>
 
-
 __device__ __forceinline__ auto warp_reduce_add_xor(float val) -> float {
 #pragma unroll
   for (int offset = 16; offset > 0; offset /= 2) {
@@ -59,7 +58,7 @@ load_shared_cooperative(T *shared_dst, const T *global_src, uint32_t lane_id) {
   }
 }
 
-template <typename Geometry>
+template <IsGeometry Geometry>
 __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
     const Vec3 *queries, const uint32_t *sort_indirections,
     const BVH8Node *bvh8_nodes, const LeafPointers *bvh8_leaf_pointers,
@@ -289,7 +288,7 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
   } // grid while
 }
 
-template <typename Geometry>
+template <IsGeometry Geometry>
 void compute_winding_numbers(
     const ComputeWindingNumbersParams<Geometry> &params, int device_id,
     const cudaStream_t &stream) {

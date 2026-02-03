@@ -68,7 +68,7 @@ __constant__ SceneParams d_scene_params;
 
 void CudaDeleter::operator()(void *ptr) const { cudaFree(ptr); }
 
-template <typename Geometry>
+template <IsGeometry Geometry>
 auto WinderBackend<Geometry>::get_bvh_view() -> BVH8View {
   return BVH8View{m_bvh8_nodes, m_bvh8_leaf_pointers, m_sorted_geometry,
                   m_bvh8_node_count};
@@ -94,7 +94,7 @@ T *get_aligned_ptr(void *&current_ptr, size_t count,
   return static_cast<T *>(aligned);
 }
 
-template <typename Geometry> WinderBackend<Geometry>::~WinderBackend() {
+template <IsGeometry Geometry> WinderBackend<Geometry>::~WinderBackend() {
   CUDA_CHECK(cudaStreamSynchronize(m_stream_0));
   CUDA_CHECK(cudaStreamSynchronize(m_stream_1));
 
@@ -110,7 +110,7 @@ template <typename Geometry> WinderBackend<Geometry>::~WinderBackend() {
   CUDA_CHECK(cudaStreamDestroy(m_stream_1));
 }
 
-template <typename Geometry>
+template <IsGeometry Geometry>
 WinderBackend<Geometry>::WinderBackend(size_t size, int device_id)
     : m_count{size}, m_device{device_id} {
 
@@ -206,22 +206,21 @@ WinderBackend<Geometry>::WinderBackend(size_t size, int device_id)
   thrust::fill_n(m_stream_0_policy, m_atomic_counters, leaf_count - 1, 0);
 }
 
-template <typename Geometry> struct GeometryToAABB {
-  __device__ auto operator()(const Geometry &g) const -> AABB {
+template <IsPrimitiveGeometry PrimitiveGeometry> struct GeometryToAABB {
+  __device__ auto operator()(const PrimitiveGeometry &g) const -> AABB {
     return g.get_aabb();
   }
 };
 
 struct MergeAABB {
-  __device__ auto operator()(const AABB &a, const AABB &b) const
-      -> AABB {
+  __device__ auto operator()(const AABB &a, const AABB &b) const -> AABB {
     return AABB::merge(a, b);
   }
 };
 
-template <typename Geometry> struct GeometryToMorton {
+template <IsPrimitiveGeometry PrimitiveGeometry> struct GeometryToMorton {
 
-  __device__ auto operator()(const Geometry &g) const -> uint32_t {
+  __device__ auto operator()(const PrimitiveGeometry &g) const -> uint32_t {
     const float scale = d_scene_params.scale;
     const Vec3 min_p = d_scene_params.bounds.min;
     // Scale to range [0, 1]
@@ -240,8 +239,8 @@ template <typename Geometry> struct GeometryToMorton {
   }
 };
 
-template <typename Geometry>
-template <typename PrimitiveGeometry>
+template <IsGeometry Geometry>
+template <IsPrimitiveGeometry PrimitiveGeometry>
 auto WinderBackend<Geometry>::initializeMortonCodes(
     const PrimitiveGeometry *geometry) -> void {
   // compute scene bounds
@@ -396,7 +395,7 @@ template <> struct GeometryTraits<PointNormal> {
   static constexpr float default_beta = 2.0f;
 };
 
-template <typename Geometry>
+template <IsGeometry Geometry>
 auto WinderBackend<Geometry>::compute(const float *queries, size_t query_count,
                                       float beta, float epsilon,
                                       size_t stream) const
@@ -414,15 +413,15 @@ auto WinderBackend<Geometry>::compute(const float *queries, size_t query_count,
       is_stream_0 ? m_stream_0_policy : m_stream_1_policy;
   CUDA_CHECK(cudaEventRecord(start, compute_stream));
   // allocate memory arena for required buffers
+  float *winding_numbers;
+  CUDA_CHECK(cudaMallocAsync(&winding_numbers, query_count * sizeof(float),
+                             compute_stream));
   uint8_t *compute_arena;
-  CUDA_CHECK(cudaMallocAsync(
-      &compute_arena, query_count * (sizeof(float) + sizeof(uint32_t) * 2),
-      compute_stream));
-  float *winding_numbers = reinterpret_cast<float *>(compute_arena);
-  uint32_t *queries_to_internal =
-      reinterpret_cast<uint32_t *>(&compute_arena[query_count * sizeof(float)]);
+  CUDA_CHECK(cudaMallocAsync(&compute_arena, query_count * sizeof(uint32_t) * 2,
+                             compute_stream));
+  uint32_t *queries_to_internal = reinterpret_cast<uint32_t *>(compute_arena);
   uint32_t *queries_morton = reinterpret_cast<uint32_t *>(
-      &compute_arena[query_count * (sizeof(float) + sizeof(uint32_t))]);
+      &compute_arena[query_count * sizeof(uint32_t)]);
 
   // sort queries by morton code, scaled with bvh8s aabb
   thrust::transform(compute_stream_policy, queries_vec3,
@@ -435,7 +434,8 @@ auto WinderBackend<Geometry>::compute(const float *queries, size_t query_count,
                       queries_morton + query_count, queries_to_internal);
 
   // make sure stream 0 has finished building the tree
-  cudaEventSynchronize(m_tree_construction_finished_event);
+  CUDA_CHECK(
+      cudaStreamWaitEvent(compute_stream, m_tree_construction_finished_event));
 
   // DEBUG optimize
   float construction_elapsed_time_ms;
@@ -445,7 +445,6 @@ auto WinderBackend<Geometry>::compute(const float *queries, size_t query_count,
   printf("DEBUG OPTIM: tree construction took %f ms.\n",
          construction_elapsed_time_ms);
   // END DBUG optimize
-
 
   if (beta < 0.F) {
     // defaults from Fast Winding Numbers paper
@@ -467,12 +466,20 @@ auto WinderBackend<Geometry>::compute(const float *queries, size_t query_count,
                                                beta,
                                                epsilon};
   compute_winding_numbers<Geometry>(params, m_device, compute_stream);
+  // free temporary memory
+  CUDA_CHECK(cudaFreeAsync(compute_arena, compute_stream));
+
   CUDA_CHECK(cudaEventRecord(finish, compute_stream));
 
   // free working buffers
   CUDA_CHECK(cudaEventDestroy(start));
   CUDA_CHECK(cudaEventDestroy(finish));
-  return nullptr;
+  CudaUniquePtr<float> result(winding_numbers);
+
+  // TODO better solution?
+  // sync compute stream to make sure the result is there
+  CUDA_CHECK(cudaStreamSynchronize(compute_stream));
+  return result;
 }
 
 template <>
@@ -517,3 +524,4 @@ auto WinderBackend<PointNormal>::CreateForSolver(const float *points,
   self->initialize_point_data(points, zero_normals.data().get());
   return self;
 }
+

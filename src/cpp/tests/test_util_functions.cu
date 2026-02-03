@@ -9,6 +9,7 @@
 #include "tensor3.h"
 #include "vec3.h"
 #include <cstdint>
+#include <cstdio>
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
 #include <driver_types.h>
@@ -284,7 +285,7 @@ TEST(AABB, MergeUnbalanced) {
             merged.center_of_mass._max_distance_to_center);
 }
 
-template <typename Geometry>
+template <IsGeometry Geometry>
 __global__ void tailor_terms_kernel(const Geometry *g, const Vec3 *center,
                                     Vec3 *zero_order, Mat3x3 *first_order,
                                     Tensor3_compressed *second_order,
@@ -423,7 +424,7 @@ TEST(TailorTerms, Triangle) {
   Tensor3 second_gt2 = Tensor3::from_outer_product(Ct_2, n2);
   Tensor3 second1 = h_second[0].uncompress();
   Tensor3 second2 = h_second[1].uncompress();
-  for (int i=0; i < 27; ++i) {
+  for (int i = 0; i < 27; ++i) {
     EXPECT_FLOAT_EQ(second1.data[i], second_gt1.data[i]);
     EXPECT_FLOAT_EQ(second2.data[i], second_gt2.data[i]);
   }
@@ -567,7 +568,7 @@ TEST(TaylorApproximation, Triangle) {
 
     float approx_h;
     cudaMemcpy(&approx_h, d_result, sizeof(float), cudaMemcpyDeviceToHost);
-
+    printf("GT: %f, approx: %f\n", ground_truth, approx_h);
     float error = std::abs(ground_truth - approx_h);
 
     // Expected behavior: error drops significantly as 1/r^p
@@ -661,6 +662,7 @@ TEST(TaylorApproximation, TriangleRandomized) {
 
       float approx_h;
       cudaMemcpy(&approx_h, d_result, sizeof(float), cudaMemcpyDeviceToHost);
+      printf("ground_truth: %f, approx_h: %f\n", ground_truth, approx_h);
 
       float error = std::abs(ground_truth - approx_h);
       max_error = std::max(max_error, error);
@@ -729,7 +731,7 @@ TEST(TaylorApproximation, PointNormal) {
 
     float ground_truth = 0.0f;
     for (const auto &pn : leaf_points) {
-      ground_truth += pn.contributionToQuery(query, 0.0f);
+      ground_truth += pn.contributionToQuery(query, 200.0f);
     }
 
     test_approximation_kernel<<<1, 1>>>(query, com, h_zero, h_first, h_second,
@@ -737,7 +739,7 @@ TEST(TaylorApproximation, PointNormal) {
 
     float approx_h;
     cudaMemcpy(&approx_h, d_result, sizeof(float), cudaMemcpyDeviceToHost);
-    printf("ground_truth: %f, approx_h: %f\n", ground_truth, approx_h);
+    printf("GT: %f, approx: %f\n", ground_truth, approx_h);
     float error = std::abs(ground_truth - approx_h);
     EXPECT_LT(error, (dist < 10.0f ? 1e-3 : 1e-6));
 
@@ -811,14 +813,14 @@ TEST(TaylorApproximation, PointNormalRandomized) {
 
       float ground_truth = 0.0f;
       for (const auto &pn : leaf_points) {
-        ground_truth += pn.contributionToQuery(query, 0.0f);
+        ground_truth += pn.contributionToQuery(query, 200.0f);
       }
 
       test_approximation_kernel<<<1, 1>>>(query, com, h_zero, h_first, h_second,
                                           d_result);
       float approx_h;
       cudaMemcpy(&approx_h, d_result, sizeof(float), cudaMemcpyDeviceToHost);
-      printf("ground_truth: %f, approx_h: %f\n", ground_truth, approx_h);
+      printf("GT: %f, approx: %f\n", ground_truth, approx_h);
 
       max_error = std::max(max_error, std::abs(ground_truth - approx_h));
     }

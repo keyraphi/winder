@@ -188,7 +188,7 @@ __device__ __forceinline__ auto warp_reduce_add_down(float val) -> float {
   return val;
 }
 
-template <typename Geometry>
+template <IsGeometry Geometry>
 __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
     const Geometry *__restrict__ sorted_geometry,
     TailorCoefficientsBf16 *leaf_coefficients, const uint32_t leaf_count,
@@ -369,7 +369,7 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
   }
 }
 
-template <typename Geometry>
+template <IsGeometry Geometry>
 void populate_binary_tree_aabb_and_leaf_coefficients(
     const Geometry *__restrict__ sorted_geometry,
     TailorCoefficientsBf16 *leaf_coefficients, const uint32_t leaf_count,

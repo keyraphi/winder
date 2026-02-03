@@ -4,6 +4,7 @@
 #include "tensor3.h"
 #include "vec3.h"
 #include <cmath>
+#include <concepts>
 #include <cstdint>
 #include <cstdlib>
 #include <cuda_runtime_api.h>
@@ -152,8 +153,9 @@ Triangle::get_tailor_terms(const Vec3 &p_center, bool is_active,
     return {v.x * v.x, v.x * v.y, v.x * v.z, v.y * v.y, v.y * v.z, v.z * v.z};
   };
 
+  constexpr float one_over_three = 1.F / 3.F;
   const SymMat3x3 Ct = {(outer_sym(m_ij) + outer_sym(m_jk) + outer_sym(m_ki)) *
-                        (1.0F / 3.F)};
+                        one_over_three};
 
   zero_order = is_active ? n : Vec3{0.F, 0.F, 0.F};
   first_order = is_active ? d.outer_product(n) : Mat3x3::zero();
@@ -205,24 +207,24 @@ PointNormal::get_tailor_terms(const Vec3 &p_center, bool is_active,
                   r.y * r.y, r.y * r.z, r.z * r.z};
 
   if (is_active) {
-    second_order.data[0] = Ct.data[0] * n.x;
-    second_order.data[1] = Ct.data[0] * n.y;
-    second_order.data[2] = Ct.data[0] * n.z;
-    second_order.data[3] = Ct.data[1] * n.x;
-    second_order.data[4] = Ct.data[1] * n.y;
-    second_order.data[5] = Ct.data[1] * n.z;
-    second_order.data[6] = Ct.data[2] * n.x;
-    second_order.data[7] = Ct.data[2] * n.y;
-    second_order.data[8] = Ct.data[2] * n.z;
-    second_order.data[9] = Ct.data[3] * n.x;
-    second_order.data[10] = Ct.data[3] * n.y;
-    second_order.data[11] = Ct.data[3] * n.z;
-    second_order.data[12] = Ct.data[4] * n.x;
-    second_order.data[13] = Ct.data[4] * n.y;
-    second_order.data[14] = Ct.data[4] * n.z;
-    second_order.data[15] = Ct.data[5] * n.x;
-    second_order.data[16] = Ct.data[5] * n.y;
-    second_order.data[17] = Ct.data[5] * n.z;
+    second_order.data[0] = 0.5F * Ct.data[0] * n.x;
+    second_order.data[1] = 0.5F * Ct.data[0] * n.y;
+    second_order.data[2] = 0.5F * Ct.data[0] * n.z;
+    second_order.data[3] = 0.5F * Ct.data[1] * n.x;
+    second_order.data[4] = 0.5F * Ct.data[1] * n.y;
+    second_order.data[5] = 0.5F * Ct.data[1] * n.z;
+    second_order.data[6] = 0.5F * Ct.data[2] * n.x;
+    second_order.data[7] = 0.5F * Ct.data[2] * n.y;
+    second_order.data[8] = 0.5F * Ct.data[2] * n.z;
+    second_order.data[9] = 0.5F * Ct.data[3] * n.x;
+    second_order.data[10] = 0.5F * Ct.data[3] * n.y;
+    second_order.data[11] = 0.5F * Ct.data[3] * n.z;
+    second_order.data[12] = 0.5F * Ct.data[4] * n.x;
+    second_order.data[13] = 0.5F * Ct.data[4] * n.y;
+    second_order.data[14] = 0.5F * Ct.data[4] * n.z;
+    second_order.data[15] = 0.5F * Ct.data[5] * n.x;
+    second_order.data[16] = 0.5F * Ct.data[5] * n.y;
+    second_order.data[17] = 0.5F * Ct.data[5] * n.z;
   } else {
     // for inactive threads neutral element wrt. +
     for (int i = 0; i < 18; ++i) {
@@ -303,3 +305,19 @@ PointNormal::contributionToQuery(const Vec3 &query,
 
   return n.dot(d) * INV_FOUR_PI * s_over_dist3;
 }
+
+// Concept for Geometry template
+template <typename T>
+concept IsGeometry = requires(T g, Vec3 p, bool active, Vec3 &z, Mat3x3 &m,
+                              Tensor3_compressed &t, float f) {
+  { g.get_aabb() } -> std::same_as<AABB>;
+  { g.centroid() } -> std::same_as<Vec3>;
+  { g.get_tailor_terms(p, active, z, m, t) } -> std::same_as<void>;
+  { g.contributionToQuery(p, f) } -> std::same_as<float>;
+};
+
+template <typename T>
+concept IsPrimitiveGeometry = requires(T g) {
+  { g.get_aabb() } -> std::same_as<AABB>;
+  { g.centroid() } -> std::same_as<Vec3>;
+};

@@ -18,7 +18,7 @@ void build_binary_topology(const uint32_t *__restrict__ morton_codes,
                            BinaryNode *nodes, uint32_t *parents,
                            uint32_t leaf_count, const cudaStream_t &stream = 0);
 
-template <typename Geometry>
+template <IsGeometry Geometry>
 void populate_binary_tree_aabb_and_leaf_coefficients(
     const Geometry *__restrict__ sorted_geometry,
     TailorCoefficientsBf16 *leaf_coefficients, uint32_t leaf_count,

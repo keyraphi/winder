@@ -1,7 +1,25 @@
-# Start from the base image cibuildwheel uses
 FROM quay.io/pypa/manylinux_2_28_x86_64
 
-# Run the exact setup steps from your BEFORE_ALL
-RUN yum install -y yum-utils gcc-toolset-13-gcc gcc-toolset-13-gcc-c++ && \
+# 1. Install GCC 13 Toolset and CUDA 12.4
+RUN yum install -y yum-utils && \
     yum-config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo && \
-    yum install -y cuda-nvcc-12-4 cuda-cudart-devel-12-4 cuda-libraries-devel-12-4
+    yum install -y gcc-toolset-13-gcc gcc-toolset-13-gcc-c++ \
+                   cuda-nvcc-12-4 cuda-cudart-devel-12-4 cuda-libraries-devel-12-4
+
+# 2. Install modern CMake and Ninja via pip
+RUN yum install -y ninja-build
+
+# 3. SET THE ENVIRONMENT (This is the critical part)
+# We point directly to the toolset binaries so NVCC and CMake see them first
+ENV TOOLSET_BIN=/opt/rh/gcc-toolset-13/root/usr/bin
+ENV CUDA_BIN=/usr/local/cuda-12.4/bin
+
+ENV PATH="${TOOLSET_BIN}:${CUDA_BIN}:${PATH}"
+
+# Force compilers to the ones in the toolset
+ENV CC="${TOOLSET_BIN}/gcc"
+ENV CXX="${TOOLSET_BIN}/g++"
+ENV CUDAHOSTCXX="${TOOLSET_BIN}/g++"
+
+# Library paths
+ENV LD_LIBRARY_PATH="/usr/local/cuda-12.4/lib64:${LD_LIBRARY_PATH}"
