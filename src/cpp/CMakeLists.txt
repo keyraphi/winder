@@ -43,17 +43,38 @@ target_include_directories(winder_module PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 option(WINDER_DEV_MODE "Enable development mode (verbose PTX info)" OFF)
 
 if(WINDER_DEV_MODE)
-    message(STATUS "Winder: Development mode enabled (Verbose PTX enabled)")
-    
-    # Define the flags once
-    set(CUDA_DEV_FLAGS "-res-usage" "--source-in-ptx" "-g") # Added source-in-ptx for better debugging
-    
-    target_compile_options(winder_kernels PRIVATE 
-        $<$<COMPILE_LANGUAGE:CUDA>:${CUDA_DEV_FLAGS}>
+    message(STATUS "Winder: Development mode enabled")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -rdynamic")
+    set(CUDA_SEPARATE_COMPILATION ON)
+
+    set(CUDA_BASE_DEV_FLAGS "-res-usage" "-lineinfo" "-Xcompiler" "-rdynamic")
+
+    target_compile_options(
+        winder_kernels
+        PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:${CUDA_BASE_DEV_FLAGS}>
     )
-    target_compile_options(winder_backend PRIVATE 
-        $<$<COMPILE_LANGUAGE:CUDA>:${CUDA_DEV_FLAGS}>
+    target_compile_options(
+        winder_backend
+        PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:${CUDA_BASE_DEV_FLAGS}>
     )
+
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        message(
+            STATUS
+            "Winder: CUDA Debugging enabled (Optimizations disabled)"
+        )
+        add_definitions(-DDEBUG)
+        set(CUDA_DEBUG_ONLY_FLAGS "-G" "-g")
+
+        target_compile_options(
+            winder_kernels
+            PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:${CUDA_DEBUG_ONLY_FLAGS}>
+        )
+        target_compile_options(
+            winder_backend
+            PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:${CUDA_DEBUG_ONLY_FLAGS}>
+        )
+    endif()
 endif()
 
 # Install logic

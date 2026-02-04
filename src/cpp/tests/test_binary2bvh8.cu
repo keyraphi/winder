@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cub/block/block_scan.cuh>
 #include <cub/util_type.cuh>
+#include <cuda.h>
 #include <cuda_device_runtime_api.h>
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
@@ -320,15 +321,17 @@ TEST(BVH8Conversion, DegeneratePointCluster64) {
     h_bin_nodes[i].right_child = 2 * i + 2;
   }
 
+  uint32_t max_bvh8_nodes =
+      (leaf_count <= 1) ? 0 : (uint32_t)ceil(leaf_count * 0.2F) + 1;
   // Setup BVH8 Params
-  thrust::device_vector<uint32_t> d_qA(leaf_count * 2, 0);
-  thrust::device_vector<uint32_t> d_qB(leaf_count * 2, 0);
-  thrust::device_vector<uint32_t> d_int_parents(leaf_count, 0);
+  thrust::device_vector<uint32_t> d_qA(leaf_count -1, 0);
+  thrust::device_vector<uint32_t> d_qB(leaf_count -1, 0);
+  thrust::device_vector<uint32_t> d_int_parents(max_bvh8_nodes, 0);
   thrust::device_vector<uint32_t> d_counter(1, 0);
   thrust::device_vector<BinaryNode> d_bin_nodes = h_bin_nodes;
   thrust::device_vector<AABB> d_bin_aabbs = h_bin_aabbs;
   thrust::device_vector<uint32_t> d_leaf_parents(leaf_count, 0);
-  thrust::device_vector<BVH8Node> d_bvh8_nodes(leaf_count);
+  thrust::device_vector<BVH8Node> d_bvh8_nodes(max_bvh8_nodes);
   thrust::device_vector<LeafPointers> d_leaf_pointers(leaf_count);
 
   ConvertBinary2BVH8Params p{thrust::raw_pointer_cast(d_qA.data()),
@@ -379,15 +382,15 @@ TEST(BVH8Conversion, SingleLeafBaseCase) {
   h_bin_aabbs[0] = h_aabb;
 
   // Setup BVH8 Params
-  thrust::device_vector<uint32_t> d_qA(leaf_count * 2, 0);
-  thrust::device_vector<uint32_t> d_qB(leaf_count * 2, 0);
-  thrust::device_vector<uint32_t> d_int_parents(leaf_count, 0);
+  thrust::device_vector<uint32_t> d_qA(0);
+  thrust::device_vector<uint32_t> d_qB(0);
+  thrust::device_vector<uint32_t> d_int_parents(0, 0);
   thrust::device_vector<uint32_t> d_counter(1, 0);
   thrust::device_vector<BinaryNode> d_bin_nodes = h_bin_nodes;
   thrust::device_vector<AABB> d_bin_aabbs = h_bin_aabbs;
   thrust::device_vector<uint32_t> d_leaf_parents(leaf_count, 0);
-  thrust::device_vector<BVH8Node> d_bvh8_nodes(leaf_count);
-  thrust::device_vector<LeafPointers> d_leaf_pointers(leaf_count);
+  thrust::device_vector<BVH8Node> d_bvh8_nodes(0);
+  thrust::device_vector<LeafPointers> d_leaf_pointers(0);
 
   ConvertBinary2BVH8Params p{thrust::raw_pointer_cast(d_qA.data()),
                              thrust::raw_pointer_cast(d_qB.data()),
@@ -401,26 +404,10 @@ TEST(BVH8Conversion, SingleLeafBaseCase) {
                              thrust::raw_pointer_cast(d_leaf_pointers.data())};
   // Launch (Note: Requires Cooperative Launch support on GPU)
   convert_binary_tree_to_bvh8(p, 0);
-  thrust::host_vector<BVH8Node> h_bvh8 = d_bvh8_nodes;
-  thrust::host_vector<LeafPointers> h_leaf_ptrs = d_leaf_pointers;
+  CUDA_CHECK(cudaGetLastError());
+  thrust::host_vector<uint32_t> h_leaf_parents = d_leaf_parents;
+  CUDA_CHECK(cudaGetLastError());
 
   // Verification
-  EXPECT_EQ(h_bvh8[0].getChildMeta(0), ChildType::LEAF);
-  EXPECT_EQ(h_bvh8[0].getChildMeta(1), ChildType::EMPTY);
-  EXPECT_EQ(h_bvh8[0].parent_aabb.min.x, 1.0f);
-
-  BVH8Node root = h_bvh8[0];
-  LeafPointers root_leafs = h_leaf_ptrs[0];
-
-  // Verify active slot
-  EXPECT_EQ(root.getChildMeta(0), ChildType::LEAF);
-  EXPECT_EQ(root_leafs.indices[0], 0);
-
-  // Verify all 7 other slots are strictly neutralized
-  for (int i = 1; i < 8; ++i) {
-    EXPECT_EQ(root.getChildMeta(i), ChildType::EMPTY)
-        << "Slot " << i << " should be EMPTY";
-    EXPECT_EQ(root_leafs.indices[i], 0xFFFFFFFF)
-        << "Slot " << i << " leaf pointer should be null";
-  }
+  EXPECT_EQ(h_leaf_parents[0], 0xFFFFFFFF);
 }

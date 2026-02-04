@@ -131,13 +131,13 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
       if (lane_id == 0) {
         current_node_idx = shared_stack[warp_id][--stack_ptr];
       }
+      // share current_node_idx with the rest
+      current_node_idx = __shfl_sync(0xFFFFFFFF, current_node_idx, 0);
       // load current node to shared cache
       load_shared_cooperative<BVH8Node>(&current_node_cache[warp_id],
                                         bvh8_nodes + current_node_idx, lane_id);
       __syncwarp();
 
-      // share current_node_idx with the rest
-      current_node_idx = __shfl_sync(0xFFFFFFFF, current_node_idx, 0);
       const BVH8Node &current_node = current_node_cache[warp_id];
 
       // Check if this thread needs to process the current node
@@ -299,7 +299,8 @@ __global__ void compute_winding_numbers_single_leaf_kernel(
 
   __shared__ Geometry shared_geometry[32];
   if (threadIdx.x < geometry_count) {
-    shared_geometry[threadIdx.x].load(sorted_geometry, threadIdx.x, geometry_count);
+    shared_geometry[threadIdx.x] =
+        Geometry::load(sorted_geometry, threadIdx.x, geometry_count);
   }
   __syncthreads();
 
@@ -316,7 +317,8 @@ __global__ void compute_winding_numbers_single_leaf_kernel(
   // Every thread iterates through all available geometry for its specific
   // query.
   for (uint32_t i = 0; i < geometry_count; ++i) {
-    my_winding_number += shared_geometry[i].contributionToQuery(my_query, inv_epsilon);
+    my_winding_number +=
+        shared_geometry[i].contributionToQuery(my_query, inv_epsilon);
   }
 
   // Write out results
@@ -336,7 +338,9 @@ void compute_winding_numbers(
   if (params.geometry_count <= 32) {
     uint32_t threads = 256;
     uint32_t blocks = (params.query_count + threads - 1) / threads;
-
+    printf("DEBUG: running compute_winding_numbers_single_leaf_kernel for %u "
+           "queries and %u elements\n",
+           params.query_count, params.geometry_count);
     compute_winding_numbers_single_leaf_kernel<Geometry>
         <<<blocks, threads, 0, stream>>>(
             params.queries, params.sort_indirections, params.sorted_geometry,

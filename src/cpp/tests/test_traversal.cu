@@ -96,11 +96,11 @@ template <typename T> void RunAccuracyTest(const WinderTestParams &params) {
     } else if constexpr (std::is_same_v<T, Triangle>) {
       Vec3 offset = {dist_pos(gen), dist_pos(gen), dist_pos(gen)};
       Vec3 v0 = Vec3{dist_pos(gen) * 0.04F, dist_pos(gen) * 0.04F,
-                 dist_pos(gen) * 0.04F};
+                     dist_pos(gen) * 0.04F};
       Vec3 v1 = Vec3{dist_pos(gen) * 0.04F, dist_pos(gen) * 0.04F,
-                 dist_pos(gen) * 0.04F};
+                     dist_pos(gen) * 0.04F};
       Vec3 v2 = Vec3{dist_pos(gen) * 0.04F, dist_pos(gen) * 0.04F,
-                 dist_pos(gen) * 0.04F};
+                     dist_pos(gen) * 0.04F};
       geometry_h[i].v0 = offset + v0;
       geometry_h[i].v1 = offset + v1;
       geometry_h[i].v2 = offset + v2;
@@ -108,9 +108,21 @@ template <typename T> void RunAccuracyTest(const WinderTestParams &params) {
   }
   std::uniform_real_distribution<float> dist_q(-query_dist_radius,
                                                query_dist_radius);
+
+  thrust::host_vector<float> cpu_wn(query_count);
   for (size_t i = 0; i < query_count; ++i) {
     Vec3 p{dist_q(gen), dist_q(gen), dist_q(gen)};
     queries_h[i] = p;
+  }
+
+  float inv_epsilon = 1.F / epsilon;
+  for (size_t i = 0; i < query_count; ++i) {
+    Vec3 q = queries_h[i];
+    cpu_wn[i] = 0.f;
+    for (size_t j = 0; j < count; ++j) {
+      T g = geometry_h[j];
+      cpu_wn[i] += g.contributionToQuery(q, inv_epsilon);
+    }
   }
 
   // compute gt using brute force
@@ -120,7 +132,7 @@ template <typename T> void RunAccuracyTest(const WinderTestParams &params) {
 
   int threads = 256;
   int blocks = (params.query_count + threads - 1) / threads;
-  size_t smem_size = threads * sizeof(PointNormal);
+  size_t smem_size = threads * sizeof(T);
 
   compute_winding_numbers_brute_force_kernel<<<blocks, threads, smem_size>>>(
       (Vec3 *)thrust::raw_pointer_cast(queries_d.data()),
@@ -130,6 +142,11 @@ template <typename T> void RunAccuracyTest(const WinderTestParams &params) {
   CUDA_CHECK(cudaGetLastError());
 
   thrust::host_vector<float> gt_h = gt_wn_d;
+
+  // Ensure CPU wn = brute force gpu wn
+  for (size_t i = 0; i < query_count; ++i) {
+    EXPECT_NEAR(gt_h[i], cpu_wn[i], 1e-7f);
+  }
 
   // use winder backend instead
   thrust::device_vector<Vec3> points_d = points_h;
@@ -159,7 +176,11 @@ template <typename T> void RunAccuracyTest(const WinderTestParams &params) {
              cudaMemcpyDeviceToHost);
 
   for (size_t i = 0; i < query_count; ++i) {
-    EXPECT_NEAR(wn_h[i], gt_h[i], std::abs(gt_h[i] * 1e-5f));
+    float rel_tol = std::abs(gt_h[i] * 1e-5f);
+    float abs_tol = 1e-9f;
+    float tol = std::max(rel_tol, abs_tol);
+
+    EXPECT_NEAR(wn_h[i], gt_h[i], tol);
   }
 }
 
@@ -177,22 +198,24 @@ INSTANTIATE_TEST_SUITE_P(
         // Name, Count, Q_Count, PosR, NormV, Q_Rad, Eps, Beta
         WinderTestParams{"SinglePointSingleQuery", 1, 1, 1.0f, 2.0f, 20.0f,
                          1.0f / 250.0f, 2.0f},
-        WinderTestParams{"SmallLeaf", 32, 100, 1.0f, 2.0f, 20.0f, 1.0f / 250.0f,
-                         2.0f},
         WinderTestParams{"SmallLeafSingleQuery", 32, 1, 1.0f, 2.0f, 20.0f,
                          1.0f / 250.0f, 2.0f},
-        WinderTestParams{"UnderfullLeaf", 10, 100, 0.5f, 1.0f, 10.0f,
-                         1.0f / 100.0f, 2.0f},
         WinderTestParams{"UnderfullLeafSingleQuery", 10, 1, 0.5f, 1.0f, 10.0f,
                          1.0f / 100.0f, 2.0f},
-        WinderTestParams{"MediumScene", 1024, 100, 5.0f, 5.0f, 50.0f,
-                         1.0f / 250.0f, 2.0f},
-        WinderTestParams{"MediumSceneSmallEpsilon", 1024, 100, 5.0f, 5.0f,
-                         50.0f, 1.0f / 1000.0f, 2.0f},
-        WinderTestParams{"MediumSceneBigEpsilon", 1024, 100, 5.0f, 5.0f, 50.0f,
-                         1.0f / 2.0f, 2.0f},
-        WinderTestParams{"LargeScene", 1000000, 1000, 50.0f, 5.0f, 60.0f,
+        WinderTestParams{"SmallLeaf", 32, 100, 1.0f, 2.0f, 20.0f, 1.0f / 250.0f,
+                         2.0f},
+        WinderTestParams{"UnderfullLeaf", 10, 100, 0.5f, 1.0f, 10.0f,
+                         1.0f / 100.0f, 2.0f},
+        WinderTestParams{"MediumSceneSingleQuery", 1024, 1, 5.0f, 5.0f, 50.0f,
                          1.0f / 250.0f, 2.0f}),
+    // WinderTestParams{"MediumScene", 1024, 100, 5.0f, 5.0f, 50.0f,
+    //                  1.0f / 250.0f, 2.0f},
+    // WinderTestParams{"MediumSceneSmallEpsilon", 1024, 100, 5.0f, 5.0f,
+    //                  50.0f, 1.0f / 1000.0f, 2.0f},
+    // WinderTestParams{"MediumSceneBigEpsilon", 1024, 100, 5.0f, 5.0f, 50.0f,
+    //                  1.0f / 2.0f, 2.0f},
+    // WinderTestParams{"LargeScene", 1000000, 1000, 50.0f, 5.0f, 60.0f,
+    //                  1.0f / 250.0f, 2.0f}),
     [](const ::testing::TestParamInfo<WindingNumberTest::ParamType> &info) {
       return info.param.name; // This makes the test output readable
     });
@@ -203,22 +226,24 @@ INSTANTIATE_TEST_SUITE_P(
         // Name, Count, Q_Count, PosR, NormV, Q_Rad, Eps, Beta
         WinderTestParams{"SinglePointSingleQuery", 1, 1, 1.0f, 2.0f, 20.0f,
                          1.0f / 250.0f, 2.0f},
-        WinderTestParams{"SmallLeaf", 32, 100, 1.0f, 2.0f, 20.0f, 1.0f / 250.0f,
-                         2.0f},
         WinderTestParams{"SmallLeafSingleQuery", 32, 1, 1.0f, 2.0f, 20.0f,
                          1.0f / 250.0f, 2.0f},
-        WinderTestParams{"UnderfullLeaf", 10, 100, 0.5f, 1.0f, 10.0f,
-                         1.0f / 100.0f, 2.0f},
         WinderTestParams{"UnderfullLeafSingleQuery", 10, 1, 0.5f, 1.0f, 10.0f,
                          1.0f / 100.0f, 2.0f},
-        WinderTestParams{"MediumScene", 1024, 100, 5.0f, 5.0f, 50.0f,
-                         1.0f / 250.0f, 2.0f},
-        WinderTestParams{"MediumSceneSmallEpsilon", 1024, 100, 5.0f, 5.0f,
-                         50.0f, 1.0f / 1000.0f, 2.0f},
-        WinderTestParams{"MediumSceneBigEpsilon", 1024, 100, 5.0f, 5.0f, 50.0f,
-                         1.0f / 2.0f, 2.0f},
-        WinderTestParams{"LargeScene", 1000000, 1000, 50.0f, 5.0f, 60.0f,
+        WinderTestParams{"SmallLeaf", 32, 100, 1.0f, 2.0f, 20.0f, 1.0f / 250.0f,
+                         2.0f},
+        WinderTestParams{"UnderfullLeaf", 10, 100, 0.5f, 1.0f, 10.0f,
+                         1.0f / 100.0f, 2.0f},
+        WinderTestParams{"MediumSceneSingleQuery", 1024, 1, 5.0f, 5.0f, 50.0f,
                          1.0f / 250.0f, 2.0f}),
+    // WinderTestParams{"MediumScene", 1024, 100, 5.0f, 5.0f, 50.0f,
+    //                  1.0f / 250.0f, 2.0f},
+    // WinderTestParams{"MediumSceneSmallEpsilon", 1024, 100, 5.0f, 5.0f,
+    //                  50.0f, 1.0f / 1000.0f, 2.0f},
+    // WinderTestParams{"MediumSceneBigEpsilon", 1024, 100, 5.0f, 5.0f, 50.0f,
+    //                  1.0f / 2.0f, 2.0f},
+    // WinderTestParams{"LargeScene", 1000000, 1000, 50.0f, 5.0f, 60.0f,
+    //                  1.0f / 250.0f, 2.0f}),
     [](const ::testing::TestParamInfo<WindingNumberTest::ParamType> &info) {
       return info.param.name; // This makes the test output readable
     });

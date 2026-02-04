@@ -403,7 +403,7 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
   // DEBUG
   printf("6...\n");
   CUDA_CHECK(cudaDeviceSynchronize());
-  printf("2!\n");
+  printf("6!\n");
 
   CUDA_CHECK(cudaEventRecord(m_tree_construction_finished_event, m_stream_0));
 }

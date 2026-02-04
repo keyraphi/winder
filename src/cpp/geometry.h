@@ -72,6 +72,11 @@ struct Triangle {
 
   __host__ __device__ __forceinline__ auto
   contributionToQuery(const Vec3 &query, float inf_epsilon) const -> float;
+
+  __host__ __device__ __forceinline__ auto debug_print() const -> void {
+    printf("debug: Triangle{{%f,%f,%f}, {%f,%f,%f}, {%f,%f,%f}}\n", v0.x, v0.y,
+           v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
+  }
 };
 
 struct PointNormal {
@@ -92,6 +97,11 @@ struct PointNormal {
 
   __host__ __device__ __forceinline__ auto
   contributionToQuery(const Vec3 &query, float inv_epsilon) const -> float;
+
+  __host__ __device__ __forceinline__ auto debug_print() const -> void {
+    printf("debug: PointNormal{{%f,%f,%f}, {%f,%f,%f}}\n", p.x, p.y, p.z, n.x,
+           n.y, n.z);
+  }
 };
 
 __device__ __forceinline__ auto Triangle::load(const Triangle *base,
@@ -238,8 +248,14 @@ PointNormal::get_tailor_terms(const Vec3 &p_center, bool is_active,
 #define INV_FOUR_PI 0.07957747154F
 #define INV_TWO_PI 0.15915494309F
 
-__device__ __forceinline__ auto Triangle::contributionToQuery(
-    const Vec3 &query, [[maybe_unused]] const float unused) const -> float {
+__host__ __device__ __forceinline__ auto
+Triangle::contributionToQuery(const Vec3 &query,
+                              [[maybe_unused]] const float inv_epsilon) const
+    -> float {
+  // TODO: for gradient: this has discontinuities on the edges. Use inv_epsilon
+  // to create a regularized version:
+  // if (min_dist2 < 4.0f * eps2) {a_len =
+  //    sqrtf(a_l2 + eps2);...
   const Vec3 a = v0 - query;
   const Vec3 b = v1 - query;
   const Vec3 c = v2 - query;
@@ -249,6 +265,12 @@ __device__ __forceinline__ auto Triangle::contributionToQuery(
   const float det = a.dot(Vec3::cross(b, c));
   const float div = a_len * b_len * c_len + a.dot(b) * c_len +
                     a.dot(c) * b_len + b.dot(c) * a_len;
+
+  // Handle the singularity: atan2(0, 0) is undefined.
+  // If div is 0, we are on the boundary.
+  if (fabsf(div) < 1e-12f) {
+    return 0.5f;
+  }
   return atan2f(det, div) * INV_TWO_PI;
 }
 
@@ -265,7 +287,7 @@ __host__ __device__ __forceinline__ auto S_regularization(const float t)
   return erff(t) - (TWO_OVER_SQRT_PI * t * expf(-t * t));
 }
 
-__device__ __forceinline__ auto
+__host__ __device__ __forceinline__ auto
 PointNormal::contributionToQuery(const Vec3 &query,
                                  const float inv_epsilon) const -> float {
   // Use regularized dipole potential from:
@@ -308,8 +330,9 @@ PointNormal::contributionToQuery(const Vec3 &query,
 
 // Concept for Geometry template
 template <typename T>
-concept IsGeometry = requires(T g, Vec3 p, bool active, Vec3 &z, Mat3x3 &m,
-                              Tensor3_compressed &t, float f) {
+concept IsGeometry = requires(T g, T *gp, Vec3 p, bool active, Vec3 &z, Mat3x3 &m,
+                              Tensor3_compressed &t, float f, uint32_t u) {
+  { T::load(gp, u, u) } -> std::same_as<T>;
   { g.get_aabb() } -> std::same_as<AABB>;
   { g.centroid() } -> std::same_as<Vec3>;
   { g.get_tailor_terms(p, active, z, m, t) } -> std::same_as<void>;
