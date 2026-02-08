@@ -16,6 +16,7 @@ template <IsGeometry Geometry> struct ComputeWindingNumbersParams {
   uint32_t query_count;
   uint32_t geometry_count;
   float *winding_numbers;
+  uint32_t *global_device_counter;
   float beta;
   float epsilon;
 };

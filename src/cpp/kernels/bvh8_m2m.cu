@@ -33,13 +33,11 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
   uint32_t current_node_idx = leaf_parents[leaf_idx];
 
   while (current_node_idx != 0xFFFFFFFF) {
-    BVH8Node &node = nodes[current_node_idx];
+    BVH8Node node = nodes[current_node_idx];
     // race to the top
     uint32_t expected_children =
         node.tailor_coefficients.get_expected_children();
 
-    __threadfence(); // ensure the tailor coefficients of childs are written before continuing with the next
-    
     if (atomicAdd(&atomic_counters[current_node_idx], 1) <
         expected_children - 1) {
       return;
@@ -85,6 +83,11 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
             child_node.tailor_coefficients.get_tailor_second_order(
                 shared_scale);
       }
+
+      // TODO TEST this:
+      // do everything in fp32 (seperate array of TailorCoefficients). Only when
+      // finally stored in node quantize!
+      // TODO continue here!
 
       // Merge child coeficients into parent tailor by recentering child
       Vec3 shift_vector = child_center - parent_center; // v in equations
@@ -179,9 +182,11 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
     // store accumulated coefficients in current node (quantized)
     node.tailor_coefficients.set_tailor_coefficients(zero_order, first_order,
                                                      second_order);
+    nodes[current_node_idx] = node;
 
-    current_node_idx = internal_parent_map[current_node_idx];
-    
+    __threadfence(); // ensure the tailor coefficients of childs are written
+                     // before continuing with the next
+    current_node_idx = __ldcg(internal_parent_map + current_node_idx);
   }
 }
 

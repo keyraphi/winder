@@ -16,8 +16,6 @@
 #include <cuda_runtime_api.h>
 #include <device_atomic_functions.h>
 #include <driver_types.h>
-#include <thrust/copy.h>
-#include <thrust/device_ptr.h>
 #include <vector_functions.h>
 #include <vector_types.h>
 
@@ -68,19 +66,16 @@ void interleave_gather_geometry(const float *__restrict__ points,
 }
 
 // Longest Common Prefix for code[i] and code[j]
-__device__ inline auto delta(int i, int j, const uint32_t *__restrict__ codes,
-                             int codes_len) -> int {
+__device__ inline auto delta_with_tiebreaker(int i, int j,
+                                             const uint32_t *__restrict__ codes,
+                                             int codes_len) -> int {
   if (j < 0 || j >= codes_len) {
     return -1;
   }
-  uint32_t x = codes[i];
-  uint32_t y = codes[j];
-  if (x == y) {
-    // tie break
-    constexpr int tiebreaker_offset = 32;
-    return tiebreaker_offset + __clz(i ^ j);
-  }
-  return __clz((int)x ^ (int)y);
+  // for collisons use i j in the lsb to get unique bit patterns
+  uint64_t x = static_cast<uint64_t>(codes[i]) << 32 | static_cast<uint64_t>(i);
+  uint64_t y = static_cast<uint64_t>(codes[j]) << 32 | static_cast<uint64_t>(j);
+  return __clzll(x ^ y);
 }
 
 __global__ void build_binary_topology_kernel(
@@ -93,19 +88,21 @@ __global__ void build_binary_topology_kernel(
   }
 
   // Compute range direction (+1 or -1)
-  int direction =
-      (delta(thread_idx, thread_idx + 1, morton_codes, leaf_count) -
-           delta(thread_idx, thread_idx - 1, morton_codes, leaf_count) >=
-       0)
-          ? 1
-          : -1;
+  int direction = (delta_with_tiebreaker(thread_idx, thread_idx + 1,
+                                         morton_codes, leaf_count) -
+                       delta_with_tiebreaker(thread_idx, thread_idx - 1,
+                                             morton_codes, leaf_count) >=
+                   0)
+                      ? 1
+                      : -1;
 
   // find bit position where prefix change happens (full node)
-  int parent_prefix =
-      delta(thread_idx, thread_idx - direction, morton_codes, leaf_count);
+  int parent_prefix = delta_with_tiebreaker(thread_idx, thread_idx - direction,
+                                            morton_codes, leaf_count);
   int node_end_bit_mask = 2;
-  while (delta(thread_idx, thread_idx + node_end_bit_mask * direction,
-               morton_codes, leaf_count) > parent_prefix) {
+  while (delta_with_tiebreaker(thread_idx,
+                               thread_idx + node_end_bit_mask * direction,
+                               morton_codes, leaf_count) > parent_prefix) {
     node_end_bit_mask *= 2;
   }
 
@@ -113,16 +110,18 @@ __global__ void build_binary_topology_kernel(
   int total_idx_range_length = 0;
   for (int search_step = node_end_bit_mask / 2; search_step >= 1;
        search_step /= 2) {
-    if (delta(thread_idx,
-              thread_idx + (total_idx_range_length + search_step) * direction,
-              morton_codes, leaf_count) > parent_prefix) {
+    if (delta_with_tiebreaker(
+            thread_idx,
+            thread_idx + (total_idx_range_length + search_step) * direction,
+            morton_codes, leaf_count) > parent_prefix) {
       total_idx_range_length += search_step;
     }
   }
   int range_end = (int)thread_idx + total_idx_range_length * direction;
 
   // Find the split point. Index where bit flip happens inside the node.
-  int node_prefix = delta(thread_idx, range_end, morton_codes, leaf_count);
+  int node_prefix =
+      delta_with_tiebreaker(thread_idx, range_end, morton_codes, leaf_count);
   int split_offset = 0;
 
   // start with largest power of 2 smaller than total_idx_range_length
@@ -130,8 +129,9 @@ __global__ void build_binary_topology_kernel(
   for (; search_step >= 1; search_step >>= 1) {
     int candidate_offset = split_offset + search_step;
     if (candidate_offset < total_idx_range_length) {
-      if (delta(thread_idx, thread_idx + candidate_offset * direction,
-                morton_codes, leaf_count) > node_prefix) {
+      if (delta_with_tiebreaker(thread_idx,
+                                thread_idx + candidate_offset * direction,
+                                morton_codes, leaf_count) > node_prefix) {
         split_offset = candidate_offset;
       }
     }
@@ -150,7 +150,6 @@ __global__ void build_binary_topology_kernel(
       (max((int)thread_idx, range_end) == split_idx + 1)
           ? (split_idx + 1 + (leaf_count - 1)) // its a leaf node
           : (split_idx + 1); // this node is responsible for the right side
-
   // store childs of this node
   nodes[thread_idx].left_child = left_node_idx;
   nodes[thread_idx].right_child = right_node_idx;
@@ -176,8 +175,7 @@ void build_binary_topology(const uint32_t *__restrict__ morton_codes,
   }
 
   // the root node gets a unique value for its parent
-  uint32_t root_parent = 0xFFFFFFFF;
-  thrust::copy_n(&root_parent, 1, thrust::device_pointer_cast(parents));
+  CUDA_CHECK(cudaMemsetAsync(parents, 0xFF, sizeof(uint32_t), stream));
 }
 
 __device__ __forceinline__ auto warp_reduce_add_down(float val) -> float {
@@ -205,7 +203,7 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
   Geometry geometry =
       Geometry::load(sorted_geometry, geometry_idx, geometry_count);
 
-  // Compute AABB
+  // Compute AABB for leaf
   bool is_thread_active = geometry_idx < geometry_count;
   AABB geometry_aabb;
   Vec3 center_of_mass;
@@ -245,21 +243,24 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
         fmaxf(dist_to_com, __shfl_xor_sync(0xFFFFFFFF, dist_to_com, offset));
   }
   // write aggregated AABB for leaf
-  if (lane_id == 0) {
-    binary_aabbs[leaf_idx + leaf_count - 1].min = p_min;
-    binary_aabbs[leaf_idx + leaf_count - 1].max = p_max;
-    Vec3 diagonal = p_max - p_min;
-    Vec3 inv_extend = 1.F / diagonal;
-    float inv_diagonal_length = 1.F / diagonal.length2();
-    binary_aabbs[leaf_idx + leaf_count - 1].center_of_mass.set(
-        center_of_mass, p_min, inv_extend);
-    binary_aabbs[leaf_idx + leaf_count - 1].center_of_mass.setMaxDistance(
-        dist_to_com, inv_diagonal_length);
-    leaf_coefficients[leaf_idx].center_of_mass.set(center_of_mass, p_min,
-                                                   inv_extend);
-    leaf_coefficients[leaf_idx].center_of_mass.setMaxDistance(
-        dist_to_com, inv_diagonal_length);
-  }
+  binary_aabbs[leaf_idx + leaf_count - 1].min = p_min;
+  binary_aabbs[leaf_idx + leaf_count - 1].max = p_max;
+  Vec3 diagonal = p_max - p_min;
+  Vec3 inv_extend = 1.F / diagonal;
+  float inv_diagonal_length = 1.F / diagonal.length2();
+  binary_aabbs[leaf_idx + leaf_count - 1].center_of_mass.set(center_of_mass,
+                                                             p_min, inv_extend);
+  binary_aabbs[leaf_idx + leaf_count - 1].center_of_mass.setMaxDistance(
+      dist_to_com, inv_diagonal_length);
+  leaf_coefficients[leaf_idx].center_of_mass.set(center_of_mass, p_min,
+                                                 inv_extend);
+  leaf_coefficients[leaf_idx].center_of_mass.setMaxDistance(
+      dist_to_com, inv_diagonal_length);
+
+  // Make sure the quantized center of mask is the actual position for which we
+  // compute the tailor coefficients
+  center_of_mass =
+      leaf_coefficients[leaf_idx].center_of_mass.get(p_min, diagonal);
 
   // Compute tailor coefficients
   Vec3 zero_order;
@@ -296,7 +297,7 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
     leaf_coefficients[leaf_idx].zero_order = zero_order;
   }
 
-  // aggregate first order
+// aggregate first order
 #pragma unroll
   for (int i = 0; i < 9; ++i) {
     first_order.data[i] = warp_reduce_add_down(first_order.data[i]);
@@ -305,7 +306,7 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
   if (lane_id == 0) {
     leaf_coefficients[leaf_idx].first_order = first_order;
   }
-  // aggregate second order
+// aggregate second order
 #pragma unroll
   for (int i = 0; i < 18; ++i) {
     second_order.data[i] = warp_reduce_add_down(second_order.data[i]);
@@ -326,44 +327,52 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
     }
 
     // race to top
+    cuda::atomic_thread_fence(cuda::memory_order_seq_cst,
+                              cuda::thread_scope_device);
     // get number of elements in other child of current parent
-    uint32_t geo_count_left_child =
+    uint32_t geo_count_other_child =
         atomicAdd(&atomic_counters[current_parent_idx], geo_count_in_leaf);
-    if (geo_count_left_child == 0) {
-      return;
+    if (geo_count_other_child == 0) {
+      return; // this subtree arived first and is done
     }
-    uint32_t geo_countr_right_child = geo_count_in_leaf;
+    uint32_t geo_count_my_child = geo_count_in_leaf;
 
     while (current_parent_idx != 0xFFFFFFFF) {
       BinaryNode parent_node = binary_nodes[current_parent_idx];
 
+      uint32_t geo_count_left_child;
+      uint32_t geo_count_right_child;
       if (parent_node.left_child == current_idx) {
-        uint32_t tmp = geo_count_left_child;
-        geo_count_left_child = geo_countr_right_child;
-        geo_countr_right_child = tmp;
+        // I am the left child
+        geo_count_left_child = geo_count_my_child;
+        geo_count_right_child = geo_count_other_child;
+      } else {
+        // I am the right child
+        geo_count_left_child = geo_count_other_child;
+        geo_count_right_child = geo_count_my_child;
       }
 
       // merge child aabbs
       binary_aabbs[current_parent_idx] =
           AABB::merge(binary_aabbs[parent_node.left_child],
                       binary_aabbs[parent_node.right_child],
-                      geo_count_left_child, geo_countr_right_child); // TODO instead of count use summed area
+                      geo_count_left_child, geo_count_right_child);
       // make sure that aabb has been written before the counter is incremented
-      cuda::atomic_thread_fence(cuda::memory_order_seq_cst,
-                                cuda::thread_scope_device);
+      __threadfence();
 
       // Move up to the next level
       uint32_t next_parent = binary_parents[current_parent_idx];
       if (next_parent == 0xFFFFFFFF) {
         return;
       }
-      geo_countr_right_child += geo_count_left_child; // new count for this node
-      geo_count_left_child =
+      geo_count_my_child += geo_count_other_child; // new count for this node
+      geo_count_other_child =
           atomicAdd(&atomic_counters[next_parent],
-                    geo_countr_right_child); // count from other node
-      if (geo_count_left_child == 0) {
+                    geo_count_my_child); // count from other node
+      if (geo_count_other_child == 0) {
         return;
       }
+      current_idx = current_parent_idx;
       current_parent_idx = next_parent;
     }
   }

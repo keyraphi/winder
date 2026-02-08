@@ -1,4 +1,5 @@
 #pragma once
+#include "aabb.h"
 #include "mat3x3.h"
 #include "tailor_coefficients.h"
 #include "tensor3.h"
@@ -13,11 +14,11 @@ should_leaf_node_be_aproximated(const Vec3 &query, const AABB &leaf_aabb,
   // Conservative assumption:
   // center of mass is at the aabb corner with the greatest distance.
   float dx =
-      fmaxf(0.0f, fmaxf(leaf_aabb.min.x - query.x, query.x - leaf_aabb.max.x));
+      fmaxf(0.F, fmaxf(leaf_aabb.min.x - query.x, query.x - leaf_aabb.max.x));
   float dy =
-      fmaxf(0.0f, fmaxf(leaf_aabb.min.y - query.y, query.y - leaf_aabb.max.y));
+      fmaxf(0.F, fmaxf(leaf_aabb.min.y - query.y, query.y - leaf_aabb.max.y));
   float dz =
-      fmaxf(0.0f, fmaxf(leaf_aabb.min.z - query.z, query.z - leaf_aabb.max.z));
+      fmaxf(0.F, fmaxf(leaf_aabb.min.z - query.z, query.z - leaf_aabb.max.z));
   float dist_sq_to_box_corner = dx * dx + dy * dy + dz * dz;
 
   // The maximum possible radius within an AABB relative to ANY center of mass
@@ -32,8 +33,10 @@ should_inner_node_be_aproximated(const Vec3 &query, const AABB &aabb,
                                  const float beta_2) -> bool {
   float max_distance_to_center =
       aabb.center_of_mass.getMaxDistance(aabb.diagonal().length());
-  return (query - aabb.center_of_mass.get(aabb.min, aabb.diagonal()))
-             .length2() >
+  Vec3 com = aabb.center_of_mass.get(aabb.min, aabb.diagonal());
+  float dist_query_to_com2 = (query - com).length2();
+
+  return dist_query_to_com2 >
          max_distance_to_center * max_distance_to_center * beta_2;
 }
 
@@ -414,8 +417,7 @@ __device__ __forceinline__ auto compute_node_approximation(
   // 1/(4*pi)
   float inv_4pi = (0.07957747154F);
 
-  float inv_4_pi_normr3 =
-      inv_4pi * inv_norm_r3; // Doublecheck this might have to be a * instead!
+  float inv_4_pi_normr3 = inv_4pi * inv_norm_r3;
   float inv_4_pi_normr5 = (3.F) * inv_4pi * inv_norm_r5;
   float inv_4_pi_normr7 = (15.F) * inv_4pi * inv_norm_r7;
 
@@ -430,6 +432,5 @@ __device__ __forceinline__ auto compute_node_approximation(
   // Second order
   result += computeSecondOrderContribution(second_order_coeff, r_bf16,
                                            inv_4_pi_normr5, inv_4_pi_normr7);
-
   return result;
 }

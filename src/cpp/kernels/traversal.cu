@@ -11,6 +11,7 @@
 #include <cooperative_groups.h>
 #include <cooperative_groups/scan.h>
 #include <cstdint>
+#include <cstdio>
 #include <cub/block/block_scan.cuh>
 #include <cub/util_type.cuh>
 #include <cuda_device_runtime_api.h>
@@ -64,7 +65,8 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
     const BVH8Node *bvh8_nodes, const LeafPointers *bvh8_leaf_pointers,
     const TailorCoefficientsBf16 *leaf_coefficients,
     const Geometry *sorted_geometry, const uint32_t query_count,
-    const uint32_t geometry_count, float *winding_numbers, const float beta_2,
+    const uint32_t geometry_count, float *winding_numbers,
+    uint32_t *global_device_counter, const float beta_2,
     const float inv_epsilon) {
 
   const uint32_t warp_id = threadIdx.x / 32;
@@ -77,8 +79,6 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
   __shared__ uint32_t shared_stack[4][64];
   __shared__ BVH8Node current_node_cache[4];
   __shared__ LeafPointers shared_leaf_ptrs[4];
-
-  static __device__ uint32_t global_device_idx = 0;
   __shared__ uint32_t tile_base;
 
   while (true) {
@@ -86,7 +86,7 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
     // Dynamic work balancing. Not all blocks will need the same amount of time
     // for their queries
     if (threadIdx.x == 0) {
-      tile_base = atomicAdd(&global_device_idx, blockDim.x);
+      tile_base = atomicAdd(global_device_counter, blockDim.x);
     }
     __syncthreads();
 
@@ -118,7 +118,7 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
       shared_stack[warp_id][stack_ptr++] = 0;
     }
 
-    // Do traversal
+    // Do traversal as full warps
     while (true) {
       // Check if stack is empty
       uint32_t stack_not_empty_mask = __ballot_sync(0xFFFFFFFF, stack_ptr > 0);
@@ -133,6 +133,9 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
       }
       // share current_node_idx with the rest
       current_node_idx = __shfl_sync(0xFFFFFFFF, current_node_idx, 0);
+      float current_node_approx = 0.f;     // DEBUG
+      float current_node_detail = 0.f;     // DEBUG
+      bool is_current_node_approx = false; // DEBUG
       // load current node to shared cache
       load_shared_cooperative<BVH8Node>(&current_node_cache[warp_id],
                                         bvh8_nodes + current_node_idx, lane_id);
@@ -151,8 +154,11 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
 
       // process current node
       // Check the nodes parent_aabb. If it is too far away
-      if (is_active && should_inner_node_be_aproximated(
-                           my_query, current_node.parent_aabb, beta_2)) {
+      // if (is_active &&
+      //     should_inner_node_be_aproximated(my_query,
+      //     current_node.parent_aabb,
+      //                                      beta_2)) {
+      if (my_query_idx == 0 && is_active) {
         // Get tailor_coefficients
         float scale_factor =
             current_node.tailor_coefficients.get_shared_scale_factor();
@@ -170,15 +176,20 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
                 scale_factor);
 
         // Do actual approximation
-        my_winding_number += compute_node_approximation(
+        float approx_contribution = compute_node_approximation(
             my_query,
             current_node.parent_aabb.center_of_mass.get(
                 current_node.parent_aabb.min,
                 current_node.parent_aabb.diagonal()),
             zero_order_coeff, first_order_coeff, second_order_coeff);
+        // my_winding_number += approx_contribution;  DEBUG
+        current_node_approx += approx_contribution;
+        is_current_node_approx =
+            is_active && should_inner_node_be_aproximated(
+                             my_query, current_node.parent_aabb, beta_2);
 
         // Remember that I have the full contribution of this node already.
-        my_required_stack_depth = stack_ptr;
+        // my_required_stack_depth = stack_ptr;  DEBUG
       }
       bool is_still_active = my_required_stack_depth > stack_ptr;
       uint32_t interest_mask = __ballot_sync(0xFFFFFFFF, is_still_active);
@@ -190,7 +201,7 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
       bool is_leaf = lane_id < 8
                          ? current_node.getChildMeta(lane_id) == ChildType::LEAF
                          : false;
-      bool leaf_mask = __ballot_sync(0x000000FF, is_leaf);
+      uint32_t leaf_mask = __ballot_sync(0xFFFFFFFF, is_leaf);
       if (leaf_mask > 0) {
         load_shared_cooperative(&shared_leaf_ptrs[warp_id],
                                 &bvh8_leaf_pointers[current_node_idx], lane_id);
@@ -211,7 +222,7 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
               current_node.parent_aabb,
               current_node.child_aabb_approx[child_idx]);
           bool is_detail_eval_needed = true;
-          if (is_still_active &&
+          if (false && is_still_active &&
               should_leaf_node_be_aproximated(my_query, child_aabb, beta_2)) {
             // load leaf tailor coefficient from global memory
             // 60 bytes
@@ -221,11 +232,12 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
             const Vec3 leaf_center_of_mass =
                 current_leaf_coefficients.center_of_mass.get(
                     child_aabb.min, child_aabb.diagonal());
-            my_winding_number += compute_node_approximation(
+            float approx_contribution = compute_node_approximation(
                 my_query, leaf_center_of_mass,
                 current_leaf_coefficients.zero_order,
                 current_leaf_coefficients.first_order,
                 current_leaf_coefficients.second_order);
+            my_winding_number += approx_contribution;
             is_detail_eval_needed = false;
           }
           uint32_t detailed_leaf_evaluation_mask = __ballot_sync(
@@ -268,6 +280,9 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
             // only leader adds that contribution
             if ((int)lane_id == current_leader) {
               my_winding_number += total_contribution;
+              if (my_query_idx == 0) {
+                current_node_detail += total_contribution;
+              }
             }
           }
         } else {
@@ -280,6 +295,22 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
           }
         }
       } // child for
+      if (my_query_idx == 0) {
+        float abs_diff = fabs(current_node_approx - current_node_detail);
+        if (is_current_node_approx && abs_diff > 1e-4f) {
+          printf("DEBUG: node %u: approx: %e, detail: %e, diff: %e\n",
+                 current_node_idx, current_node_approx, current_node_detail,
+                 current_node_approx - current_node_detail);
+          printf("    query (%f,%f,%f), node AABB: {(%f,%f,%f), (%f,%f,%f)}\n", my_query.x, my_query.y, my_query.z,
+                 current_node.parent_aabb.min.x,
+                 current_node.parent_aabb.min.y,
+                 current_node.parent_aabb.min.z,
+                 current_node.parent_aabb.max.x,
+                 current_node.parent_aabb.max.y,
+                 current_node.parent_aabb.max.z
+                 );
+        }
+      }
     } // traversal while
     // winding number computation is complete
     if (my_required_stack_depth >= 0) {
@@ -338,9 +369,6 @@ void compute_winding_numbers(
   if (params.geometry_count <= 32) {
     uint32_t threads = 256;
     uint32_t blocks = (params.query_count + threads - 1) / threads;
-    printf("DEBUG: running compute_winding_numbers_single_leaf_kernel for %u "
-           "queries and %u elements\n",
-           params.query_count, params.geometry_count);
     compute_winding_numbers_single_leaf_kernel<Geometry>
         <<<blocks, threads, 0, stream>>>(
             params.queries, params.sort_indirections, params.sorted_geometry,
@@ -354,6 +382,12 @@ void compute_winding_numbers(
   int threads = 128;
   int blocks_per_sm = 0;
 
+  // Set global counter to 0
+  uint32_t global_device_counter_reset = 0;
+  CUDA_CHECK(cudaMemcpyAsync(params.global_device_counter,
+                             &global_device_counter_reset, sizeof(uint32_t),
+                             cudaMemcpyHostToDevice, stream));
+
   cudaOccupancyMaxActiveBlocksPerMultiprocessor(
       &blocks_per_sm, compute_winding_numbers_kernel<Geometry>, threads, 0);
 
@@ -361,11 +395,14 @@ void compute_winding_numbers(
   cudaGetDeviceProperties(&deviceProp, device_id);
   int blocks = blocks_per_sm * deviceProp.multiProcessorCount;
 
+  printf("DEBUG: calling compute_winding_numbers_kernel with beta_2 = %f\n",
+         beta_2);
   compute_winding_numbers_kernel<Geometry><<<blocks, threads, 0, stream>>>(
       params.queries, params.sort_indirections, params.bvh8_nodes,
       params.bvh8_leaf_pointers, params.leaf_coefficients,
       params.sorted_geometry, params.query_count, params.geometry_count,
-      params.winding_numbers, beta_2, inv_epsilon);
+      params.winding_numbers, params.global_device_counter, beta_2,
+      inv_epsilon);
   CUDA_CHECK(cudaGetLastError());
 }
 

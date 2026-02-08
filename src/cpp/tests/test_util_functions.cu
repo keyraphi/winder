@@ -4,6 +4,7 @@
 #include "geometry.h"
 #include "kernels/common.cuh"
 #include "kernels/node_approx.cuh"
+#include "kernels/build_binary_tree.cuh"
 #include "mat3x3.h"
 #include "tailor_coefficients.h"
 #include "tensor3.h"

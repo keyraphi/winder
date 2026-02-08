@@ -8,6 +8,7 @@
 #include <cooperative_groups.h>
 #include <cooperative_groups/scan.h>
 #include <cstdint>
+#include <cstdio>
 #include <cub/block/block_scan.cuh>
 #include <cub/util_type.cuh>
 #include <cuda_device_runtime_api.h>
@@ -49,8 +50,6 @@ convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
     grid.sync();
 
     // level_width could be > number of threads in grid
-    // for (uint32_t idx = grid.thread_rank(); idx < current_level_width;
-    //      idx += grid.size()) {
     uint32_t level_width_blocks =
         (current_level_width + blockDim.x - 1) / blockDim.x;
     for (uint32_t idx = grid.thread_rank();
@@ -179,7 +178,7 @@ convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
             uint32_t next_bvh8_idx = my_child_base + internal_found;
 
             // The work_queue_out points to the inner BinaryNode that must be
-            // turned into BVH8Node in the next kernel call
+            // turned into BVH8Node in the next iteration
             work_queue_out[global_base + thread_offset + internal_found] =
                 binary_child_idx;
 
@@ -211,7 +210,7 @@ convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
     }
     // level synchronization
     grid.sync();
-    uint32_t next_level_width = *(params.global_counter);
+    uint32_t next_level_width = __ldcg(params.global_counter);
     current_level_offset += current_level_width;
     current_level_width = next_level_width;
     level_iteration++;
