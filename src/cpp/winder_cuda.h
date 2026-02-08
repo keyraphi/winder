@@ -42,21 +42,22 @@ struct CudaDeleter {
 
 template <typename T> using CudaUniquePtr = std::unique_ptr<T[], CudaDeleter>;
 
-
 template <IsGeometry Geometry> class WinderBackend {
 
 public:
   ~WinderBackend();
 
   static auto CreateFromMesh(const float *triangles, size_t triangle_count,
-                             int device_id) -> std::unique_ptr<WinderBackend<Triangle>>;
+                             int device_id)
+      -> std::unique_ptr<WinderBackend<Triangle>>;
 
   static auto CreateFromPoints(const float *points, const float *scaled_normals,
                                size_t point_count, int device_id)
       -> std::unique_ptr<WinderBackend<PointNormal>>;
 
   static auto CreateForSolver(const float *points, size_t point_count,
-                              int device_id) -> std::unique_ptr<WinderBackend<PointNormal>>;
+                              int device_id)
+      -> std::unique_ptr<WinderBackend<PointNormal>>;
 
   auto compute(const float *queries, size_t query_count, float beta = -1,
                float epsilon = -1, size_t stream = 0) const
@@ -89,12 +90,12 @@ private:
   cudaEvent_t m_tree_construction_finished_event;
   thrust::cuda_cub::execute_on_stream m_stream_0_policy;
   thrust::cuda_cub::execute_on_stream m_stream_1_policy;
-  uint32_t m_bvh8_node_count;
 
   // Private constructor used in factories. Allocates vectors but doesn't fill
   // them yet
   WinderBackend(size_t size, int device_id);
 
+public: // TODO DEBUG
   // memory arena on gpu
   uint8_t *m_memory_arena;
 
@@ -119,6 +120,8 @@ private:
   AABB *m_binary_aabbs;        // [2L-1] AABBs for all binary nodes/leaves
   uint32_t *m_atomic_counters; // [L-1] Counters for thread synchronization
                                // during AABB/M2M climb
+  uint32_t
+      *m_bvh8_node_count; // [1] number of bvh8 nodes created during conversion
 
   // --- BVH8 Tree Structure (Final Output) ---
   BVH8Node *m_bvh8_nodes; // [~0.2L] The 8-way wide-tree nodes (Quantized AABBs
@@ -139,6 +142,7 @@ private:
   uint32_t *m_global_counter;    // [1] Atomic counter for work queue management
                                  // and node allocation
 
+private: // TODO DEBUG
   // private helpers
   template <IsPrimitiveGeometry PrimitiveGeometry>
   auto initializeMortonCodes(const PrimitiveGeometry *geometry) -> void;

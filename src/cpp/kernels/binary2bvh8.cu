@@ -221,6 +221,9 @@ convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
     grid.sync();
 
     if (current_level_width == 0) {
+      if (grid.thread_rank() == 0) {
+        *params.bvh8_node_count = current_level_offset;
+      }
       break;
     }
   }
@@ -232,9 +235,7 @@ void convert_binary_tree_to_bvh8(ConvertBinary2BVH8Params params,
   if (params.leaf_count <= 1) {
     if (params.leaf_count == 1) {
       // The only leaf has no parent.
-      uint32_t sentinel = 0xFFFFFFFF;
-      cudaMemcpyAsync(params.bvh8_leaf_parents, &sentinel, sizeof(uint32_t),
-                      cudaMemcpyHostToDevice, stream);
+      cudaMemsetAsync(params.bvh8_leaf_parents, 0xFF, sizeof(uint32_t), stream);
     }
     return;
   }
@@ -252,7 +253,6 @@ void convert_binary_tree_to_bvh8(ConvertBinary2BVH8Params params,
   if (!deviceProp.cooperativeLaunch) {
     throw std::runtime_error("Device does not support Cooperative Launch");
   }
-
   void *args[] = {&params};
   cudaLaunchCooperativeKernel((void *)convert_binary_tree_to_bvh8_kernel,
                               blocks, threads, args, 0, stream);

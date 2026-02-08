@@ -18,6 +18,7 @@ struct ConvertBinary2BVH8Params {
   uint32_t *bvh8_leaf_parents;
   BVH8Node *bvh8_nodes;
   LeafPointers *bvh8_leaf_pointers;
+  uint32_t *bvh8_node_count;
 };
 
 void convert_binary_tree_to_bvh8(ConvertBinary2BVH8Params params, int device_id,

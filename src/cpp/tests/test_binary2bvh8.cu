@@ -18,6 +18,7 @@
 #include <device_atomic_functions.h>
 #include <driver_types.h>
 #include <gtest/gtest.h>
+#include <thrust/detail/raw_pointer_cast.h>
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
 #include <thrust/sequence.h>
@@ -67,17 +68,20 @@ TEST(BVH8Conversion, BalancedCollapse) {
   thrust::device_vector<uint32_t> d_leaf_parents(leaf_count, 0);
   thrust::device_vector<BVH8Node> d_bvh8_nodes(leaf_count);
   thrust::device_vector<LeafPointers> d_leaf_pointers(leaf_count);
+  thrust::device_vector<uint32_t> d_bvh8_node_count(1);
 
-  ConvertBinary2BVH8Params p{thrust::raw_pointer_cast(d_qA.data()),
-                             thrust::raw_pointer_cast(d_qB.data()),
-                             thrust::raw_pointer_cast(d_int_parents.data()),
-                             thrust::raw_pointer_cast(d_counter.data()),
-                             leaf_count,
-                             thrust::raw_pointer_cast(d_bin_aabbs.data()),
-                             thrust::raw_pointer_cast(d_bin_nodes.data()),
-                             thrust::raw_pointer_cast(d_leaf_parents.data()),
-                             thrust::raw_pointer_cast(d_bvh8_nodes.data()),
-                             thrust::raw_pointer_cast(d_leaf_pointers.data())};
+  ConvertBinary2BVH8Params p{
+      thrust::raw_pointer_cast(d_qA.data()),
+      thrust::raw_pointer_cast(d_qB.data()),
+      thrust::raw_pointer_cast(d_int_parents.data()),
+      thrust::raw_pointer_cast(d_counter.data()),
+      leaf_count,
+      thrust::raw_pointer_cast(d_bin_aabbs.data()),
+      thrust::raw_pointer_cast(d_bin_nodes.data()),
+      thrust::raw_pointer_cast(d_leaf_parents.data()),
+      thrust::raw_pointer_cast(d_bvh8_nodes.data()),
+      thrust::raw_pointer_cast(d_leaf_pointers.data()),
+      thrust::raw_pointer_cast(d_bvh8_node_count.data())};
   // 3. Launch (Note: Requires Cooperative Launch support on GPU)
   convert_binary_tree_to_bvh8(p, 0);
   // 4. Detailed Verification
@@ -149,7 +153,7 @@ TEST(BVH8Conversion, UniformLinearLeaves) {
   // Bottom-up manual refit for internal nodes
   for (int i = internal_count - 1; i >= 0; --i) {
     h_bin_aabbs[i] = AABB::merge(h_bin_aabbs[h_bin_nodes[i].left_child],
-                               h_bin_aabbs[h_bin_nodes[i].right_child]);
+                                 h_bin_aabbs[h_bin_nodes[i].right_child]);
   }
 
   // Setup BVH8 Params
@@ -162,17 +166,20 @@ TEST(BVH8Conversion, UniformLinearLeaves) {
   thrust::device_vector<uint32_t> d_leaf_parents(leaf_count, 0);
   thrust::device_vector<BVH8Node> d_bvh8_nodes(leaf_count);
   thrust::device_vector<LeafPointers> d_leaf_pointers(leaf_count);
+  thrust::device_vector<uint32_t> d_bvh8_node_count(1);
 
-  ConvertBinary2BVH8Params p{thrust::raw_pointer_cast(d_qA.data()),
-                             thrust::raw_pointer_cast(d_qB.data()),
-                             thrust::raw_pointer_cast(d_int_parents.data()),
-                             thrust::raw_pointer_cast(d_counter.data()),
-                             leaf_count,
-                             thrust::raw_pointer_cast(d_bin_aabbs.data()),
-                             thrust::raw_pointer_cast(d_bin_nodes.data()),
-                             thrust::raw_pointer_cast(d_leaf_parents.data()),
-                             thrust::raw_pointer_cast(d_bvh8_nodes.data()),
-                             thrust::raw_pointer_cast(d_leaf_pointers.data())};
+  ConvertBinary2BVH8Params p{
+      thrust::raw_pointer_cast(d_qA.data()),
+      thrust::raw_pointer_cast(d_qB.data()),
+      thrust::raw_pointer_cast(d_int_parents.data()),
+      thrust::raw_pointer_cast(d_counter.data()),
+      leaf_count,
+      thrust::raw_pointer_cast(d_bin_aabbs.data()),
+      thrust::raw_pointer_cast(d_bin_nodes.data()),
+      thrust::raw_pointer_cast(d_leaf_parents.data()),
+      thrust::raw_pointer_cast(d_bvh8_nodes.data()),
+      thrust::raw_pointer_cast(d_leaf_pointers.data()),
+      thrust::raw_pointer_cast(d_bvh8_node_count.data())};
   // Launch (Note: Requires Cooperative Launch support on GPU)
   convert_binary_tree_to_bvh8(p, 0);
   // Detailed Verification
@@ -256,17 +263,20 @@ TEST(BVH8Conversion, NonUniformHeuristic) {
   thrust::device_vector<uint32_t> d_leaf_parents(leaf_count, 0);
   thrust::device_vector<BVH8Node> d_bvh8_nodes(leaf_count);
   thrust::device_vector<LeafPointers> d_leaf_pointers(leaf_count);
+  thrust::device_vector<uint32_t> d_bvh8_node_count(1);
 
-  ConvertBinary2BVH8Params p{thrust::raw_pointer_cast(d_qA.data()),
-                             thrust::raw_pointer_cast(d_qB.data()),
-                             thrust::raw_pointer_cast(d_int_parents.data()),
-                             thrust::raw_pointer_cast(d_counter.data()),
-                             leaf_count,
-                             thrust::raw_pointer_cast(d_bin_aabbs.data()),
-                             thrust::raw_pointer_cast(d_bin_nodes.data()),
-                             thrust::raw_pointer_cast(d_leaf_parents.data()),
-                             thrust::raw_pointer_cast(d_bvh8_nodes.data()),
-                             thrust::raw_pointer_cast(d_leaf_pointers.data())};
+  ConvertBinary2BVH8Params p{
+      thrust::raw_pointer_cast(d_qA.data()),
+      thrust::raw_pointer_cast(d_qB.data()),
+      thrust::raw_pointer_cast(d_int_parents.data()),
+      thrust::raw_pointer_cast(d_counter.data()),
+      leaf_count,
+      thrust::raw_pointer_cast(d_bin_aabbs.data()),
+      thrust::raw_pointer_cast(d_bin_nodes.data()),
+      thrust::raw_pointer_cast(d_leaf_parents.data()),
+      thrust::raw_pointer_cast(d_bvh8_nodes.data()),
+      thrust::raw_pointer_cast(d_leaf_pointers.data()),
+      thrust::raw_pointer_cast(d_bvh8_node_count.data())};
   // Launch (Note: Requires Cooperative Launch support on GPU)
   convert_binary_tree_to_bvh8(p, 0);
   // Detailed Verification
@@ -324,8 +334,8 @@ TEST(BVH8Conversion, DegeneratePointCluster64) {
   uint32_t max_bvh8_nodes =
       (leaf_count <= 1) ? 0 : (uint32_t)ceil(leaf_count * 0.2F) + 1;
   // Setup BVH8 Params
-  thrust::device_vector<uint32_t> d_qA(leaf_count -1, 0);
-  thrust::device_vector<uint32_t> d_qB(leaf_count -1, 0);
+  thrust::device_vector<uint32_t> d_qA(leaf_count - 1, 0);
+  thrust::device_vector<uint32_t> d_qB(leaf_count - 1, 0);
   thrust::device_vector<uint32_t> d_int_parents(max_bvh8_nodes, 0);
   thrust::device_vector<uint32_t> d_counter(1, 0);
   thrust::device_vector<BinaryNode> d_bin_nodes = h_bin_nodes;
@@ -333,17 +343,20 @@ TEST(BVH8Conversion, DegeneratePointCluster64) {
   thrust::device_vector<uint32_t> d_leaf_parents(leaf_count, 0);
   thrust::device_vector<BVH8Node> d_bvh8_nodes(max_bvh8_nodes);
   thrust::device_vector<LeafPointers> d_leaf_pointers(leaf_count);
+  thrust::device_vector<uint32_t> d_bvh8_node_count(1);
 
-  ConvertBinary2BVH8Params p{thrust::raw_pointer_cast(d_qA.data()),
-                             thrust::raw_pointer_cast(d_qB.data()),
-                             thrust::raw_pointer_cast(d_int_parents.data()),
-                             thrust::raw_pointer_cast(d_counter.data()),
-                             leaf_count,
-                             thrust::raw_pointer_cast(d_bin_aabbs.data()),
-                             thrust::raw_pointer_cast(d_bin_nodes.data()),
-                             thrust::raw_pointer_cast(d_leaf_parents.data()),
-                             thrust::raw_pointer_cast(d_bvh8_nodes.data()),
-                             thrust::raw_pointer_cast(d_leaf_pointers.data())};
+  ConvertBinary2BVH8Params p{
+      thrust::raw_pointer_cast(d_qA.data()),
+      thrust::raw_pointer_cast(d_qB.data()),
+      thrust::raw_pointer_cast(d_int_parents.data()),
+      thrust::raw_pointer_cast(d_counter.data()),
+      leaf_count,
+      thrust::raw_pointer_cast(d_bin_aabbs.data()),
+      thrust::raw_pointer_cast(d_bin_nodes.data()),
+      thrust::raw_pointer_cast(d_leaf_parents.data()),
+      thrust::raw_pointer_cast(d_bvh8_nodes.data()),
+      thrust::raw_pointer_cast(d_leaf_pointers.data()),
+      thrust::raw_pointer_cast(d_bvh8_node_count.data())};
   // Launch (Note: Requires Cooperative Launch support on GPU)
   convert_binary_tree_to_bvh8(p, 0);
   thrust::host_vector<BVH8Node> h_bvh8 = d_bvh8_nodes;
@@ -391,17 +404,20 @@ TEST(BVH8Conversion, SingleLeafBaseCase) {
   thrust::device_vector<uint32_t> d_leaf_parents(leaf_count, 0);
   thrust::device_vector<BVH8Node> d_bvh8_nodes(0);
   thrust::device_vector<LeafPointers> d_leaf_pointers(0);
+  thrust::device_vector<uint32_t> d_bvh8_node_count(1);
 
-  ConvertBinary2BVH8Params p{thrust::raw_pointer_cast(d_qA.data()),
-                             thrust::raw_pointer_cast(d_qB.data()),
-                             thrust::raw_pointer_cast(d_int_parents.data()),
-                             thrust::raw_pointer_cast(d_counter.data()),
-                             leaf_count,
-                             thrust::raw_pointer_cast(d_bin_aabbs.data()),
-                             thrust::raw_pointer_cast(d_bin_nodes.data()),
-                             thrust::raw_pointer_cast(d_leaf_parents.data()),
-                             thrust::raw_pointer_cast(d_bvh8_nodes.data()),
-                             thrust::raw_pointer_cast(d_leaf_pointers.data())};
+  ConvertBinary2BVH8Params p{
+      thrust::raw_pointer_cast(d_qA.data()),
+      thrust::raw_pointer_cast(d_qB.data()),
+      thrust::raw_pointer_cast(d_int_parents.data()),
+      thrust::raw_pointer_cast(d_counter.data()),
+      leaf_count,
+      thrust::raw_pointer_cast(d_bin_aabbs.data()),
+      thrust::raw_pointer_cast(d_bin_nodes.data()),
+      thrust::raw_pointer_cast(d_leaf_parents.data()),
+      thrust::raw_pointer_cast(d_bvh8_nodes.data()),
+      thrust::raw_pointer_cast(d_leaf_pointers.data()),
+      thrust::raw_pointer_cast(d_bvh8_node_count.data())};
   // Launch (Note: Requires Cooperative Launch support on GPU)
   convert_binary_tree_to_bvh8(p, 0);
   CUDA_CHECK(cudaGetLastError());

@@ -164,6 +164,7 @@ WinderBackend<Geometry>::WinderBackend(size_t size, int device_id)
                L2_ALIGN); // m_bvh8_work_queue_A
   add_to_total((leaf_count - 1) * sizeof(uint32_t),
                L2_ALIGN);                       // m_bvh8_work_queue_B
+  add_to_total(1 * sizeof(uint32_t), L2_ALIGN); // m_bvh8_node_count
   add_to_total(1 * sizeof(uint32_t), L2_ALIGN); // m_global_counter
   cudaMallocAsync(&m_memory_arena, total_required, m_stream_0);
 
@@ -200,6 +201,8 @@ WinderBackend<Geometry>::WinderBackend(size_t size, int device_id)
       get_aligned_ptr<uint32_t>(ptr, leaf_count - 1, remaining_arena_size);
   m_bvh8_work_queue_B =
       get_aligned_ptr<uint32_t>(ptr, leaf_count - 1, remaining_arena_size);
+  m_bvh8_node_count = get_aligned_ptr<uint32_t>(
+      ptr, 1, remaining_arena_size); 
   m_global_counter = get_aligned_ptr<uint32_t>(
       ptr, 1, remaining_arena_size); // always at the end!
 }
@@ -313,7 +316,7 @@ void WinderBackend<Triangle>::initialize_mesh_data(const float *triangles) {
       m_bvh8_work_queue_A, m_bvh8_work_queue_B, m_bvh8_internal_parent_map,
       m_global_counter,    leaf_count,          m_binary_aabbs,
       m_binary_nodes,      m_bvh8_leaf_parents, m_bvh8_nodes,
-      m_bvh8_leaf_pointers};
+      m_bvh8_leaf_pointers, m_bvh8_node_count};
   convert_binary_tree_to_bvh8(params, m_device, m_stream_0);
   // populate BVH8 nodes with tailor coefficients using m2m
   // initialize the atomic counters to 0
@@ -374,7 +377,7 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
       m_bvh8_work_queue_A, m_bvh8_work_queue_B, m_bvh8_internal_parent_map,
       m_global_counter,    leaf_count,          m_binary_aabbs,
       m_binary_nodes,      m_bvh8_leaf_parents, m_bvh8_nodes,
-      m_bvh8_leaf_pointers};
+      m_bvh8_leaf_pointers, m_bvh8_node_count};
   convert_binary_tree_to_bvh8(params, m_device, m_stream_0);
   // populate BVH8 nodes with tailor coefficients using m2m
   // reset atomic counters to 0
