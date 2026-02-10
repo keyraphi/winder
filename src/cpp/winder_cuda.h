@@ -96,30 +96,13 @@ private:
   WinderBackend(size_t size, int device_id);
 
 public: // TODO DEBUG
-  // memory arena on gpu
-  uint8_t *m_memory_arena;
 
-  /** * MEMORY ARENA POINTERS
-   * All pointers below refer to segments within m_memory_arena.
-   * N = Point Count, L = Leaf Count (N/32)
-   */
 
   // --- Geometric Data & Permutation Maps ---
   uint32_t *m_to_internal;     // [N] Map: Original index -> Morton sorted index
-  uint32_t *m_to_canonical;    // [N] Map: Morton sorted index -> Original index
   Geometry *m_sorted_geometry; // [N] Interleaved P and N (or Triangles)
 
-  // --- Binary LBVH (Auxiliary Structure for BVH8 Construction) ---
-  uint32_t *m_morton_codes; // [N] 30-bit Morton codes for individual points
-  uint32_t
-      *m_leaf_morton_codes; // [L] Morton code of the first point in each leaf
-  BinaryNode
-      *m_binary_nodes; // [L-1] Topology of the auxiliary binary radix tree
-  uint32_t *m_binary_parents;  // [2L-1] Parent pointers for binary tree
-                               // (bottom-up traversal)
   AABB *m_binary_aabbs;        // [2L-1] AABBs for all binary nodes/leaves
-  uint32_t *m_atomic_counters; // [L-1] Counters for thread synchronization
-                               // during AABB/M2M climb
   uint32_t
       *m_bvh8_node_count; // [1] number of bvh8 nodes created during conversion
 
@@ -130,20 +113,11 @@ public: // TODO DEBUG
                                                // leaf clusters (Bfloat16)
 
   // --- BVH8 Construction & M2M Support ---
-  uint32_t *m_bvh8_leaf_parents; // [L] Map: Leaf index -> Parent BVH8Node index
   LeafPointers *m_bvh8_leaf_pointers; // [0.2L] Map: BVH8Node slot -> Leaf index
                                       // (for traversal)
-  uint32_t *m_bvh8_internal_parent_map; // [0.2L] Map: BVH8Node -> Parent
-                                        // BVH8Node index (for M2M climb)
-  uint32_t *m_bvh8_work_queue_A; // [L-1] Double-buffer for level-by-level tree
-                                 // conversion
-  uint32_t *m_bvh8_work_queue_B; // [L-1] Double-buffer for level-by-level tree
-                                 // conversion
-  uint32_t *m_global_counter;    // [1] Atomic counter for work queue management
-                                 // and node allocation
 
 private: // TODO DEBUG
   // private helpers
   template <IsPrimitiveGeometry PrimitiveGeometry>
-  auto initializeMortonCodes(const PrimitiveGeometry *geometry) -> void;
+  auto initializeMortonCodes(const PrimitiveGeometry *geometry, uint32_t *geometry_morton_codes) -> void;
 };

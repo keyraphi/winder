@@ -353,6 +353,11 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
       }
 
       // merge child aabbs
+      if (current_parent_idx >= 2*leaf_count - 1) {
+        printf("DEBUG; current_parent_idx >= 2*leaf_count -1: %u\n", current_parent_idx);
+        printf("DEBUG; parent_node.left_child >= 2*leaf_count -1: %u\n", parent_node.left_child);
+        printf("DEBUG; parent_node.right_child >= 2*leaf_count -1: %u\n", parent_node.right_child);
+      }
       binary_aabbs[current_parent_idx] =
           AABB::merge(binary_aabbs[parent_node.left_child],
                       binary_aabbs[parent_node.right_child],

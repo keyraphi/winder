@@ -81,27 +81,7 @@ struct AABB {
                       fminf(a.min.z, b.min.z)};
     result.max = Vec3{fmaxf(a.max.x, b.max.x), fmaxf(a.max.y, b.max.y),
                       fmaxf(a.max.z, b.max.z)};
-    // DEBUG
-    if (isnan(a.min.x) || isnan(a.min.y) || isnan(a.min.z) || isnan(a.max.x) ||
-        isnan(a.max.y) || isnan(a.max.z)) {
-      printf("DEBUG AABB::merge: input aabb a contains nan: {(%f,%f,%f), "
-             "(%f,%f,%f)\n",
-             a.min.x, a.min.y, a.min.z, a.max.x, a.max.y, a.max.z);
-    }
-    if (isnan(b.min.x) || isnan(b.min.y) || isnan(b.min.z) || isnan(b.max.x) ||
-        isnan(b.max.y) || isnan(b.max.z)) {
-      printf("DEBUG AABB::merge: input aabb b contains nan: {(%f,%f,%f), "
-             "(%f,%f,%f)\n",
-             b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z);
-    }
-    if (isnan(result.min.x) || isnan(result.min.y) || isnan(result.min.z) ||
-        isnan(result.max.x) || isnan(result.max.y) || isnan(result.max.z)) {
-      printf("DEBUG AABB::merge: result aabb contains nan: {(%f,%f,%f), "
-             "(%f,%f,%f)\n",
-             result.min.x, result.min.y, result.min.z, result.max.x,
-             result.max.y, result.max.z);
-    }
-    // END DEBUG
+    // compute new center of mass
     uint32_t total_element_count = a_element_count + b_element_count;
     float a_factor = (float)a_element_count / (float)total_element_count;
     float b_factor = (float)b_element_count / (float)total_element_count;

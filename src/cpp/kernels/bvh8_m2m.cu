@@ -88,6 +88,7 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
       // do everything in fp32 (seperate array of TailorCoefficients). Only when
       // finally stored in node quantize!
       // TODO continue here!
+      // Also replace memory arena with on the fly cudaMallocAsync and Frees!
 
       // Merge child coeficients into parent tailor by recentering child
       Vec3 shift_vector = child_center - parent_center; // v in equations

@@ -69,26 +69,6 @@ __constant__ SceneParams d_scene_params;
 
 void CudaDeleter::operator()(void *ptr) const { cudaFree(ptr); }
 
-template <typename T>
-T *get_aligned_ptr(void *&current_ptr, size_t count,
-                   size_t &remaining_arena_size) {
-  const size_t alignment = L2_ALIGN;
-  size_t requested_bytes = count * sizeof(T);
-
-  void *aligned =
-      std::align(alignment, requested_bytes, current_ptr, remaining_arena_size);
-
-  if (!aligned) {
-    throw std::runtime_error("Arena overflow or alignment failure");
-  }
-
-  // Advance the global pointer for the next buffer
-  current_ptr = static_cast<uint8_t *>(aligned) + requested_bytes;
-  remaining_arena_size -= requested_bytes;
-
-  return static_cast<T *>(aligned);
-}
-
 template <IsGeometry Geometry> WinderBackend<Geometry>::~WinderBackend() {
   CUDA_CHECK(cudaStreamSynchronize(m_stream_0));
   CUDA_CHECK(cudaStreamSynchronize(m_stream_1));
@@ -96,8 +76,26 @@ template <IsGeometry Geometry> WinderBackend<Geometry>::~WinderBackend() {
   CUDA_CHECK(cudaEventDestroy(m_start_tree_construction_event));
   CUDA_CHECK(cudaEventDestroy(m_tree_construction_finished_event));
 
-  if (m_memory_arena) {
-    CUDA_CHECK(cudaFreeAsync(m_memory_arena, m_stream_0));
+  if (m_to_internal) {
+    CUDA_CHECK(cudaFreeAsync(m_to_internal, m_stream_0));
+  }
+  if (m_sorted_geometry) {
+    CUDA_CHECK(cudaFreeAsync(m_sorted_geometry, m_stream_0));
+  }
+  if (m_binary_aabbs) {
+    CUDA_CHECK(cudaFreeAsync(m_binary_aabbs, m_stream_0));
+  }
+  if (m_bvh8_node_count) {
+    CUDA_CHECK(cudaFreeAsync(m_bvh8_node_count, m_stream_0));
+  }
+  if (m_bvh8_nodes) {
+    CUDA_CHECK(cudaFreeAsync(m_bvh8_nodes, m_stream_0));
+  }
+  if (m_leaf_coefficients) {
+    CUDA_CHECK(cudaFreeAsync(m_leaf_coefficients, m_stream_0));
+  }
+  if (m_bvh8_leaf_pointers) {
+    CUDA_CHECK(cudaFreeAsync(m_bvh8_leaf_pointers, m_stream_0));
   }
   CUDA_CHECK(cudaStreamSynchronize(m_stream_0));
 
@@ -124,87 +122,60 @@ WinderBackend<Geometry>::WinderBackend(size_t size, int device_id)
 
   // uint32_t max_bvh8_nodes =
   //     (leaf_count <= 1) ? 0 : (uint32_t)ceil(leaf_count * 0.2F) + 1;
-  uint32_t max_bvh8_nodes = leaf_count-1;  // DEBUG worst case scenario!!
+  uint32_t max_bvh8_nodes = leaf_count - 1; // DEBUG worst case scenario!!
 
-  // Compute how much memory is needed, to make every entry 128 byte aligned
-  size_t total_required = 0;
-  auto add_to_total = [&](size_t bytes, size_t alignment) {
-    size_t padding = (alignment - (total_required % alignment)) % alignment;
-    total_required += padding;
-    total_required += bytes;
-  };
+  CUDA_CHECK(
+      cudaMallocAsync(&m_to_internal, size * sizeof(uint32_t), m_stream_0));
+  CUDA_CHECK(
+      cudaMallocAsync(&m_sorted_geometry, size * sizeof(Geometry), m_stream_0));
+  CUDA_CHECK(cudaMallocAsync(&m_binary_aabbs,
+                             (2 * leaf_count - 1) * sizeof(AABB), m_stream_0));
+  CUDA_CHECK(
+      cudaMallocAsync(&m_bvh8_node_count, 1 * sizeof(uint32_t), m_stream_0));
+  CUDA_CHECK(cudaMallocAsync(&m_bvh8_nodes, max_bvh8_nodes * sizeof(BVH8Node),
+                             m_stream_0));
+  CUDA_CHECK(cudaMallocAsync(&m_leaf_coefficients,
+                             leaf_count * sizeof(TailorCoefficientsBf16),
+                             m_stream_0));
+  CUDA_CHECK(cudaMallocAsync(&m_bvh8_leaf_pointers,
+                             max_bvh8_nodes * sizeof(LeafPointers),
+                             m_stream_0));
 
-  printf("DEBUG: Allocating arena for %lu geometry entries (%lu leafs, %u bvh8 "
-         "nodes, %lu binary_aabbs, %lu binary_nodes)\n",
-         size, leaf_count, max_bvh8_nodes, 2 * leaf_count - 1, leaf_count - 1);
-
-  add_to_total(max_bvh8_nodes * sizeof(BVH8Node),
-               L2_ALIGN); // m_bvh8_nodes are already 128 byte
-  add_to_total(leaf_count * sizeof(TailorCoefficientsBf16),
-               L2_ALIGN); // m_leaf_coefficients
-  add_to_total(max_bvh8_nodes * sizeof(LeafPointers),
-               L2_ALIGN); // m_bvh8_leaf_pointers
-  add_to_total((2 * leaf_count - 1) * sizeof(AABB), L2_ALIGN); // m_binary_aabbs
-  add_to_total((leaf_count - 1) * sizeof(BinaryNode),
-               L2_ALIGN); // m_binary_nodes
-  add_to_total(size * sizeof(Geometry),
-               L2_ALIGN);                                // m_sorted_geometry
-  add_to_total(size * sizeof(uint32_t), L2_ALIGN);       // m_to_internal
-  add_to_total(size * sizeof(uint32_t), L2_ALIGN);       // m_to_canonical
-  add_to_total(size * sizeof(uint32_t), L2_ALIGN);       // m_morton_codes
-  add_to_total(leaf_count * sizeof(uint32_t), L2_ALIGN); // m_leaf_morton_codes
-  add_to_total((2 * leaf_count - 1) * sizeof(uint32_t),
-               L2_ALIGN); // m_binary_parents
-  add_to_total((leaf_count - 1) * sizeof(uint32_t),
-               L2_ALIGN);                                // m_atomic_counters
-  add_to_total(leaf_count * sizeof(uint32_t), L2_ALIGN); // m_bvh8_leaf_parents
-  add_to_total(max_bvh8_nodes * sizeof(uint32_t),
-               L2_ALIGN); // m_bvh8_internal_parent_map
-  add_to_total((leaf_count - 1) * sizeof(uint32_t),
-               L2_ALIGN); // m_bvh8_work_queue_A
-  add_to_total((leaf_count - 1) * sizeof(uint32_t),
-               L2_ALIGN);                       // m_bvh8_work_queue_B
-  add_to_total(1 * sizeof(uint32_t), L2_ALIGN); // m_bvh8_node_count
-  add_to_total(1 * sizeof(uint32_t), L2_ALIGN); // m_global_counter
-  cudaMallocAsync(&m_memory_arena, total_required, m_stream_0);
-
-  // Assign each member to its location in the arena
-  void *ptr = reinterpret_cast<void *>(m_memory_arena);
-  size_t remaining_arena_size = total_required;
-
-  m_bvh8_nodes =
-      get_aligned_ptr<BVH8Node>(ptr, max_bvh8_nodes, remaining_arena_size);
-  m_leaf_coefficients = get_aligned_ptr<TailorCoefficientsBf16>(
-      ptr, leaf_count, remaining_arena_size);
-  m_bvh8_leaf_pointers =
-      get_aligned_ptr<LeafPointers>(ptr, max_bvh8_nodes, remaining_arena_size);
-  m_binary_aabbs =
-      get_aligned_ptr<AABB>(ptr, 2 * leaf_count - 1, remaining_arena_size);
-  m_binary_nodes =
-      get_aligned_ptr<BinaryNode>(ptr, leaf_count - 1, remaining_arena_size);
-  m_sorted_geometry =
-      get_aligned_ptr<Geometry>(ptr, size, remaining_arena_size);
-  m_to_internal = get_aligned_ptr<uint32_t>(ptr, size, remaining_arena_size);
-  m_to_canonical = get_aligned_ptr<uint32_t>(ptr, size, remaining_arena_size);
-  m_morton_codes = get_aligned_ptr<uint32_t>(ptr, size, remaining_arena_size);
-  m_leaf_morton_codes =
-      get_aligned_ptr<uint32_t>(ptr, leaf_count, remaining_arena_size);
-  m_binary_parents =
-      get_aligned_ptr<uint32_t>(ptr, 2 * leaf_count - 1, remaining_arena_size);
-  m_atomic_counters =
-      get_aligned_ptr<uint32_t>(ptr, leaf_count - 1, remaining_arena_size);
-  m_bvh8_leaf_parents =
-      get_aligned_ptr<uint32_t>(ptr, leaf_count, remaining_arena_size);
-  m_bvh8_internal_parent_map =
-      get_aligned_ptr<uint32_t>(ptr, max_bvh8_nodes, remaining_arena_size);
-  m_bvh8_work_queue_A =
-      get_aligned_ptr<uint32_t>(ptr, leaf_count - 1, remaining_arena_size);
-  m_bvh8_work_queue_B =
-      get_aligned_ptr<uint32_t>(ptr, leaf_count - 1, remaining_arena_size);
-  m_bvh8_node_count = get_aligned_ptr<uint32_t>(
-      ptr, 1, remaining_arena_size); 
-  m_global_counter = get_aligned_ptr<uint32_t>(
-      ptr, 1, remaining_arena_size); // always at the end!
+  // m_bvh8_nodes =
+  //     get_aligned_ptr<BVH8Node>(ptr, max_bvh8_nodes, remaining_arena_size);
+  // m_leaf_coefficients = get_aligned_ptr<TailorCoefficientsBf16>(
+  //     ptr, leaf_count, remaining_arena_size);
+  // m_bvh8_leaf_pointers =
+  //     get_aligned_ptr<LeafPointers>(ptr, max_bvh8_nodes,
+  //     remaining_arena_size);
+  // m_binary_aabbs =
+  //     get_aligned_ptr<AABB>(ptr, 2 * leaf_count - 1, remaining_arena_size);
+  // m_binary_nodes =
+  //     get_aligned_ptr<BinaryNode>(ptr, leaf_count - 1, remaining_arena_size);
+  // m_sorted_geometry =
+  //     get_aligned_ptr<Geometry>(ptr, size, remaining_arena_size);
+  // m_to_internal = get_aligned_ptr<uint32_t>(ptr, size, remaining_arena_size);
+  // m_to_canonical = get_aligned_ptr<uint32_t>(ptr, size,
+  // remaining_arena_size); m_morton_codes = get_aligned_ptr<uint32_t>(ptr,
+  // size, remaining_arena_size); m_leaf_morton_codes =
+  //     get_aligned_ptr<uint32_t>(ptr, leaf_count, remaining_arena_size);
+  // m_binary_parents =
+  //     get_aligned_ptr<uint32_t>(ptr, 2 * leaf_count - 1,
+  //     remaining_arena_size);
+  // m_atomic_counters =
+  //     get_aligned_ptr<uint32_t>(ptr, leaf_count - 1, remaining_arena_size);
+  // m_bvh8_leaf_parents =
+  //     get_aligned_ptr<uint32_t>(ptr, leaf_count, remaining_arena_size);
+  // m_bvh8_internal_parent_map =
+  //     get_aligned_ptr<uint32_t>(ptr, max_bvh8_nodes, remaining_arena_size);
+  // m_bvh8_work_queue_A =
+  //     get_aligned_ptr<uint32_t>(ptr, leaf_count - 1, remaining_arena_size);
+  // m_bvh8_work_queue_B =
+  //     get_aligned_ptr<uint32_t>(ptr, leaf_count - 1, remaining_arena_size);
+  // m_bvh8_node_count = get_aligned_ptr<uint32_t>(
+  //     ptr, 1, remaining_arena_size);
+  // m_global_counter = get_aligned_ptr<uint32_t>(
+  //     ptr, 1, remaining_arena_size); // always at the end!
 }
 
 template <IsPrimitiveGeometry PrimitiveGeometry> struct GeometryToAABB {
@@ -243,7 +214,8 @@ template <IsPrimitiveGeometry PrimitiveGeometry> struct GeometryToMorton {
 template <IsGeometry Geometry>
 template <IsPrimitiveGeometry PrimitiveGeometry>
 auto WinderBackend<Geometry>::initializeMortonCodes(
-    const PrimitiveGeometry *geometry) -> void {
+    const PrimitiveGeometry *geometry,
+    uint32_t *geometry_morton_codes) -> void {
   // compute scene bounds
   auto aabb_transform = thrust::make_transform_iterator(
       geometry, GeometryToAABB<PrimitiveGeometry>{});
@@ -262,7 +234,8 @@ auto WinderBackend<Geometry>::initializeMortonCodes(
                                      cudaMemcpyHostToDevice, m_stream_0));
 
   thrust::transform(m_stream_0_policy, geometry, geometry + m_count,
-                    m_morton_codes, GeometryToMorton<PrimitiveGeometry>{});
+                    geometry_morton_codes,
+                    GeometryToMorton<PrimitiveGeometry>{});
 }
 
 template <>
@@ -271,60 +244,99 @@ void WinderBackend<Triangle>::initialize_mesh_data(const float *triangles) {
 
   CUDA_CHECK(cudaEventRecord(m_start_tree_construction_event, m_stream_0));
 
-  initializeMortonCodes(triangles_tri);
+  uint32_t *geometry_morton_codes;
+  CUDA_CHECK(cudaMallocAsync(&geometry_morton_codes, m_count * sizeof(uint32_t),
+                             m_stream_0));
+  initializeMortonCodes(triangles_tri, geometry_morton_codes);
 
   // sort by morton codes
   thrust::sequence(m_stream_0_policy, m_to_internal, m_to_internal + m_count);
   // sorts both morton_codes and m_to_internal
-  thrust::sort_by_key(m_stream_0_policy, m_morton_codes,
-                      m_morton_codes + m_count, m_to_internal);
-  // create inverse mapping m_to_canonical
-  thrust::scatter(m_stream_0_policy,
-                  thrust::make_counting_iterator<uint32_t>(0),
-                  thrust::make_counting_iterator<uint32_t>(m_count),
-                  m_to_internal, m_to_canonical);
+  thrust::sort_by_key(m_stream_0_policy, geometry_morton_codes,
+                      geometry_morton_codes + m_count, m_to_internal);
   // sort triangles using m_to_internal
   thrust::gather(m_stream_0_policy, m_to_internal, m_to_internal + m_count,
                  triangles_tri, m_sorted_geometry);
 
   // each leaf contains 32 (LEAF_SIZE) elements
   uint32_t leaf_count = (m_count + LEAF_SIZE - 1) / LEAF_SIZE;
+  uint32_t max_bvh8_nodes = leaf_count - 1; // DEBUG worst case scenario!!
 
-  {
-    auto morton_leaf_stride_idx = thrust::make_transform_iterator(
-        thrust::make_counting_iterator<uint32_t>(0),
-        [] __host__ __device__(uint32_t i) -> uint32_t {
-          return i * LEAF_SIZE;
-        });
-    // thrust::make_strided_iterator<LEAF_SIZE>(m_morton_codes.begin());
-    auto morton_leaf_stride = thrust::make_permutation_iterator(
-        m_morton_codes, morton_leaf_stride_idx);
-    thrust::copy(m_stream_0_policy, morton_leaf_stride,
-                 morton_leaf_stride + leaf_count, m_leaf_morton_codes);
-    // build binary radix tree
-    build_binary_topology(m_leaf_morton_codes, m_binary_nodes, m_binary_parents,
-                          leaf_count, m_stream_0);
-  }
+  auto morton_leaf_stride_idx = thrust::make_transform_iterator(
+      thrust::make_counting_iterator<uint32_t>(0),
+      [] __host__ __device__(uint32_t i) -> uint32_t { return i * LEAF_SIZE; });
+  // thrust::make_strided_iterator<LEAF_SIZE>(geometry_morton_codes.begin());
+  // // requires cuda 13
+  auto morton_leaf_stride = thrust::make_permutation_iterator(
+      geometry_morton_codes, morton_leaf_stride_idx);
+
+  uint32_t *leaf_morton_codes;
+  CUDA_CHECK(cudaMallocAsync(&leaf_morton_codes, m_count * sizeof(uint32_t),
+                             m_stream_0));
+  thrust::copy(m_stream_0_policy, morton_leaf_stride,
+               morton_leaf_stride + leaf_count, leaf_morton_codes);
+  CUDA_CHECK(cudaFreeAsync(geometry_morton_codes, m_stream_0));
+  // build binary radix tree
+  BinaryNode *binary_nodes;
+  uint32_t *binary_parents;
+  CUDA_CHECK(cudaMallocAsync(&binary_nodes, (leaf_count - 1) * sizeof(BinaryNode),
+                             m_stream_0));
+  CUDA_CHECK(cudaMallocAsync(
+      &binary_parents, (2 * leaf_count - 1) * sizeof(uint32_t), m_stream_0));
+  build_binary_topology(leaf_morton_codes, binary_nodes, binary_parents,
+                        leaf_count, m_stream_0);
+  CUDA_CHECK(cudaFreeAsync(leaf_morton_codes, m_stream_0));
 
   // initialize the atomic counters to 0
-  thrust::fill_n(m_stream_0_policy, m_atomic_counters, leaf_count - 1, 0);
+  uint32_t *atomic_counters;
+  CUDA_CHECK(cudaMallocAsync(&atomic_counters,
+                             (leaf_count - 1) * sizeof(uint32_t), m_stream_0));
+  thrust::fill_n(m_stream_0_policy, atomic_counters, leaf_count - 1, 0);
   populate_binary_tree_aabb_and_leaf_coefficients<Triangle>(
-      m_sorted_geometry, m_leaf_coefficients, leaf_count, m_binary_nodes,
-      m_binary_aabbs, m_binary_parents, m_atomic_counters, m_count, m_stream_0);
+      m_sorted_geometry, m_leaf_coefficients, leaf_count, binary_nodes,
+      m_binary_aabbs, binary_parents, atomic_counters, m_count, m_stream_0);
+  CUDA_CHECK(cudaFreeAsync(binary_parents, m_stream_0));
+
   // Convert binary LBVH tree into BVH8 tree
+  uint32_t *bvh8_work_queue_A;
+  uint32_t *bvh8_work_queue_B;
+  uint32_t *bvh8_internal_parent_map;
+  uint32_t *global_counter;
+  uint32_t *bvh8_leaf_parents;
+  CUDA_CHECK(cudaMallocAsync(&bvh8_work_queue_A,
+                             (leaf_count - 1) * sizeof(uint32_t), m_stream_0));
+  CUDA_CHECK(cudaMallocAsync(&bvh8_work_queue_B,
+                             (leaf_count - 1) * sizeof(uint32_t), m_stream_0));
+  CUDA_CHECK(cudaMallocAsync(&bvh8_internal_parent_map,
+                             max_bvh8_nodes * sizeof(uint32_t), m_stream_0));
+  CUDA_CHECK(
+      cudaMallocAsync(&global_counter, 1 * sizeof(uint32_t), m_stream_0));
+  CUDA_CHECK(cudaMallocAsync(&bvh8_leaf_parents, leaf_count * sizeof(uint32_t),
+                             m_stream_0));
+
   ConvertBinary2BVH8Params params{
-      m_bvh8_work_queue_A, m_bvh8_work_queue_B, m_bvh8_internal_parent_map,
-      m_global_counter,    leaf_count,          m_binary_aabbs,
-      m_binary_nodes,      m_bvh8_leaf_parents, m_bvh8_nodes,
+      bvh8_work_queue_A,    bvh8_work_queue_B, bvh8_internal_parent_map,
+      global_counter,       leaf_count,        m_binary_aabbs,
+      binary_nodes,         bvh8_leaf_parents, m_bvh8_nodes,
       m_bvh8_leaf_pointers, m_bvh8_node_count};
   convert_binary_tree_to_bvh8(params, m_device, m_stream_0);
+
+  CUDA_CHECK(cudaFreeAsync(bvh8_work_queue_A, m_stream_0));
+  CUDA_CHECK(cudaFreeAsync(bvh8_work_queue_B, m_stream_0));
+  CUDA_CHECK(cudaFreeAsync(global_counter, m_stream_0));
+  CUDA_CHECK(cudaFreeAsync(binary_nodes, m_stream_0));
+
   // populate BVH8 nodes with tailor coefficients using m2m
   // initialize the atomic counters to 0
-  thrust::fill_n(m_stream_0_policy, m_atomic_counters, leaf_count - 1, 0);
+  thrust::fill_n(m_stream_0_policy, atomic_counters, leaf_count - 1, 0);
   compute_internal_tailor_coefficients_m2m(
-      m_bvh8_nodes, m_bvh8_internal_parent_map, m_binary_aabbs + leaf_count - 1,
-      m_leaf_coefficients, m_bvh8_leaf_parents, m_bvh8_leaf_pointers,
-      leaf_count, m_atomic_counters, m_stream_0);
+      m_bvh8_nodes, bvh8_internal_parent_map, m_binary_aabbs + leaf_count - 1,
+      m_leaf_coefficients, bvh8_leaf_parents, m_bvh8_leaf_pointers, leaf_count,
+      atomic_counters, m_stream_0);
+
+  CUDA_CHECK(cudaFreeAsync(atomic_counters, m_stream_0));
+  CUDA_CHECK(cudaFreeAsync(bvh8_internal_parent_map, m_stream_0));
+  CUDA_CHECK(cudaFreeAsync(bvh8_leaf_parents, m_stream_0));
 
   CUDA_CHECK(cudaEventRecord(m_tree_construction_finished_event, m_stream_0));
 }
@@ -336,95 +348,137 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
 
   CUDA_CHECK(cudaEventRecord(m_start_tree_construction_event, m_stream_0));
 
-  initializeMortonCodes<Vec3>(points_v3);
+  uint32_t *geometry_morton_codes;
+  CUDA_CHECK(cudaMallocAsync(&geometry_morton_codes, m_count * sizeof(uint32_t),
+                             m_stream_0));
+  initializeMortonCodes<Vec3>(points_v3, geometry_morton_codes);
 
   // sort by morton codes
   thrust::sequence(m_stream_0_policy, m_to_internal, m_to_internal + m_count);
   // sorts both morton_codes and m_to_internal
-  thrust::sort_by_key(m_stream_0_policy, m_morton_codes,
-                      m_morton_codes + m_count, m_to_internal);
-  // create inverse mapping m_to_canonical
-  thrust::scatter(m_stream_0_policy,
-                  thrust::make_counting_iterator<uint32_t>(0),
-                  thrust::make_counting_iterator<uint32_t>(m_count),
-                  m_to_internal, m_to_canonical);
+  thrust::sort_by_key(m_stream_0_policy, geometry_morton_codes,
+                      geometry_morton_codes + m_count, m_to_internal);
 
   interleave_gather_geometry(points, normals, m_to_internal, m_sorted_geometry,
                              m_count, m_stream_0);
 
   // each leaf contains 32 (LEAF_SIZE) elements
   uint32_t leaf_count = (m_count + LEAF_SIZE - 1) / LEAF_SIZE;
-  {
-    auto morton_leaf_stride_idx = thrust::make_transform_iterator(
-        thrust::make_counting_iterator<uint32_t>(0),
-        [] __host__ __device__(uint32_t i) -> uint32_t {
-          return i * LEAF_SIZE;
-        });
-    // thrust::make_strided_iterator<LEAF_SIZE>(m_morton_codes.begin());
-    auto morton_leaf_stride = thrust::make_permutation_iterator(
-        m_morton_codes, morton_leaf_stride_idx);
-    thrust::copy(m_stream_0_policy, morton_leaf_stride,
-                 morton_leaf_stride + leaf_count, m_leaf_morton_codes);
-    // build binary radix tree
-    build_binary_topology(m_leaf_morton_codes, m_binary_nodes, m_binary_parents,
-                          leaf_count, m_stream_0);
-  }
+  uint32_t max_bvh8_nodes = leaf_count - 1; // DEBUG worst case scenario!!
+
+  auto morton_leaf_stride_idx = thrust::make_transform_iterator(
+      thrust::make_counting_iterator<uint32_t>(0),
+      [] __host__ __device__(uint32_t i) -> uint32_t { return i * LEAF_SIZE; });
+  // thrust::make_strided_iterator<LEAF_SIZE>(geometry_morton_codes.begin());
+  auto morton_leaf_stride = thrust::make_permutation_iterator(
+      geometry_morton_codes, morton_leaf_stride_idx);
+  uint32_t *leaf_morton_codes;
+  CUDA_CHECK(cudaMallocAsync(&leaf_morton_codes, m_count * sizeof(uint32_t),
+                             m_stream_0));
+  thrust::copy(m_stream_0_policy, morton_leaf_stride,
+               morton_leaf_stride + leaf_count, leaf_morton_codes);
+  // build binary radix tree
+  CUDA_CHECK(cudaFreeAsync(geometry_morton_codes, m_stream_0));
+  // build binary radix tree
+  BinaryNode *binary_nodes;
+  uint32_t *binary_parents;
+  CUDA_CHECK(cudaMallocAsync(&binary_nodes, (leaf_count - 1) * sizeof(BinaryNode),
+                             m_stream_0));
+  CUDA_CHECK(cudaMallocAsync(
+      &binary_parents, (2 * leaf_count - 1) * sizeof(uint32_t), m_stream_0));
+  build_binary_topology(leaf_morton_codes, binary_nodes, binary_parents,
+                        leaf_count, m_stream_0);
+  CUDA_CHECK(cudaFreeAsync(leaf_morton_codes, m_stream_0));
+
+  // initialize the atomic counters to 0
+  uint32_t *atomic_counters;
+  CUDA_CHECK(cudaMallocAsync(&atomic_counters,
+                             (leaf_count - 1) * sizeof(uint32_t), m_stream_0));
   populate_binary_tree_aabb_and_leaf_coefficients<PointNormal>(
-      m_sorted_geometry, m_leaf_coefficients, leaf_count, m_binary_nodes,
-      m_binary_aabbs, m_binary_parents, m_atomic_counters, m_count, m_stream_0);
+      m_sorted_geometry, m_leaf_coefficients, leaf_count, binary_nodes,
+      m_binary_aabbs, binary_parents, atomic_counters, m_count, m_stream_0);
+  CUDA_CHECK(cudaFreeAsync(binary_parents, m_stream_0));
+
   // Convert binary LBVH tree into BVH8 tree
+  uint32_t *bvh8_work_queue_A;
+  uint32_t *bvh8_work_queue_B;
+  uint32_t *bvh8_internal_parent_map;
+  uint32_t *global_counter;
+  uint32_t *bvh8_leaf_parents;
+  CUDA_CHECK(cudaMallocAsync(&bvh8_work_queue_A,
+                             (leaf_count - 1) * sizeof(uint32_t), m_stream_0));
+  CUDA_CHECK(cudaMallocAsync(&bvh8_work_queue_B,
+                             (leaf_count - 1) * sizeof(uint32_t), m_stream_0));
+  CUDA_CHECK(cudaMallocAsync(&bvh8_internal_parent_map,
+                             max_bvh8_nodes * sizeof(uint32_t), m_stream_0));
+  CUDA_CHECK(
+      cudaMallocAsync(&global_counter, 1 * sizeof(uint32_t), m_stream_0));
+  CUDA_CHECK(cudaMallocAsync(&bvh8_leaf_parents, leaf_count * sizeof(uint32_t),
+                             m_stream_0));
+
   ConvertBinary2BVH8Params params{
-      m_bvh8_work_queue_A, m_bvh8_work_queue_B, m_bvh8_internal_parent_map,
-      m_global_counter,    leaf_count,          m_binary_aabbs,
-      m_binary_nodes,      m_bvh8_leaf_parents, m_bvh8_nodes,
+      bvh8_work_queue_A,    bvh8_work_queue_B, bvh8_internal_parent_map,
+      global_counter,       leaf_count,        m_binary_aabbs,
+      binary_nodes,         bvh8_leaf_parents, m_bvh8_nodes,
       m_bvh8_leaf_pointers, m_bvh8_node_count};
   convert_binary_tree_to_bvh8(params, m_device, m_stream_0);
+
+  CUDA_CHECK(cudaFreeAsync(bvh8_work_queue_A, m_stream_0));
+  CUDA_CHECK(cudaFreeAsync(bvh8_work_queue_B, m_stream_0));
+  CUDA_CHECK(cudaFreeAsync(global_counter, m_stream_0));
+  CUDA_CHECK(cudaFreeAsync(binary_nodes, m_stream_0));
+
   // populate BVH8 nodes with tailor coefficients using m2m
   // reset atomic counters to 0
-  thrust::fill_n(m_stream_0_policy, m_atomic_counters, leaf_count - 1, 0);
+  thrust::fill_n(m_stream_0_policy, atomic_counters, leaf_count - 1, 0);
 
   compute_internal_tailor_coefficients_m2m(
-      m_bvh8_nodes, m_bvh8_internal_parent_map, m_binary_aabbs + leaf_count - 1,
-      m_leaf_coefficients, m_bvh8_leaf_parents, m_bvh8_leaf_pointers,
-      leaf_count, m_atomic_counters, m_stream_0);
+      m_bvh8_nodes, bvh8_internal_parent_map, m_binary_aabbs + leaf_count - 1,
+      m_leaf_coefficients, bvh8_leaf_parents, m_bvh8_leaf_pointers,
+      leaf_count, atomic_counters, m_stream_0);
+
+  CUDA_CHECK(cudaFreeAsync(atomic_counters, m_stream_0));
+  CUDA_CHECK(cudaFreeAsync(bvh8_internal_parent_map, m_stream_0));
+  CUDA_CHECK(cudaFreeAsync(bvh8_leaf_parents, m_stream_0));
 
   CUDA_CHECK(cudaEventRecord(m_tree_construction_finished_event, m_stream_0));
 }
 
 template <typename T> struct GeometryTraits {
-  static constexpr float default_beta = 2.3f;
+  static constexpr float default_beta = 2.3F;
 };
 template <> struct GeometryTraits<PointNormal> {
-  static constexpr float default_beta = 2.0f;
+  static constexpr float default_beta = 2.0F;
 };
 
 template <IsGeometry Geometry>
 auto WinderBackend<Geometry>::compute(
     const float *queries, size_t query_count, float beta, float epsilon,
     size_t stream) const -> CudaUniquePtr<float> {
-  printf("DEBUG: compute was called with beta = %f\n", beta);
   cudaEvent_t start, finish;
   CUDA_CHECK(cudaEventCreate(&start));
   CUDA_CHECK(cudaEventCreate(&finish));
+
   ScopedCudaDevice device_scope{m_device};
   const Vec3 *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
 
   // decide which stream to run on
   bool is_stream_0 = stream % 2 == 0;
-  auto &compute_stream = is_stream_0 ? m_stream_0 : m_stream_1;
-  auto &compute_stream_policy =
+  const auto &compute_stream = is_stream_0 ? m_stream_0 : m_stream_1;
+  const auto &compute_stream_policy =
       is_stream_0 ? m_stream_0_policy : m_stream_1_policy;
   CUDA_CHECK(cudaEventRecord(start, compute_stream));
-  // allocate memory arena for required buffers
-  float *winding_numbers;
+  
+  // Allocate required buffers
+  float *winding_numbers; // result
   CUDA_CHECK(cudaMallocAsync(&winding_numbers, query_count * sizeof(float),
                              compute_stream));
-  uint8_t *compute_arena;
-  CUDA_CHECK(cudaMallocAsync(&compute_arena, query_count * sizeof(uint32_t) * 2,
+  uint32_t *queries_to_internal;
+  uint32_t *queries_morton;
+  CUDA_CHECK(cudaMallocAsync(&queries_to_internal, query_count * sizeof(uint32_t),
                              compute_stream));
-  uint32_t *queries_to_internal = reinterpret_cast<uint32_t *>(compute_arena);
-  uint32_t *queries_morton = reinterpret_cast<uint32_t *>(
-      &compute_arena[query_count * sizeof(uint32_t)]);
+  CUDA_CHECK(cudaMallocAsync(&queries_morton, query_count * sizeof(uint32_t),
+                             compute_stream));
 
   // sort queries by morton code, scaled with bvh8s aabb
   thrust::transform(compute_stream_policy, queries_vec3,
@@ -435,6 +489,9 @@ auto WinderBackend<Geometry>::compute(
                    queries_to_internal + query_count);
   thrust::sort_by_key(compute_stream_policy, queries_morton,
                       queries_morton + query_count, queries_to_internal);
+
+  // free morton code memory
+  CUDA_CHECK(cudaFreeAsync(queries_morton, compute_stream));
 
   // make sure stream 0 has finished building the tree
   CUDA_CHECK(
@@ -457,6 +514,8 @@ auto WinderBackend<Geometry>::compute(
     // default from 3D Reconstruction with Fast Dipole Sums
     epsilon = 1.F / 250.F;
   }
+  uint32_t *global_counter;
+  CUDA_CHECK(cudaMallocAsync(&global_counter, sizeof(uint32_t), compute_stream));
   ComputeWindingNumbersParams<Geometry> params{queries_vec3,
                                                queries_to_internal,
                                                m_bvh8_nodes,
@@ -466,17 +525,17 @@ auto WinderBackend<Geometry>::compute(
                                                (uint32_t)query_count,
                                                (uint32_t)m_count,
                                                winding_numbers,
-                                               m_global_counter,
+                                               global_counter,
                                                beta,
                                                epsilon};
   printf("DEBUG: calling compute_winding_numbers (beta = %f)\n", params.beta);
   compute_winding_numbers<Geometry>(params, m_device, compute_stream);
   // free temporary memory
-  CUDA_CHECK(cudaFreeAsync(compute_arena, compute_stream));
+  CUDA_CHECK(cudaFreeAsync(queries_to_internal, compute_stream));
 
   CUDA_CHECK(cudaEventRecord(finish, compute_stream));
 
-  // free working buffers
+  // free events
   CUDA_CHECK(cudaEventDestroy(start));
   CUDA_CHECK(cudaEventDestroy(finish));
   CudaUniquePtr<float> result(winding_numbers);
@@ -486,6 +545,7 @@ auto WinderBackend<Geometry>::compute(
   CUDA_CHECK(cudaStreamSynchronize(compute_stream));
   return result;
 }
+
 template <>
 auto WinderBackend<PointNormal>::CreateFromPoints(
     const float *points, const float *normals, size_t point_count,
