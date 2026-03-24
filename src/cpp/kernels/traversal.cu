@@ -301,14 +301,16 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
           printf("DEBUG: node %u: approx: %e, detail: %e, diff: %e\n",
                  current_node_idx, current_node_approx, current_node_detail,
                  current_node_approx - current_node_detail);
-          printf("    query (%f,%f,%f), node AABB: {(%f,%f,%f), (%f,%f,%f)}\n", my_query.x, my_query.y, my_query.z,
-                 current_node.parent_aabb.min.x,
-                 current_node.parent_aabb.min.y,
-                 current_node.parent_aabb.min.z,
-                 current_node.parent_aabb.max.x,
+          Vec3 com = current_node.parent_aabb.center_of_mass.get(
+              current_node.parent_aabb.min,
+              current_node.parent_aabb.diagonal());
+          printf("    query (%f,%f,%f), node AABB: {(%f,%f,%f), (%f,%f,%f), "
+                 "com: (%f,%f,%f)}\n",
+                 my_query.x, my_query.y, my_query.z,
+                 current_node.parent_aabb.min.x, current_node.parent_aabb.min.y,
+                 current_node.parent_aabb.min.z, current_node.parent_aabb.max.x,
                  current_node.parent_aabb.max.y,
-                 current_node.parent_aabb.max.z
-                 );
+                 current_node.parent_aabb.max.z, com.x, com.y, com.z);
         }
       }
     } // traversal while

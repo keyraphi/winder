@@ -28,15 +28,14 @@ struct TailorCoefficientsQuantized {
   set_tailor_coefficients(const Vec3 &zero_order, const Mat3x3 &first_order,
                           const Tensor3_compressed &second_order);
 
-  __device__ inline auto get_tailor_zero_order(float shared_scale_factor) const
-      -> Vec3_bf16;
-
-  __device__ inline auto get_tailor_first_order(float shared_scale_factor) const
-      -> Mat3x3_bf16;
+  __device__ inline auto
+  get_tailor_zero_order(float shared_scale_factor) const -> Vec3_bf16;
 
   __device__ inline auto
-  get_tailor_second_order(float shared_scale_factor) const
-      -> Tensor3_bf16_compressed;
+  get_tailor_first_order(float shared_scale_factor) const -> Mat3x3_bf16;
+
+  __device__ inline auto get_tailor_second_order(
+      float shared_scale_factor) const -> Tensor3_bf16_compressed;
 };
 
 // For leaf nodes
@@ -47,6 +46,23 @@ struct TailorCoefficientsBf16 {
   Tensor3_bf16_compressed second_order;
   // 60 bytes
   CenterOfMass_quantized center_of_mass; // 4 bytes
+};
+
+// For m2m
+// 120 byte
+struct TailorCoefficients {
+  Vec3 zero_order;
+  Mat3x3 first_order;
+  Tensor3_compressed second_order;
+
+  __device__ static auto
+  from_bf16(const TailorCoefficientsBf16 &t) -> TailorCoefficients {
+    TailorCoefficients result;
+    result.zero_order = Vec3::from_bf16(t.zero_order);
+    result.first_order = Mat3x3::from_bf16(t.first_order);
+    result.second_order = Tensor3_compressed::from_bf16(t.second_order);
+    return result;
+  }
 };
 
 // only for cuda compiler:
@@ -99,8 +115,8 @@ struct TailorCoefficientsBf16 {
   PACK_CORE(SRC, OFFSET, LOW)                                                  \
   PACK_SPILL_##SHOULD_SPILL(OFFSET, HIGH)
 
-__device__ auto TailorCoefficientsQuantized::get_expected_children() const
-    -> uint32_t {
+__device__ auto
+TailorCoefficientsQuantized::get_expected_children() const -> uint32_t {
   // use first uint32_t for parent idx
   return tailor_data[0];
 }

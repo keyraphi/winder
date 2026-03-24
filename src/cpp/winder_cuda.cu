@@ -279,8 +279,8 @@ void WinderBackend<Triangle>::initialize_mesh_data(const float *triangles) {
   // build binary radix tree
   BinaryNode *binary_nodes;
   uint32_t *binary_parents;
-  CUDA_CHECK(cudaMallocAsync(&binary_nodes, (leaf_count - 1) * sizeof(BinaryNode),
-                             m_stream_0));
+  CUDA_CHECK(cudaMallocAsync(
+      &binary_nodes, (leaf_count - 1) * sizeof(BinaryNode), m_stream_0));
   CUDA_CHECK(cudaMallocAsync(
       &binary_parents, (2 * leaf_count - 1) * sizeof(uint32_t), m_stream_0));
   build_binary_topology(leaf_morton_codes, binary_nodes, binary_parents,
@@ -329,11 +329,16 @@ void WinderBackend<Triangle>::initialize_mesh_data(const float *triangles) {
   // populate BVH8 nodes with tailor coefficients using m2m
   // initialize the atomic counters to 0
   thrust::fill_n(m_stream_0_policy, atomic_counters, leaf_count - 1, 0);
+  TailorCoefficients *m2m_f32_coefficients;
+  CUDA_CHECK(cudaMallocAsync(&m2m_f32_coefficients,
+                             max_bvh8_nodes * sizeof(TailorCoefficients),
+                             m_stream_0));
   compute_internal_tailor_coefficients_m2m(
       m_bvh8_nodes, bvh8_internal_parent_map, m_binary_aabbs + leaf_count - 1,
-      m_leaf_coefficients, bvh8_leaf_parents, m_bvh8_leaf_pointers, leaf_count,
-      atomic_counters, m_stream_0);
+      m_leaf_coefficients, bvh8_leaf_parents, m_bvh8_leaf_pointers,
+      m2m_f32_coefficients, leaf_count, atomic_counters, m_stream_0);
 
+  CUDA_CHECK(cudaFreeAsync(m2m_f32_coefficients, m_stream_0));
   CUDA_CHECK(cudaFreeAsync(atomic_counters, m_stream_0));
   CUDA_CHECK(cudaFreeAsync(bvh8_internal_parent_map, m_stream_0));
   CUDA_CHECK(cudaFreeAsync(bvh8_leaf_parents, m_stream_0));
@@ -382,8 +387,8 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
   // build binary radix tree
   BinaryNode *binary_nodes;
   uint32_t *binary_parents;
-  CUDA_CHECK(cudaMallocAsync(&binary_nodes, (leaf_count - 1) * sizeof(BinaryNode),
-                             m_stream_0));
+  CUDA_CHECK(cudaMallocAsync(
+      &binary_nodes, (leaf_count - 1) * sizeof(BinaryNode), m_stream_0));
   CUDA_CHECK(cudaMallocAsync(
       &binary_parents, (2 * leaf_count - 1) * sizeof(uint32_t), m_stream_0));
   build_binary_topology(leaf_morton_codes, binary_nodes, binary_parents,
@@ -431,12 +436,16 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
   // populate BVH8 nodes with tailor coefficients using m2m
   // reset atomic counters to 0
   thrust::fill_n(m_stream_0_policy, atomic_counters, leaf_count - 1, 0);
-
+  TailorCoefficients *m2m_f32_coefficients;
+  CUDA_CHECK(cudaMallocAsync(&m2m_f32_coefficients,
+                             max_bvh8_nodes * sizeof(TailorCoefficients),
+                             m_stream_0));
   compute_internal_tailor_coefficients_m2m(
       m_bvh8_nodes, bvh8_internal_parent_map, m_binary_aabbs + leaf_count - 1,
       m_leaf_coefficients, bvh8_leaf_parents, m_bvh8_leaf_pointers,
-      leaf_count, atomic_counters, m_stream_0);
+      m2m_f32_coefficients, leaf_count, atomic_counters, m_stream_0);
 
+  CUDA_CHECK(cudaFreeAsync(m2m_f32_coefficients, m_stream_0));
   CUDA_CHECK(cudaFreeAsync(atomic_counters, m_stream_0));
   CUDA_CHECK(cudaFreeAsync(bvh8_internal_parent_map, m_stream_0));
   CUDA_CHECK(cudaFreeAsync(bvh8_leaf_parents, m_stream_0));
@@ -468,15 +477,15 @@ auto WinderBackend<Geometry>::compute(
   const auto &compute_stream_policy =
       is_stream_0 ? m_stream_0_policy : m_stream_1_policy;
   CUDA_CHECK(cudaEventRecord(start, compute_stream));
-  
+
   // Allocate required buffers
   float *winding_numbers; // result
   CUDA_CHECK(cudaMallocAsync(&winding_numbers, query_count * sizeof(float),
                              compute_stream));
   uint32_t *queries_to_internal;
   uint32_t *queries_morton;
-  CUDA_CHECK(cudaMallocAsync(&queries_to_internal, query_count * sizeof(uint32_t),
-                             compute_stream));
+  CUDA_CHECK(cudaMallocAsync(&queries_to_internal,
+                             query_count * sizeof(uint32_t), compute_stream));
   CUDA_CHECK(cudaMallocAsync(&queries_morton, query_count * sizeof(uint32_t),
                              compute_stream));
 
@@ -515,7 +524,8 @@ auto WinderBackend<Geometry>::compute(
     epsilon = 1.F / 250.F;
   }
   uint32_t *global_counter;
-  CUDA_CHECK(cudaMallocAsync(&global_counter, sizeof(uint32_t), compute_stream));
+  CUDA_CHECK(
+      cudaMallocAsync(&global_counter, sizeof(uint32_t), compute_stream));
   ComputeWindingNumbersParams<Geometry> params{queries_vec3,
                                                queries_to_internal,
                                                m_bvh8_nodes,
