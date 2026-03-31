@@ -13,6 +13,7 @@
 #include <iostream>
 #include <ostream>
 #include <queue>
+#include <random>
 #include <string>
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
@@ -205,9 +206,9 @@ TEST(TreeConstruction, TreeStructure) {
   thrust::host_vector<Vec3> normals;
   thrust::host_vector<PointNormal> point_normals;
   // fill each leaf with equal points
-  for (size_t z = 0; z < leaf_per_dim; z++) {
-    for (size_t y = 0; y < leaf_per_dim; y++) {
-      for (size_t x = 0; x < leaf_per_dim; x++) {
+  for (size_t z = 1; z <= leaf_per_dim; z++) {
+    for (size_t y = 1; y <= leaf_per_dim; y++) {
+      for (size_t x = 1; x <= leaf_per_dim; x++) {
         Vec3 p{static_cast<float>(x), static_cast<float>(y),
                static_cast<float>(z)};
         Vec3 n = p / (p.length() + 1e-8F);
@@ -290,5 +291,86 @@ TEST(TreeConstruction, TreeStructure) {
       d_node_coefficients;
   // Print the BVH8 structure
   exportToDot("tree.dot", bvh8_nodes, node_coefficients, leaf_pointers,
+              sorted_geometry, leaf_coefficients);
+}
+
+TEST(TreeConstruction, RandomTreeStructure) {
+  size_t gen_leafs = 1000000/32;
+  size_t leaf_size = 32;
+
+  thrust::host_vector<Vec3> points;
+  thrust::host_vector<Vec3> normals;
+  thrust::host_vector<PointNormal> point_normals;
+
+  std::mt19937 gen(42);
+  std::uniform_real_distribution<float> dist_pos(-10, 10);
+  std::normal_distribution<float> norm_dis(0.0F, 1);
+  // fill each leaf with equal points
+  for (size_t i = 0; i < gen_leafs; i++) {
+    for (size_t i = 0; i < leaf_size; i++) {
+      Vec3 p = Vec3{dist_pos(gen), dist_pos(gen), dist_pos(gen)};
+      Vec3 n = Vec3{norm_dis(gen), norm_dis(gen), norm_dis(gen)};
+      PointNormal pn = {p, n};
+      point_normals.push_back(pn);
+      points.push_back(pn.p);
+      normals.push_back(pn.n);
+    }
+  }
+
+  thrust::device_vector<PointNormal> d_point_normals = point_normals;
+  thrust::device_vector<Vec3> d_points = points;
+  thrust::device_vector<Vec3> d_normals = normals;
+
+  std::unique_ptr<WinderBackend<PointNormal>> backend =
+      WinderBackend<PointNormal>::CreateFromPoints(
+          (float *)d_points.data().get(), (float *)d_normals.data().get(),
+          d_points.size(), 0);
+
+  // Geometry count
+  EXPECT_EQ(backend->m_count, point_normals.size());
+  // Node count
+  uint32_t bvh8_node_count;
+  cudaMemcpy(&bvh8_node_count, backend->m_bvh8_node_count, sizeof(uint32_t),
+             cudaMemcpyDeviceToHost);
+  size_t leaf_count = (point_normals.size() + 31) / 32;
+  printf("INFO: leaf count: %lu\n", leaf_count);
+  printf("INFO: bvh8_node_count: %u\n", bvh8_node_count);
+
+  // get sorted geometry
+  thrust::host_vector<PointNormal> sorted_geometry(point_normals.size());
+  cudaMemcpy(sorted_geometry.data(), backend->m_sorted_geometry,
+             sizeof(PointNormal) * backend->m_count, cudaMemcpyDeviceToHost);
+  CUDA_CHECK(cudaGetLastError());
+
+  // DOWNLOAD BVH8 DATA TO HOST
+  // leafs
+  thrust::host_vector<LeafPointers> leaf_pointers(leaf_count);
+  thrust::host_vector<TailorCoefficientsBf16> leaf_coefficients(leaf_count);
+  cudaMemcpy(leaf_pointers.data(), backend->m_bvh8_leaf_pointers,
+             sizeof(LeafPointers) * bvh8_node_count, cudaMemcpyDeviceToHost);
+  CUDA_CHECK(cudaGetLastError());
+  cudaMemcpy(leaf_coefficients.data(), backend->m_leaf_coefficients,
+             sizeof(TailorCoefficientsBf16) * leaf_count,
+             cudaMemcpyDeviceToHost);
+  CUDA_CHECK(cudaGetLastError());
+  // nodes
+  thrust::host_vector<BVH8Node> bvh8_nodes(bvh8_node_count);
+  cudaMemcpy(bvh8_nodes.data(), backend->m_bvh8_nodes,
+             sizeof(BVH8Node) * bvh8_node_count, cudaMemcpyDeviceToHost);
+  CUDA_CHECK(cudaGetLastError());
+  // node coefficients
+  thrust::device_vector<TailorCoefficientsBf16> d_node_coefficients(
+      bvh8_node_count);
+
+  uint32_t block = 128;
+  uint32_t grid = (bvh8_node_count + block - 1) / block;
+  dequantizeTailorCoefficients<<<grid, block>>>(
+      backend->m_bvh8_nodes, d_node_coefficients.data().get(), bvh8_node_count);
+  CUDA_CHECK(cudaGetLastError());
+
+  thrust::host_vector<TailorCoefficientsBf16> node_coefficients =
+      d_node_coefficients;
+  // Print the BVH8 structure
+  exportToDot("rand_tree.dot", bvh8_nodes, node_coefficients, leaf_pointers,
               sorted_geometry, leaf_coefficients);
 }

@@ -88,7 +88,9 @@ struct AABB {
     Vec3 com_a = a.center_of_mass.get(a.min, a.diagonal());
     Vec3 com_b = b.center_of_mass.get(b.min, b.diagonal());
     Vec3 com_new = com_a * a_factor + com_b * b_factor;
+
     result.center_of_mass.set(com_new, result.min, 1.F / result.diagonal());
+
     // Calculate shift-adjusted radius
     // this is an upper bound
     float dist_a = (com_new - com_a).length() +

@@ -207,15 +207,6 @@ convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
       leaf_ptr_v4[bvh8_idx * 2 + 1] =
           make_uint4(my_leaf_indices[4], my_leaf_indices[5], my_leaf_indices[6],
                      my_leaf_indices[7]);
-      printf("DEBUG: %u,%u,%u,%u,%u,%u,%u,%u\n",
-             params.bvh8_leaf_pointers[bvh8_idx].indices[0],
-             params.bvh8_leaf_pointers[bvh8_idx].indices[1],
-             params.bvh8_leaf_pointers[bvh8_idx].indices[2],
-             params.bvh8_leaf_pointers[bvh8_idx].indices[3],
-             params.bvh8_leaf_pointers[bvh8_idx].indices[4],
-             params.bvh8_leaf_pointers[bvh8_idx].indices[5],
-             params.bvh8_leaf_pointers[bvh8_idx].indices[6],
-             params.bvh8_leaf_pointers[bvh8_idx].indices[7]);
     }
     // level synchronization
     grid.sync();

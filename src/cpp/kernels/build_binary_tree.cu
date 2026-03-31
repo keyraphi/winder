@@ -198,6 +198,7 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
   if (leaf_idx >= leaf_count)
     return;
 
+
   uint32_t lane_id = geometry_idx % 32;
 
   Geometry geometry =
@@ -247,7 +248,7 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
   binary_aabbs[leaf_idx + leaf_count - 1].max = p_max;
   Vec3 diagonal = p_max - p_min;
   Vec3 inv_extend = 1.F / diagonal;
-  float inv_diagonal_length = 1.F / diagonal.length2();
+  float inv_diagonal_length = diagonal.inv_length();
   binary_aabbs[leaf_idx + leaf_count - 1].center_of_mass.set(center_of_mass,
                                                              p_min, inv_extend);
   binary_aabbs[leaf_idx + leaf_count - 1].center_of_mass.setMaxDistance(
@@ -336,12 +337,12 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
       return; // this subtree arived first and is done
     }
     uint32_t geo_count_my_child = geo_count_in_leaf;
-
     while (current_parent_idx != 0xFFFFFFFF) {
       BinaryNode parent_node = binary_nodes[current_parent_idx];
 
       uint32_t geo_count_left_child;
       uint32_t geo_count_right_child;
+      // find out if my leaf is left or right
       if (parent_node.left_child == current_idx) {
         // I am the left child
         geo_count_left_child = geo_count_my_child;
@@ -353,11 +354,6 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
       }
 
       // merge child aabbs
-      if (current_parent_idx >= 2*leaf_count - 1) {
-        printf("DEBUG; current_parent_idx >= 2*leaf_count -1: %u\n", current_parent_idx);
-        printf("DEBUG; parent_node.left_child >= 2*leaf_count -1: %u\n", parent_node.left_child);
-        printf("DEBUG; parent_node.right_child >= 2*leaf_count -1: %u\n", parent_node.right_child);
-      }
       binary_aabbs[current_parent_idx] =
           AABB::merge(binary_aabbs[parent_node.left_child],
                       binary_aabbs[parent_node.right_child],

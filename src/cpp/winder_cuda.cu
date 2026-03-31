@@ -399,6 +399,7 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
   uint32_t *atomic_counters;
   CUDA_CHECK(cudaMallocAsync(&atomic_counters,
                              (leaf_count - 1) * sizeof(uint32_t), m_stream_0));
+  thrust::fill_n(m_stream_0_policy, atomic_counters, leaf_count - 1, 0);
   populate_binary_tree_aabb_and_leaf_coefficients<PointNormal>(
       m_sorted_geometry, m_leaf_coefficients, leaf_count, binary_nodes,
       m_binary_aabbs, binary_parents, atomic_counters, m_count, m_stream_0);
