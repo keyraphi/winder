@@ -81,6 +81,7 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
       }
 
       // Merge child coeficients into parent tailor by recentering child
+      //
       Vec3 shift_vector = child_center - parent_center; // v in equations
       // zero order doesn't change
       // M_0' = M_0

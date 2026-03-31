@@ -83,7 +83,6 @@ public:
   void initialize_point_data(const float *points, const float *normals);
 
 private:
-  size_t m_count;
   int m_device;
   cudaStream_t m_stream_0, m_stream_1;
   cudaEvent_t m_start_tree_construction_event;
@@ -96,6 +95,7 @@ private:
   WinderBackend(size_t size, int device_id);
 
 public: // TODO DEBUG
+  size_t m_count;
 
 
   // --- Geometric Data & Permutation Maps ---

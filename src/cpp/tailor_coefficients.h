@@ -55,7 +55,7 @@ struct TailorCoefficients {
   Mat3x3 first_order;
   Tensor3_compressed second_order;
 
-  __device__ static auto
+  __host__ __device__ static auto
   from_bf16(const TailorCoefficientsBf16 &t) -> TailorCoefficients {
     TailorCoefficients result;
     result.zero_order = Vec3::from_bf16(t.zero_order);

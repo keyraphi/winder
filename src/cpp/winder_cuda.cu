@@ -369,7 +369,7 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
 
   // each leaf contains 32 (LEAF_SIZE) elements
   uint32_t leaf_count = (m_count + LEAF_SIZE - 1) / LEAF_SIZE;
-  uint32_t max_bvh8_nodes = leaf_count - 1; // DEBUG worst case scenario!!
+  uint32_t max_bvh8_nodes = leaf_count - 1; // DEBUG worst case scenario - very pesimistic!!
 
   auto morton_leaf_stride_idx = thrust::make_transform_iterator(
       thrust::make_counting_iterator<uint32_t>(0),

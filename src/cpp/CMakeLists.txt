@@ -105,6 +105,7 @@ add_executable(test_binary2bvh8 tests/test_binary2bvh8.cu)
 add_executable(test_m2m tests/test_m2m.cu)
 add_executable(test_util_functions tests/test_util_functions.cu)
 add_executable(test_traversal tests/test_traversal.cu)
+add_executable(test_tree_construction tests/test_tree_construction.cu)
 
 target_link_libraries(
     test_binary_tree_construction
@@ -126,6 +127,10 @@ target_link_libraries(
     test_traversal
     PRIVATE winder_kernels winder_backend GTest::gtest_main CUDA::cudart
 )
+target_link_libraries(
+    test_tree_construction
+    PRIVATE winder_kernels winder_backend GTest::gtest_main CUDA::cudart
+)
 
 target_compile_options(
     test_binary_tree_construction
@@ -135,6 +140,7 @@ target_compile_options(test_binary2bvh8 PRIVATE ${WINDER_CUDA_FLAGS})
 target_compile_options(test_m2m PRIVATE ${WINDER_CUDA_FLAGS})
 target_compile_options(test_util_functions PRIVATE ${WINDER_CUDA_FLAGS})
 target_compile_options(test_traversal PRIVATE ${WINDER_CUDA_FLAGS})
+target_compile_options(test_tree_construction PRIVATE ${WINDER_CUDA_FLAGS})
 
 target_include_directories(
     test_binary_tree_construction
@@ -147,6 +153,7 @@ target_include_directories(
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 )
 target_include_directories(test_traversal PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(test_tree_construction PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 enable_testing()
 add_test(NAME BinaryTreeConstructionTest COMMAND test_binary_tree_construction)
@@ -154,3 +161,4 @@ add_test(NAME Binary2BVH8Test COMMAND test_binary2bvh8)
 add_test(NAME M2MTest COMMAND test_m2m)
 add_test(NAME UtilFunctionsTest COMMAND test_util_functions)
 add_test(NAME TraversalTest COMMAND test_traversal)
+add_test(NAME TreeConstructionTest COMMAND test_tree_construction)
