@@ -6,6 +6,7 @@
 #include <cuda_runtime_api.h>
 #include <gtest/gtest.h>
 #include <memory>
+#include <numbers>
 #include <random>
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
@@ -80,39 +81,77 @@ template <typename T> void RunAccuracyTest(const WinderTestParams &params) {
   size_t count = params.count;
   float epsilon = params.epsilon;
   size_t query_count = params.query_count;
-  float pos_dist_radius = params.pos_dist_radius;
-  float norm_dist_variance = params.norm_dist_variance;
+  float radius = params.pos_dist_radius;
   float query_dist_radius = params.query_dist_radius;
   double allowed_rms = params.allowed_rms;
   float beta = params.beta;
 
   thrust::host_vector<Vec3> queries_h(query_count);
-  thrust::host_vector<Vec3> points_h(count);
-  thrust::host_vector<Vec3> scaled_normals_h(count);
-  thrust::host_vector<T> geometry_h(count);
+  thrust::host_vector<Vec3> points_h;
+  thrust::host_vector<Vec3> scaled_normals_h;
+  thrust::host_vector<T> geometry_h;
 
   std::mt19937 gen(42);
-  std::uniform_real_distribution<float> dist_pos(-pos_dist_radius,
-                                                 pos_dist_radius);
-  std::normal_distribution<float> norm_dis(0.0F, norm_dist_variance);
+  std::normal_distribution<float> dist_pos(0.F, 1.F);
+
+  const float pi = std::numbers::pi_v<float>;
+  const float total_sphere_area = 4.F * pi * radius;
+  const float area_per_point = total_sphere_area / static_cast<float>(count);
+
+  auto get_pos = [&](float theta, float phi) {
+    return Vec3{radius * sinf(theta) * cosf(phi),
+                radius * sinf(theta) * sinf(phi), radius * cosf(theta)};
+  };
+
+  auto rings =
+      static_cast<size_t>((1.F + sqrtf(1.F + static_cast<float>(count))) / 2.F);
+  size_t sectors = count / (2 * rings - 1);
 
   for (size_t i = 0; i < count; ++i) {
     if constexpr (std::is_same_v<T, PointNormal>) {
-      geometry_h[i].p = Vec3{dist_pos(gen), dist_pos(gen), dist_pos(gen)};
-      geometry_h[i].n = Vec3{norm_dis(gen), norm_dis(gen), norm_dis(gen)};
-      points_h[i] = geometry_h[i].p;
-      scaled_normals_h[i] = geometry_h[i].n;
+      Vec3 p{dist_pos(gen), dist_pos(gen), dist_pos(gen)};
+      float normalization_factor = radius / p.length();
+      p = p * normalization_factor; // point on sphere
+      Vec3 n = area_per_point * p / radius;
+      PointNormal pn{p, n};
+      geometry_h.push_back(pn);
+      points_h.push_back(p);
+      scaled_normals_h.push_back(n);
     } else if constexpr (std::is_same_v<T, Triangle>) {
-      Vec3 offset = {dist_pos(gen), dist_pos(gen), dist_pos(gen)};
-      Vec3 v0 = Vec3{dist_pos(gen) * 0.04F, dist_pos(gen) * 0.04F,
-                     dist_pos(gen) * 0.04F};
-      Vec3 v1 = Vec3{dist_pos(gen) * 0.04F, dist_pos(gen) * 0.04F,
-                     dist_pos(gen) * 0.04F};
-      Vec3 v2 = Vec3{dist_pos(gen) * 0.04F, dist_pos(gen) * 0.04F,
-                     dist_pos(gen) * 0.04F};
-      geometry_h[i].v0 = offset + v0;
-      geometry_h[i].v1 = offset + v1;
-      geometry_h[i].v2 = offset + v2;
+      if (count == 1) {
+        Triangle t;
+        t.v0 = Vec3{0, 0, 0};
+        t.v1 = Vec3{1, 0, 0};
+        t.v2 = Vec3{0, 1, 0};
+        geometry_h.push_back(t);
+        break;
+      }
+      size_t ring = i / sectors;
+      size_t sector = i % sectors;
+      // Define the 4 corners of the current "quad" on the sphere grid
+      float theta0 = pi * float(ring) / float(rings);
+      float theta1 = pi * float(ring + 1) / float(rings);
+      float phi0 = 2.0f * pi * float(sector) / float(sectors);
+      float phi1 = 2.0f * pi * float(sector + 1) / float(sectors);
+      Vec3 v_top_left = get_pos(theta0, phi0);
+      Vec3 v_top_right = get_pos(theta0, phi1);
+      Vec3 v_bot_left = get_pos(theta1, phi0);
+      Vec3 v_bot_right = get_pos(theta1, phi1);
+      // The two triangles
+      if (ring != 0) {
+        Triangle t1;
+        t1.v0 = v_top_left;
+        t1.v1 = v_bot_left;
+        t1.v2 = v_top_right;
+        geometry_h.push_back(t1);
+      }
+      if (ring != rings - 1) {
+        Triangle t2;
+        t2.v0 = v_top_right;
+        t2.v1 = v_bot_left;
+        t2.v2 = v_bot_right;
+        geometry_h.push_back(t2);
+      }
     }
   }
   std::uniform_real_distribution<float> dist_q(-query_dist_radius,
@@ -145,10 +184,11 @@ template <typename T> void RunAccuracyTest(const WinderTestParams &params) {
   int blocks = (params.query_count + threads - 1) / threads;
   size_t smem_size = threads * sizeof(T);
 
+  printf("DEBUG: geometry_h.size(): %lu\n", geometry_h.size());
   compute_winding_numbers_brute_force_kernel<<<blocks, threads, smem_size>>>(
       (Vec3 *)thrust::raw_pointer_cast(queries_d.data()),
       (T *)thrust::raw_pointer_cast(geom_d.data()), params.query_count,
-      params.count, thrust::raw_pointer_cast(gt_wn_d.data()),
+      geometry_h.size(), thrust::raw_pointer_cast(gt_wn_d.data()),
       1.0f / params.epsilon);
   CUDA_CHECK(cudaGetLastError());
 
@@ -171,7 +211,7 @@ template <typename T> void RunAccuracyTest(const WinderTestParams &params) {
         points_d.size(), 0);
   } else {
     backend = WinderBackend<T>::CreateFromMesh((float *)geom_d.data().get(),
-                                               points_d.size(), 0);
+                                               geom_d.size(), 0);
   }
 
   // DEBUG
@@ -242,8 +282,8 @@ INSTANTIATE_TEST_SUITE_P(
                          1.F / 250.F, 2.3F, 1e-2},
         WinderTestParams{"LargeScene", 1000000, 1000, 50.F, 5.F, 60.F,
                          1.F / 250.F, 2.3F, 1e-2},
-        WinderTestParams{"LargeSceneSingleQueryLargeBeta", 1000000, 1, 50.F, 5.F, 60.F,
-                         1.F / 250.F, 5.F, 1e-2},
+        WinderTestParams{"LargeSceneSingleQueryLargeBeta", 1000000, 1, 50.F,
+                         5.F, 60.F, 1.F / 250.F, 5.F, 1e-2},
         WinderTestParams{"LargeSceneLargeBeta", 1000000, 1000, 50.F, 5.F, 60.F,
                          1.F / 250.F, 5.F, 1e-2}),
     [](const ::testing::TestParamInfo<WindingNumberTest::ParamType> &info) {
@@ -276,8 +316,8 @@ INSTANTIATE_TEST_SUITE_P(
                          1.F / 250.F, 2.F, 1e-3},
         WinderTestParams{"LargeScene", 1000000, 1000, 50.F, 5.F, 60.F,
                          1.F / 250.F, 2.F, 1e-3},
-        WinderTestParams{"LargeSceneSingleQueryLargeBeta", 1000000, 1, 50.F, 5.F, 60.F,
-                         1.F / 250.F, 4.F, 1e-3},
+        WinderTestParams{"LargeSceneSingleQueryLargeBeta", 1000000, 1, 50.F,
+                         5.F, 60.F, 1.F / 250.F, 4.F, 1e-3},
         WinderTestParams{"LargeSceneLargeBeta", 1000000, 1000, 50.F, 5.F, 60.F,
                          1.F / 250.F, 4.F, 1e-3}),
     [](const ::testing::TestParamInfo<WindingNumberTest::ParamType> &info) {

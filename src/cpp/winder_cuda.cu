@@ -119,6 +119,7 @@ WinderBackend<Geometry>::WinderBackend(size_t size, int device_id)
 
   // Allocate memory arena
   size_t leaf_count = (size + LEAF_SIZE - 1) / LEAF_SIZE;
+  printf("DEBUG X: size: %lu, leaf_count: %lu\n", size, leaf_count);
 
   // uint32_t max_bvh8_nodes =
   //     (leaf_count <= 1) ? 0 : (uint32_t)ceil(leaf_count * 0.2F) + 1;
