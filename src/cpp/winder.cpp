@@ -149,7 +149,7 @@ private:
       : m_impl_tri(std::move(backend)) {}
 };
 
-NB_MODULE(winder_backend, m) {
+NB_MODULE(winder_module, m) {
   m.doc() = R"doc(
         GPU-accelerated Differentiable Winding Number Field library.
         

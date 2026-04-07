@@ -141,42 +141,6 @@ WinderBackend<Geometry>::WinderBackend(size_t size, int device_id)
   CUDA_CHECK(cudaMallocAsync(&m_bvh8_leaf_pointers,
                              max_bvh8_nodes * sizeof(LeafPointers),
                              m_stream_0));
-
-  // m_bvh8_nodes =
-  //     get_aligned_ptr<BVH8Node>(ptr, max_bvh8_nodes, remaining_arena_size);
-  // m_leaf_coefficients = get_aligned_ptr<TailorCoefficientsBf16>(
-  //     ptr, leaf_count, remaining_arena_size);
-  // m_bvh8_leaf_pointers =
-  //     get_aligned_ptr<LeafPointers>(ptr, max_bvh8_nodes,
-  //     remaining_arena_size);
-  // m_binary_aabbs =
-  //     get_aligned_ptr<AABB>(ptr, 2 * leaf_count - 1, remaining_arena_size);
-  // m_binary_nodes =
-  //     get_aligned_ptr<BinaryNode>(ptr, leaf_count - 1, remaining_arena_size);
-  // m_sorted_geometry =
-  //     get_aligned_ptr<Geometry>(ptr, size, remaining_arena_size);
-  // m_to_internal = get_aligned_ptr<uint32_t>(ptr, size, remaining_arena_size);
-  // m_to_canonical = get_aligned_ptr<uint32_t>(ptr, size,
-  // remaining_arena_size); m_morton_codes = get_aligned_ptr<uint32_t>(ptr,
-  // size, remaining_arena_size); m_leaf_morton_codes =
-  //     get_aligned_ptr<uint32_t>(ptr, leaf_count, remaining_arena_size);
-  // m_binary_parents =
-  //     get_aligned_ptr<uint32_t>(ptr, 2 * leaf_count - 1,
-  //     remaining_arena_size);
-  // m_atomic_counters =
-  //     get_aligned_ptr<uint32_t>(ptr, leaf_count - 1, remaining_arena_size);
-  // m_bvh8_leaf_parents =
-  //     get_aligned_ptr<uint32_t>(ptr, leaf_count, remaining_arena_size);
-  // m_bvh8_internal_parent_map =
-  //     get_aligned_ptr<uint32_t>(ptr, max_bvh8_nodes, remaining_arena_size);
-  // m_bvh8_work_queue_A =
-  //     get_aligned_ptr<uint32_t>(ptr, leaf_count - 1, remaining_arena_size);
-  // m_bvh8_work_queue_B =
-  //     get_aligned_ptr<uint32_t>(ptr, leaf_count - 1, remaining_arena_size);
-  // m_bvh8_node_count = get_aligned_ptr<uint32_t>(
-  //     ptr, 1, remaining_arena_size);
-  // m_global_counter = get_aligned_ptr<uint32_t>(
-  //     ptr, 1, remaining_arena_size); // always at the end!
 }
 
 template <IsPrimitiveGeometry PrimitiveGeometry> struct GeometryToAABB {
@@ -370,7 +334,8 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
 
   // each leaf contains 32 (LEAF_SIZE) elements
   uint32_t leaf_count = (m_count + LEAF_SIZE - 1) / LEAF_SIZE;
-  uint32_t max_bvh8_nodes = leaf_count - 1; // DEBUG worst case scenario - very pesimistic!!
+  uint32_t max_bvh8_nodes =
+      leaf_count - 1; // DEBUG worst case scenario - very pesimistic!!
 
   auto morton_leaf_stride_idx = thrust::make_transform_iterator(
       thrust::make_counting_iterator<uint32_t>(0),
@@ -595,6 +560,56 @@ auto WinderBackend<PointNormal>::CreateForSolver(
 
   self->initialize_point_data(points, zero_normals.data().get());
   return self;
+}
+
+template <>
+auto WinderBackend<PointNormal>::get_normals() const -> CudaUniquePtr<float> {
+  throw std::runtime_error("get_normals is not implemented yet!");
+}
+template <>
+auto WinderBackend<Triangle>::get_normals() const -> CudaUniquePtr<float> {
+  throw std::runtime_error("get_normals is not implemented yet!");
+}
+
+template <>
+auto WinderBackend<PointNormal>::grad_normals(
+    [[maybe_unused]] const float *grad_output,
+    [[maybe_unused]] size_t n_queries) const -> CudaUniquePtr<float> {
+  throw std::runtime_error("grad_normals not implemented yet!");
+}
+template <>
+auto WinderBackend<Triangle>::grad_normals(
+    [[maybe_unused]] const float *grad_output,
+    [[maybe_unused]] size_t n_queries) const -> CudaUniquePtr<float> {
+  throw std::runtime_error("grad_normals not implemented yet!");
+}
+
+template <>
+auto WinderBackend<PointNormal>::grad_points(
+    [[maybe_unused]] const float *grad_output,
+    [[maybe_unused]] size_t n_queries) const -> CudaUniquePtr<float> {
+  throw std::runtime_error("grad_points not implemented yet!");
+}
+template <>
+auto WinderBackend<Triangle>::grad_points(
+    [[maybe_unused]] const float *grad_output,
+    [[maybe_unused]] size_t n_queries) const -> CudaUniquePtr<float> {
+  throw std::runtime_error("grad_points not implemented yet!");
+}
+
+template <>
+void WinderBackend<PointNormal>::solve_for_normals(
+    [[maybe_unused]] const float *extra_p, [[maybe_unused]] size_t extra_count,
+    [[maybe_unused]] const float *extra_wn, [[maybe_unused]] const float *pc_wn,
+    [[maybe_unused]] float alpha) {
+  throw std::runtime_error("solve_for_normals not implemented yet!");
+}
+template <>
+void WinderBackend<Triangle>::solve_for_normals(
+    [[maybe_unused]] const float *extra_p, [[maybe_unused]] size_t extra_count,
+    [[maybe_unused]] const float *extra_wn, [[maybe_unused]] const float *pc_wn,
+    [[maybe_unused]] float alpha) {
+  throw std::runtime_error("solve_for_normals not implemented yet!");
 }
 
 template class WinderBackend<PointNormal>;

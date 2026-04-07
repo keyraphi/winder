@@ -1,9 +1,7 @@
-from .winder_backend import WinderEngine as _Engine
+from .winder_module import WinderEngine as _Engine
 
 class Winder:
     def __init__(self, points, faces=None, normals=None):
-        # The user passes a torch.Tensor, jax.Array, etc.
-        # nb::ndarray handles the __dlpack__ conversion automatically!
         if faces is not None:
             self._engine = _Engine(points, faces)
         else:
