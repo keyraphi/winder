@@ -12,6 +12,7 @@
 #include <cuda_runtime_api.h>
 #include <device_atomic_functions.h>
 #include <driver_types.h>
+#include <format>
 #include <memory>
 #include <ostream>
 #include <stdexcept>
@@ -45,6 +46,7 @@
 #include "kernels/build_binary_tree.cuh"
 #include "kernels/bvh8_m2m.cuh"
 #include "kernels/common.cuh"
+#include "kernels/mesh.cuh"
 #include "kernels/traversal.cuh"
 #include "tailor_coefficients.h"
 #include "vec3.h"
@@ -119,7 +121,6 @@ WinderBackend<Geometry>::WinderBackend(size_t size, int device_id)
 
   // Allocate memory arena
   size_t leaf_count = (size + LEAF_SIZE - 1) / LEAF_SIZE;
-  printf("DEBUG X: size: %lu, leaf_count: %lu\n", size, leaf_count);
 
   // uint32_t max_bvh8_nodes =
   //     (leaf_count <= 1) ? 0 : (uint32_t)ceil(leaf_count * 0.2F) + 1;
@@ -204,7 +205,7 @@ auto WinderBackend<Geometry>::initializeMortonCodes(
 }
 
 template <>
-void WinderBackend<Triangle>::initialize_mesh_data(const float *triangles) {
+void WinderBackend<Triangle>::initialize_triangle_data(const float *triangles) {
   const auto *triangles_tri = reinterpret_cast<const Triangle *>(triangles);
 
   CUDA_CHECK(cudaEventRecord(m_start_tree_construction_event, m_stream_0));
@@ -505,7 +506,6 @@ auto WinderBackend<Geometry>::compute(
                                                global_counter,
                                                beta,
                                                epsilon};
-  printf("DEBUG: calling compute_winding_numbers (beta = %f)\n", params.beta);
   compute_winding_numbers<Geometry>(params, m_device, compute_stream);
   // free temporary memory
   CUDA_CHECK(cudaFreeAsync(queries_to_internal, compute_stream));
@@ -529,6 +529,7 @@ auto WinderBackend<PointNormal>::CreateFromPoints(
     int device_id) -> std::unique_ptr<WinderBackend<PointNormal>> {
   ScopedCudaDevice device_scope(device_id);
 
+  printf("CreateFromPoints!\n");
   auto self = std::unique_ptr<WinderBackend<PointNormal>>{
       new WinderBackend<PointNormal>(point_count, device_id)};
   self->initialize_point_data(points, normals);
@@ -536,14 +537,51 @@ auto WinderBackend<PointNormal>::CreateFromPoints(
 }
 
 template <>
-auto WinderBackend<Triangle>::CreateFromMesh(
-    const float *trisangles, size_t triangle_count,
+auto WinderBackend<Triangle>::CreateFromTriangles(
+    const float *triangles, size_t triangle_count,
     int device_id) -> std::unique_ptr<WinderBackend<Triangle>> {
   ScopedCudaDevice device_scope(device_id);
+  printf("CreateFromTriangles!\n");
   auto self = std::unique_ptr<WinderBackend>{
       new WinderBackend<Triangle>(triangle_count, device_id)};
 
-  self->initialize_mesh_data(trisangles); // Sorts and builds tree
+  self->initialize_triangle_data(triangles);
+  return self;
+}
+
+template <>
+auto WinderBackend<Triangle>::CreateFromMesh(
+    const float *vertices, size_t vertex_count,
+    const uint32_t *triangle_indices, size_t triangle_count,
+    int device_id) -> std::unique_ptr<WinderBackend<Triangle>> {
+  ScopedCudaDevice device_scope(device_id);
+  printf("CreateFromMesh!\n");
+  auto self = std::unique_ptr<WinderBackend>{
+      new WinderBackend<Triangle>(triangle_count, device_id)};
+
+  // Verify that index range does not exceed vertex size
+  uint32_t max_index = thrust::reduce(thrust::device, triangle_indices,
+                                      triangle_indices + 3 * triangle_count, 0,
+                                      thrust::maximum<uint32_t>());
+  if (max_index >= vertex_count) {
+    throw std::runtime_error(
+        std::format("The triangle indices are not allowed to exceed the number "
+                    "of vertices. Vertex count is {}, max index is {}.",
+                    vertex_count, max_index));
+  }
+
+  // Create temporary triangles from indices
+  float *triangles;
+  CUDA_CHECK(cudaMallocAsync(&triangles, triangle_count * sizeof(Triangle),
+                             self->m_stream_0));
+
+  gather_triangles(vertices, triangle_indices,
+                   static_cast<uint32_t>(triangle_count), triangles,
+                   self->m_stream_0);
+
+  self->initialize_triangle_data(triangles);
+
+  CUDA_CHECK(cudaFreeAsync(triangles, self->m_stream_0));
   return self;
 }
 

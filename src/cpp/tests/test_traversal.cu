@@ -210,7 +210,7 @@ template <typename T> void RunAccuracyTest(const WinderTestParams &params) {
         (float *)points_d.data().get(), (float *)scaled_normals_d.data().get(),
         points_d.size(), 0);
   } else {
-    backend = WinderBackend<T>::CreateFromMesh((float *)geom_d.data().get(),
+    backend = WinderBackend<T>::CreateFromTriangles((float *)geom_d.data().get(),
                                                geom_d.size(), 0);
   }
 

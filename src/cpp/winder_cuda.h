@@ -47,7 +47,12 @@ template <IsGeometry Geometry> class WinderBackend {
 public:
   ~WinderBackend();
 
-  static auto CreateFromMesh(const float *triangles, size_t triangle_count,
+  static auto CreateFromTriangles(const float *triangles, size_t triangle_count,
+                             int device_id)
+      -> std::unique_ptr<WinderBackend<Triangle>>;
+
+  static auto CreateFromMesh(const float *vertices, size_t vertex_count,
+      const uint32_t *triangle_indices, size_t triangle_count,
                              int device_id)
       -> std::unique_ptr<WinderBackend<Triangle>>;
 
@@ -79,7 +84,7 @@ public:
                          float alpha);
 
   // Used in factories
-  void initialize_mesh_data(const float *triangles);
+  void initialize_triangle_data(const float *triangles);
   void initialize_point_data(const float *points, const float *normals);
 
 private:

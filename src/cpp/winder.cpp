@@ -22,6 +22,8 @@ using Vec3_t = nb::ndarray<nb::array_api, float, nb::shape<-1, 3>, nb::c_contig,
                            nb::device::cuda>;
 using Triangle_t = nb::ndarray<nb::array_api, float, nb::shape<-1, 3, 3>,
                                nb::c_contig, nb::device::cuda>;
+using TriangleIdx_t = nb::ndarray<nb::array_api, uint32_t, nb::shape<-1, 3>,
+                                  nb::c_contig, nb::device::cuda>;
 using Scalar_t = nb::ndarray<nb::array_api, float, nb::shape<-1>, nb::c_contig,
                              nb::device::cuda>;
 
@@ -29,8 +31,18 @@ class WinderEngine {
 public:
   // --- Triangle Mesh Constructor ---
   WinderEngine(const Triangle_t &triangles) {
-    m_impl_tri = WinderBackend<Triangle>::CreateFromMesh(triangles.data(), triangles.shape(0),
-                                           triangles.device_id());
+    m_impl_tri = WinderBackend<Triangle>::CreateFromTriangles(
+        triangles.data(), triangles.shape(0), triangles.device_id());
+  }
+
+  WinderEngine(const Vec3_t &vertices, const TriangleIdx_t &triangle_indices) {
+    if (vertices.device_id() != triangle_indices.device_id()) {
+      throw std::runtime_error(
+          "Vertices and triangle_indices must be on the same CUDA device.");
+    }
+    m_impl_tri = WinderBackend<Triangle>::CreateFromMesh(
+        vertices.data(), vertices.shape(0), triangle_indices.data(),
+        triangle_indices.shape(0), vertices.device_id());
   }
 
   // --- Point Cloud Constructor ---
@@ -161,7 +173,8 @@ NB_MODULE(winder_module, m) {
   nb::class_<WinderEngine>(m, "WinderEngine")
       // --- Triangle Mesh Constructor ---
       .def(nb::init<Triangle_t>(), "triangles"_a,
-           nb::sig("def __init__(self, triangles: Array) -> None"),
+           nb::sig("def __init__(self, triangles: Array[N, 3, 3; float32; "
+                   "cuda]) -> None"),
            R"doc(
                 Initialize the engine using a triangle soup.
                 
@@ -169,12 +182,30 @@ NB_MODULE(winder_module, m) {
                 ----------
                 triangles : Array
                     A (N, 3, 3) float32 CUDA array holding N triangles
-                    which consists of 3 points with (x,y,z) coordinates.
+                    which consists of 3 vertices. 
+                    Note: Order the vertices counter-clockwise when seen from the front. 
+            )doc")
+
+      .def(nb::init<Vec3_t, TriangleIdx_t>(), "vertices"_a,
+           "triangle_indices"_a,
+           nb::sig("def __init__(self, vertices: Array[M, 3; float32; cuda], "
+                   "triange_indices: Array[N, 3; uint32; cuda]) -> None"),
+           R"doc(
+                Initialize the engine using a triangle soup with shared vertices.
+                
+                Parameters
+                ----------
+                vertices : Array
+                    A (M, 3) float32 CUDA array holding M vertices.
+                triangle_indices: Array
+                    A (N, 3) index array, where each row defines the three vertices of a triangle.
+                    Note: Order the vertices counter-clockwise when seen from the front. 
             )doc")
 
       // --- Point Cloud Constructor ---
       .def(nb::init<Vec3_t, Vec3_t>(), "points"_a, "normals"_a,
-           nb::sig("def __init__(self, points: Array, normals: Array) -> None"),
+           nb::sig("def __init__(self, points: Array[N, 3; float32; cuda], "
+                   "normals: Array[N, 3; float32; cuda]) -> None"),
            R"doc(
                 Initialize the engine using a point cloud with scaled normals.
                 
@@ -192,8 +223,10 @@ NB_MODULE(winder_module, m) {
       .def_static("solve_normals", &WinderEngine::solve_from_constraints,
                   "pc"_a, "extra_points"_a, "extra_wn"_a,
                   "pc_wn"_a = nb::none(), "alpha_extra"_a = 0.2f,
-                  nb::sig("def solve_normals(pc: Array, extra_points: Array, "
-                          "extra_wn: Array, pc_wn: Optional[Array] = None, "
+                  nb::sig("def solve_normals(pc: Array[N, 3; float32; cuda], "
+                          "extra_points: Array[K, 3; float32; cuda], "
+                          "extra_wn: Array[K; float32; cuda], pc_wn: "
+                          "Optional[Array[N; float32; cuda]] = None, "
                           "alpha_extra: float = 0.2) -> WinderEngine"),
                   R"doc(
                 Solves for optimal scaled normals for a point cloud.
@@ -220,12 +253,13 @@ NB_MODULE(winder_module, m) {
                 Returns
                 -------
                 WinderEngine
-                    A new engine instance initialized with the solved normals.
+                    A new engine instance initialized with the point cloud and the solved normals.
             )doc")
       // --- Data Access ---
-      .def_prop_ro("scaled_normals", &WinderEngine::get_scaled_normals,
-                   nb::sig("@property\ndef scaled_normals(self) -> Array"),
-                   R"doc(
+      .def_prop_ro(
+          "scaled_normals", &WinderEngine::get_scaled_normals,
+          nb::sig("@property\ndef scaled_normals(self) -> Array[N, 3]"),
+          R"doc(
                 Returns a copy of the scaled normals currently stored in the engine.
 
                 Returns
@@ -235,13 +269,14 @@ NB_MODULE(winder_module, m) {
                 
                 Note
                 ----
-                If the engine is in Triangle Mesh mode, this will return an empty array 
-                or None, as meshes use face geometry instead of point normals.
+                If the engine is in Triangle Mesh mode, this will return an empty array,
+                as there are no normals stored for triangle representations.
             )doc")
 
       // --- Inference ---
       .def("compute", &WinderEngine::compute, "queries"_a,
-           nb::sig("def compute(self, queries: Array) -> Array"),
+           nb::sig("def compute(self, queries: Array[N, 3; flaot32; cuda]) -> "
+                   "Array"),
            R"doc(
                 Computes the winding number at the given query locations.
 
@@ -256,11 +291,11 @@ NB_MODULE(winder_module, m) {
             )doc")
 
       // --- Gradients ---
-      .def(
-          "grad_scaled_normals", &WinderEngine::get_grad_normals,
-          "grad_output"_a,
-          nb::sig("def grad_scaled_normals(self, grad_output: Array) -> Array"),
-          R"doc(
+      .def("grad_scaled_normals", &WinderEngine::get_grad_normals,
+           "grad_output"_a,
+           nb::sig("def grad_scaled_normals(self, grad_output: Array[Q; "
+                   "float32; cuda]) -> Array[N, 3; float32; cuda]"),
+           R"doc(
                 Compute the Vector-Jacobian Product (VJP) for the scaled normals.
 
                 This function propagates the gradient of a scalar loss function with 
@@ -287,7 +322,8 @@ NB_MODULE(winder_module, m) {
             )doc")
 
       .def("grad_points", &WinderEngine::get_grad_points, "grad_output"_a,
-           nb::sig("def grad_points(self, grad_output: Array) -> Array"),
+           nb::sig("def grad_points(self, grad_output: Array[Q; float32; "
+                   "cuda]) -> Array[N, 3; float32; cucda]"),
            R"doc(
                 Compute the Vector-Jacobian Product (VJP) for the source point positions.
 
