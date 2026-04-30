@@ -33,6 +33,7 @@ public:
   WinderEngine(const Triangle_t &triangles) {
     m_impl_tri = WinderBackend<Triangle>::CreateFromTriangles(
         triangles.data(), triangles.shape(0), triangles.device_id());
+    is_backend_triangle = true;
   }
 
   WinderEngine(const Vec3_t &vertices, const TriangleIdx_t &triangle_indices) {
@@ -43,6 +44,7 @@ public:
     m_impl_tri = WinderBackend<Triangle>::CreateFromMesh(
         vertices.data(), vertices.shape(0), triangle_indices.data(),
         triangle_indices.shape(0), vertices.device_id());
+    is_backend_triangle = true;
   }
 
   // --- Point Cloud Constructor ---
@@ -58,6 +60,7 @@ public:
 
     m_impl_pn = WinderBackend<PointNormal>::CreateFromPoints(
         points.data(), normals.data(), points.shape(0), points.device_id());
+    is_backend_triangle = false;
   }
 
   // --- Static Solver (Factory Method) ---
@@ -97,6 +100,10 @@ public:
   }
 
   Vec3_t get_scaled_normals() {
+    if (is_backend_triangle) {
+      throw std::runtime_error(
+          "Normals are not explicitly stored for triangle based geometry.");
+    }
     auto raw_ptr_unique = m_impl_pn->get_normals();
 
     if (!raw_ptr_unique) {
@@ -115,8 +122,29 @@ public:
     size_t n = queries.shape(0);
     // todo ensure queries are on same device as m_impl
 
-    // todo use correct implementation
-    auto raw_ptr_unique = m_impl_pn->compute(queries.data(), n);
+    CudaUniquePtr<float> raw_ptr_unique;
+    if (is_backend_triangle) {
+      raw_ptr_unique = m_impl_tri->compute(queries.data(), n);
+    } else {
+      raw_ptr_unique = m_impl_pn->compute(queries.data(), n);
+    }
+    float *raw_ptr = raw_ptr_unique.release();
+    nb::capsule owner(
+        raw_ptr, [](void *p) noexcept -> void { winder_cuda::cuda_free(p); });
+
+    return {raw_ptr, {n}, owner};
+  }
+
+  auto brute_force(const Vec3_t &queries) -> Scalar_t {
+    size_t n = queries.shape(0);
+    // todo ensure queries are on same device as m_impl
+
+    CudaUniquePtr<float> raw_ptr_unique;
+    if (is_backend_triangle) {
+      raw_ptr_unique = m_impl_tri->brute_force(queries.data(), n);
+    } else {
+      raw_ptr_unique = m_impl_pn->brute_force(queries.data(), n);
+    }
     float *raw_ptr = raw_ptr_unique.release();
     nb::capsule owner(raw_ptr,
                       [](void *p) noexcept { winder_cuda::cuda_free(p); });
@@ -125,6 +153,7 @@ public:
   }
 
   Vec3_t get_grad_normals(const Scalar_t &grad_output) {
+    // TODO
 
     auto raw_ptr_unique =
         m_impl_pn->grad_normals(grad_output.data(), grad_output.shape(0));
@@ -138,6 +167,7 @@ public:
   }
 
   Vec3_t get_grad_points(const Scalar_t &grad_output) {
+    // TODO
 
     auto raw_ptr_unique =
         m_impl_pn->grad_points(grad_output.data(), grad_output.shape(0));
@@ -151,6 +181,7 @@ public:
 
 private:
   // flag for used backend
+  bool is_backend_triangle;
   std::unique_ptr<WinderBackend<PointNormal>> m_impl_pn;
   std::unique_ptr<WinderBackend<Triangle>> m_impl_tri;
 
@@ -289,6 +320,22 @@ NB_MODULE(winder_module, m) {
                 -------
                 (N,) float32 CUDA array holding the winding numbers.
             )doc")
+      .def("brute_force", &WinderEngine::brute_force, "queries"_a,
+           nb::sig("def brute_force(self, queries: Array[N, 3; float32, cuda]) "
+                   "-> Array"),
+           R"doc(
+                Computes the winding numbers at the given query location with brute force on GPU.
+                This is O(N^2) but precise.
+
+                Parameters
+                ----------
+                queries : Array
+                    (N, 3) CUDA array of query points.
+
+                Returns
+                -------
+                (N,) float32 CUDA array holding the winding numbers.
+          )doc")
 
       // --- Gradients ---
       .def("grad_scaled_normals", &WinderEngine::get_grad_normals,

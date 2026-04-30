@@ -68,6 +68,9 @@ public:
                float epsilon = -1, size_t stream = 0) const
       -> CudaUniquePtr<float>;
 
+  auto brute_force(const float *queries, size_t query_count, float epsilon=-1,  size_t stream = 0) const
+      -> CudaUniquePtr<float>;
+
   [[nodiscard]] auto get_normals() const -> CudaUniquePtr<float>;
   [[nodiscard]] auto grad_normals(const float *grad_output,
                                   size_t n_queries) const

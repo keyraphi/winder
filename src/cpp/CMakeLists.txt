@@ -1,5 +1,6 @@
 # Keep kernels separate, speeding up incremental builds.
 file(GLOB KERNEL_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/*.cu")
+message(INFO ${KERNEL_SOURCES})
 add_library(winder_kernels STATIC ${KERNEL_SOURCES})
 add_library(winder_backend STATIC winder_cuda.cu)
 # make sure to use position independent code (pic)

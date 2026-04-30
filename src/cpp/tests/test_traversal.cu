@@ -38,7 +38,6 @@ __global__ void compute_winding_numbers_brute_force_kernel(
     __syncthreads();
 
     // Accumulate contribution if query is in bounds
-
     if (q_idx < query_count) {
       uint32_t num_elements_in_tile = min(blockDim.x, geometry_count - i);
       for (uint32_t j = 0; j < num_elements_in_tile; ++j) {

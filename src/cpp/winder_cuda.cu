@@ -47,6 +47,7 @@
 #include "kernels/bvh8_m2m.cuh"
 #include "kernels/common.cuh"
 #include "kernels/mesh.cuh"
+#include "kernels/brute_force.cuh"
 #include "kernels/traversal.cuh"
 #include "tailor_coefficients.h"
 #include "vec3.h"
@@ -427,6 +428,47 @@ template <typename T> struct GeometryTraits {
 template <> struct GeometryTraits<PointNormal> {
   static constexpr float default_beta = 2.0F;
 };
+
+template <IsGeometry Geometry>
+auto WinderBackend<Geometry>::brute_force(const float *queries, size_t query_count,
+                                      float epsilon, size_t stream) const
+    -> CudaUniquePtr<float> {
+  ScopedCudaDevice device_scope{m_device};
+  const Vec3 *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
+
+  cudaEvent_t start, finish;
+  CUDA_CHECK(cudaEventCreate(&start));
+  CUDA_CHECK(cudaEventCreate(&finish));
+
+  bool is_stream_0 = stream % 2 == 0;
+  const auto &compute_stream = is_stream_0 ? m_stream_0 : m_stream_1;
+
+  CUDA_CHECK(cudaEventRecord(start, compute_stream));
+
+  // Allocate required buffers
+  float *winding_numbers; // result
+  CUDA_CHECK(cudaMallocAsync(&winding_numbers, query_count * sizeof(float),
+                             compute_stream));
+
+  if (epsilon < 0.F) {
+    // default from 3D Reconstruction with Fast Dipole Sums
+    epsilon = 1.F / 250.F;
+  }
+
+  compute_brute_force<Geometry>(queries_vec3, m_sorted_geometry,
+                                    (uint32_t)query_count, (uint32_t)m_count,
+                                    winding_numbers, epsilon, compute_stream);
+
+  CUDA_CHECK(cudaEventRecord(finish, compute_stream));
+  // free events
+  CUDA_CHECK(cudaEventDestroy(start));
+  CUDA_CHECK(cudaEventDestroy(finish));
+  CudaUniquePtr<float> result(winding_numbers);
+
+  // TODO better solution?
+  CUDA_CHECK(cudaStreamSynchronize(compute_stream));
+  return result;
+}
 
 template <IsGeometry Geometry>
 auto WinderBackend<Geometry>::compute(
