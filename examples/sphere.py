@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
+import numpy as np
+import time
 import torch
 import winder
 import argparse
+import imageio.v3 as iio
 from tqdm.auto import tqdm
+import matplotlib.pyplot as plt
+
 
 device = torch.device("cuda:0")
 
@@ -90,6 +95,59 @@ def create_query_grid(resolution: int, extend: float = 5) -> torch.Tensor:
     return queries
 
 
+def visualize_result(
+    winding_number_grid: torch.Tensor,
+    winding_number_grid_brute_force: torch.Tensor,
+    grid_resolution: int,
+    video_path: str | None,
+):
+    if video_path is None:
+        video_path = "sphere.mp4"
+
+    gt_grid = winding_number_grid_brute_force.view(
+        grid_resolution, grid_resolution, grid_resolution
+    )
+    approx_grid = winding_number_grid.view(
+        grid_resolution, grid_resolution, grid_resolution
+    )
+
+    gt_cpu = torch.clamp(gt_grid, 0.0, 1.0).cpu().numpy()
+    approx_cpu = torch.clamp(approx_grid, 0.0, 1.0).cpu().numpy()
+
+    cmap = plt.get_cmap("RdBu_r")
+
+    color_gt = cmap(gt_cpu)[..., :3]
+    color_approx = cmap(approx_cpu)[..., :3]
+
+    # Scale to uint8
+    color_gt = (color_gt * 255).astype(np.uint8)
+    color_approx = (color_approx * 255).astype(np.uint8)
+
+    divider = np.zeros((grid_resolution, grid_resolution, 4, 3), dtype=np.uint8)
+
+    full_video_stack = np.concatenate([color_gt, divider, color_approx], axis=2)
+
+    print(f"Writing batch of shape {full_video_stack.shape} to {video_path}...")
+    iio.imwrite(
+        video_path,
+        full_video_stack,
+        extension=".mp4",
+        fps=16,
+        codec="libx264",
+        is_batch=True,
+    )
+
+
+def print_time_statistics(title: str, durations: list[float]) -> None:
+    mean = np.mean(durations)
+    min, max = np.min(durations), np.max(durations)
+    median = np.median(durations)
+
+    print(
+        f"{title}: mean: {mean} sec, median: {median} sec, min: {min} sec, max: {max} sec."
+    )
+
+
 def main():
     parser = argparse.ArgumentParser()
     _ = parser.add_argument(
@@ -103,6 +161,12 @@ def main():
         type=positive_type,
         default=512,
         help="Resolution per dimension of query grid",
+    )
+    _ = parser.add_argument(
+        "--grid_extend",
+        type=float,
+        default=5.0,
+        help="Query grid extend. Sphere radius is 1.",
     )
     _ = parser.add_argument(
         "--geometry_type",
@@ -141,17 +205,30 @@ def main():
         case _:
             raise RuntimeError("Unknown geometry_type")
 
-    queries = create_query_grid(args.query_grid_resolution)
+    queries = create_query_grid(args.query_grid_resolution, args.grid_extend)
     print("DEBUG: queries", queries.shape, queries.dtype, queries.device)
 
+    durations = []
     for _ in tqdm(range(args.evaluation_rounds), desc="Eval. Repetitions"):
+        t0 = time.time()
         winding_number_grid = engine.compute(queries)
+        t1 = time.time()
+        durations.append(t1 - t0)
+    print_time_statistics("Approximation", durations)
 
+    durations = []
     for _ in tqdm(range(args.evaluation_rounds), desc="Brute Force Repetitions"):
+        t0 = time.time()
         winding_number_grid_brute_force = engine.brute_force(queries)
+        t1 = time.time()
+        durations.append(t1 - t0)
+    print_time_statistics("BruteForce", durations)
 
     visualize_result(
-        winding_number_grid, winding_number_grid_brute_force, args.figure_path
+        torch.from_dlpack(winding_number_grid),
+        torch.from_dlpack(winding_number_grid_brute_force),
+        args.query_grid_resolution,
+        args.figure_path,
     )
 
 
