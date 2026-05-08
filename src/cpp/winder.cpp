@@ -8,6 +8,7 @@
 #include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 #include "geometry.h"
@@ -118,15 +119,19 @@ public:
     return {raw_ptr, {n_points, 3}, owner};
   }
 
-  auto compute(const Vec3_t &queries) -> Scalar_t {
+  auto compute(const Vec3_t &queries, const float beta = -1.F,
+               const float epsilon = -1.F,
+               const size_t stream = 0) -> Scalar_t {
     size_t n = queries.shape(0);
     // todo ensure queries are on same device as m_impl
 
     CudaUniquePtr<float> raw_ptr_unique;
     if (is_backend_triangle) {
-      raw_ptr_unique = m_impl_tri->compute(queries.data(), n);
+      raw_ptr_unique =
+          m_impl_tri->compute(queries.data(), n, beta, epsilon, stream);
     } else {
-      raw_ptr_unique = m_impl_pn->compute(queries.data(), n);
+      raw_ptr_unique =
+          m_impl_pn->compute(queries.data(), n, beta, epsilon, stream);
     }
     float *raw_ptr = raw_ptr_unique.release();
     nb::capsule owner(
@@ -135,15 +140,18 @@ public:
     return {raw_ptr, {n}, owner};
   }
 
-  auto brute_force(const Vec3_t &queries) -> Scalar_t {
+  auto brute_force(const Vec3_t &queries, const float epsilon = -1.F,
+                   const size_t stream = 0) -> Scalar_t {
     size_t n = queries.shape(0);
     // todo ensure queries are on same device as m_impl
 
     CudaUniquePtr<float> raw_ptr_unique;
     if (is_backend_triangle) {
-      raw_ptr_unique = m_impl_tri->brute_force(queries.data(), n);
+      raw_ptr_unique =
+          m_impl_tri->brute_force(queries.data(), n, epsilon, stream);
     } else {
-      raw_ptr_unique = m_impl_pn->brute_force(queries.data(), n);
+      raw_ptr_unique =
+          m_impl_pn->brute_force(queries.data(), n, epsilon, stream);
     }
     float *raw_ptr = raw_ptr_unique.release();
     nb::capsule owner(raw_ptr,
@@ -177,6 +185,16 @@ public:
 
     size_t n_points = m_impl_pn->point_count();
     return {raw_ptr, {n_points, 3}, nb::handle()};
+  }
+
+  [[nodiscard]] auto dump() const -> std::string {
+    std::string result;
+    if (is_backend_triangle) {
+      result += m_impl_tri->dump();
+    } else {
+      result += m_impl_pn->dump();
+    }
+    return result;
   }
 
 private:
@@ -253,7 +271,7 @@ NB_MODULE(winder_module, m) {
       // --- Normal Solver ---
       .def_static("solve_normals", &WinderEngine::solve_from_constraints,
                   "pc"_a, "extra_points"_a, "extra_wn"_a,
-                  "pc_wn"_a = nb::none(), "alpha_extra"_a = 0.2f,
+                  "pc_wn"_a = nb::none(), "alpha_extra"_a = 0.2F,
                   nb::sig("def solve_normals(pc: Array[N, 3; float32; cuda], "
                           "extra_points: Array[K, 3; float32; cuda], "
                           "extra_wn: Array[K; float32; cuda], pc_wn: "
@@ -305,9 +323,12 @@ NB_MODULE(winder_module, m) {
             )doc")
 
       // --- Inference ---
-      .def("compute", &WinderEngine::compute, "queries"_a,
-           nb::sig("def compute(self, queries: Array[N, 3; flaot32; cuda]) -> "
-                   "Array"),
+      .def("compute", &WinderEngine::compute, "queries"_a, "beta"_a = -1.F,
+           "epsilon"_a = -1.F, "stream"_a = 0,
+           nb::sig(
+               "def compute(self, queries: Array[N, 3; flaot32; cuda], beta: "
+               "float32 = -1, epsilon: float32 = -1, stream: uint64_t = 0) -> "
+               "Array"),
            R"doc(
                 Computes the winding number at the given query locations.
 
@@ -321,7 +342,9 @@ NB_MODULE(winder_module, m) {
                 (N,) float32 CUDA array holding the winding numbers.
             )doc")
       .def("brute_force", &WinderEngine::brute_force, "queries"_a,
-           nb::sig("def brute_force(self, queries: Array[N, 3; float32, cuda]) "
+           "epsilon"_a = -1.F, "stream"_a = 0,
+           nb::sig("def brute_force(self, queries: Array[N, 3; float32, cuda], "
+                   "epsilon: float32 = -1, stream: uint64_t = 0)"
                    "-> Array"),
            R"doc(
                 Computes the winding numbers at the given query location with brute force on GPU.
@@ -395,5 +418,11 @@ NB_MODULE(winder_module, m) {
                 For point clouds, this computes the gradient of the dipole potential.
                 For meshes, this computes the gradient of the signed solid angle 
                 with respect to triangle vertices.
-            )doc");
+            )doc")
+
+      // --- Utilities ---
+      .def("dump", &WinderEngine::dump, nb::sig("def dump(self) -> str"),
+           R"doc(
+            Returns a detailed string representation of the internal BVH8 Tree.
+          )doc");
 }

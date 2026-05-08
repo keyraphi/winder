@@ -15,7 +15,9 @@
 #include <format>
 #include <memory>
 #include <ostream>
+#include <queue>
 #include <stdexcept>
+#include <string>
 #include <sys/types.h>
 #include <thrust/copy.h>
 #include <thrust/detail/raw_pointer_cast.h>
@@ -35,6 +37,7 @@
 #include <thrust/sort.h>
 #include <thrust/system/cuda/detail/par.h>
 #include <thrust/transform.h>
+#include <vector>
 #include <vector_functions.h>
 #include <vector_types.h>
 
@@ -43,11 +46,11 @@
 #include "bvh8.h"
 #include "geometry.h"
 #include "kernels/binary2bvh8.cuh"
+#include "kernels/brute_force.cuh"
 #include "kernels/build_binary_tree.cuh"
 #include "kernels/bvh8_m2m.cuh"
 #include "kernels/common.cuh"
 #include "kernels/mesh.cuh"
-#include "kernels/brute_force.cuh"
 #include "kernels/traversal.cuh"
 #include "tailor_coefficients.h"
 #include "vec3.h"
@@ -430,9 +433,9 @@ template <> struct GeometryTraits<PointNormal> {
 };
 
 template <IsGeometry Geometry>
-auto WinderBackend<Geometry>::brute_force(const float *queries, size_t query_count,
-                                      float epsilon, size_t stream) const
-    -> CudaUniquePtr<float> {
+auto WinderBackend<Geometry>::brute_force(
+    const float *queries, size_t query_count, float epsilon,
+    size_t stream) const -> CudaUniquePtr<float> {
   ScopedCudaDevice device_scope{m_device};
   const Vec3 *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
 
@@ -456,8 +459,8 @@ auto WinderBackend<Geometry>::brute_force(const float *queries, size_t query_cou
   }
 
   compute_brute_force<Geometry>(queries_vec3, m_sorted_geometry,
-                                    (uint32_t)query_count, (uint32_t)m_count,
-                                    winding_numbers, epsilon, compute_stream);
+                                (uint32_t)query_count, (uint32_t)m_count,
+                                winding_numbers, epsilon, compute_stream);
 
   CUDA_CHECK(cudaEventRecord(finish, compute_stream));
   // free events
@@ -690,6 +693,143 @@ void WinderBackend<Triangle>::solve_for_normals(
     [[maybe_unused]] const float *extra_wn, [[maybe_unused]] const float *pc_wn,
     [[maybe_unused]] float alpha) {
   throw std::runtime_error("solve_for_normals not implemented yet!");
+}
+
+template <IsGeometry Geometry>
+auto WinderBackend<Geometry>::dump() const -> std::string {
+  uint32_t node_count = 0;
+  CUDA_CHECK(cudaMemcpy(&node_count, m_bvh8_node_count, sizeof(uint32_t),
+                        cudaMemcpyDeviceToHost));
+  std::vector<BVH8Node> bvh8_nodes(node_count);
+  CUDA_CHECK(cudaMemcpy(bvh8_nodes.data(), m_bvh8_nodes,
+                        sizeof(BVH8Node) * node_count, cudaMemcpyDeviceToHost));
+  uint32_t leaf_count = (m_count + LEAF_SIZE - 1) / LEAF_SIZE;
+  std::vector<AABB> leaf_aabbs(leaf_count);
+  CUDA_CHECK(cudaMemcpy(leaf_aabbs.data(), m_binary_aabbs + leaf_count - 1,
+                        sizeof(AABB) * leaf_count, cudaMemcpyDeviceToHost));
+  std::vector<Geometry> geometry(m_count);
+  CUDA_CHECK(cudaMemcpy(geometry.data(), m_sorted_geometry,
+                        m_count * sizeof(Geometry), cudaMemcpyDeviceToHost));
+  std::vector<LeafPointers> leaf_pointers(node_count);
+  CUDA_CHECK(cudaMemcpy(leaf_pointers.data(), m_bvh8_leaf_pointers,
+                        node_count * sizeof(LeafPointers),
+                        cudaMemcpyDeviceToHost));
+  std::vector<TailorCoefficientsBf16> leaf_coefficients(leaf_count);
+  CUDA_CHECK(cudaMemcpy(leaf_coefficients.data(), m_leaf_coefficients,
+                        leaf_count * sizeof(TailorCoefficientsBf16),
+                        cudaMemcpyDeviceToHost));
+  std::string result;
+
+  struct StackEntry {
+    uint32_t node_id;
+    bool is_closing;
+    int depth;
+  };
+
+  std::vector<StackEntry> stack;
+  stack.push_back({0, false, 0}); // Start with root
+
+  auto get_indent = [](size_t depth) -> std::string {
+    return std::string(depth * 2, ' ');
+  };
+
+  while (!stack.empty()) {
+    StackEntry entry = stack.back();
+    stack.pop_back();
+
+    std::string indent = get_indent(entry.depth);
+
+    if (entry.is_closing) {
+      result += indent + "}\n";
+      continue;
+    }
+
+    const BVH8Node &current_node = bvh8_nodes[entry.node_id];
+    AABB aabb = current_node.parent_aabb;
+    Vec3 node_com = aabb.center_of_mass.get(aabb.min, aabb.diagonal());
+    float max_dist =
+        aabb.center_of_mass.getMaxDistance(aabb.diagonal().length());
+
+    // 1. Open the Node
+    result +=
+        indent +
+        std::format("BVH8Node {{ id: {}, com: ({:.4f}, {:.4f}, "
+                    "{:.4f}), max_dist: {:.4f}, AABB: {{min: ({:.4f}, {:.4f}, "
+                    "{:.4f}), max: ({:.4f}, {:.4f}, {:.4f})}}\n",
+                    entry.node_id, node_com.x, node_com.y, node_com.z, max_dist,
+                    aabb.min.x, aabb.min.y, aabb.min.z, aabb.max.x, aabb.max.y,
+                    aabb.max.z);
+
+    // 2. Push the closing marker for THIS node
+    stack.push_back({entry.node_id, true, entry.depth});
+
+    // 3. Prepare children (Push in REVERSE order so first child is processed
+    // first)
+    uint32_t child_base = current_node.child_base;
+
+    // Count internal children first to handle child_offset correctly
+    int internal_count = 0;
+    for (int i = 0; i < 8; ++i) {
+      if (current_node.getChildMeta(i) == ChildType::INTERNAL)
+        internal_count++;
+    }
+    LeafPointers current_leaf_pointers = leaf_pointers[entry.node_id];
+
+    // We iterate backwards through children to maintain correct stack order
+    int current_internal_offset = internal_count - 1;
+    for (int child_id = 7; child_id >= 0; --child_id) {
+      ChildType type = current_node.getChildMeta(child_id);
+
+      if (type == ChildType::INTERNAL) {
+        uint32_t next_idx = child_base + current_internal_offset;
+        stack.push_back({next_idx, false, entry.depth + 1});
+        current_internal_offset--;
+      } else if (type == ChildType::LEAF) {
+        AABB leaf_aabb_approx = AABB::from_approximation(
+            aabb, current_node.child_aabb_approx[child_id]);
+        uint32_t l_id = current_leaf_pointers.indices[child_id];
+        const TailorCoefficientsBf16 &coeffs_bf16 = leaf_coefficients[l_id];
+        Vec3 leaf_com_approx = coeffs_bf16.center_of_mass.get(
+            leaf_aabb_approx.min, leaf_aabb_approx.diagonal());
+        float leaf_max_distance_approx =
+            leaf_aabb_approx.center_of_mass.getMaxDistance(
+                leaf_aabb_approx.diagonal().length());
+        result += indent + "  Leaf {\n";
+        result +=
+            indent + "    " +
+            std::format(
+                "AABB_Approx {{min: ({}, {}, {}), max: ({}, {}, {}), com: ({}, "
+                "{}, {}) max_distance: {}}}\n",
+                leaf_aabb_approx.min.x, leaf_aabb_approx.min.y,
+                leaf_aabb_approx.min.z, leaf_aabb_approx.max.x,
+                leaf_aabb_approx.max.y, leaf_aabb_approx.max.z,
+                leaf_com_approx.x, leaf_com_approx.y, leaf_com_approx.z,
+                leaf_max_distance_approx);
+        AABB leaf_aabb = leaf_aabbs[l_id];
+        Vec3 leaf_com =
+            leaf_aabb.center_of_mass.get(leaf_aabb.min, leaf_aabb.diagonal());
+        float leaf_max_distance = leaf_aabb.center_of_mass.getMaxDistance(
+            leaf_aabb.diagonal().length());
+        result += indent + "    " +
+                  std::format(
+                      "AABB {{min: ({}, {}, {}), max: ({}, {}, {}), com: ({}, "
+                      "{}, {}) max_distance: {}}}\n",
+                      leaf_aabb.min.x, leaf_aabb.min.y, leaf_aabb.min.z,
+                      leaf_aabb.max.x, leaf_aabb.max.y, leaf_aabb.max.z,
+                      leaf_com.x, leaf_com.y, leaf_com.z, leaf_max_distance);
+        size_t g_off = l_id * LEAF_SIZE;
+        for (size_t g_id = 0; g_id < LEAF_SIZE; g_id++) {
+          const Geometry &g = geometry[g_off + g_id];
+          result += indent + "    " + g.dump();
+          if (g_off + g_id >= m_count) {
+            break;
+          }
+        }
+        result += indent + "  }\n";
+      }
+    }
+  }
+  return result;
 }
 
 template class WinderBackend<PointNormal>;

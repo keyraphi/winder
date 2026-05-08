@@ -6,7 +6,7 @@
 #include "vec3.h"
 
 // For leaf we don't have the center of mass or the max_distance
-// We can still make conservative asumptions based on the aabb.
+// We can still make conservative assumptions based on the aabb.
 // If in doubt we don't approximate.
 __device__ __forceinline__ auto
 should_leaf_node_be_aproximated(const Vec3 &query, const AABB &leaf_aabb,
@@ -35,7 +35,6 @@ should_inner_node_be_aproximated(const Vec3 &query, const AABB &aabb,
       aabb.center_of_mass.getMaxDistance(aabb.diagonal().length());
   Vec3 com = aabb.center_of_mass.get(aabb.min, aabb.diagonal());
   float dist_query_to_com2 = (query - com).length2();
-
   return dist_query_to_com2 >
          max_distance_to_center * max_distance_to_center * beta_2;
 }
@@ -51,11 +50,17 @@ __device__ __forceinline__ auto to_bits(const nv_bfloat16 bf16) -> short {
 }
 
 // TODO: Write a test for this!
+/**
+ * Computes the Zero Order Tailor contribution to the Winding Number.
+ * This is the dot product between the normal and the Dipole Derivative.
+ * Contribution = n * r / (4 * pi * ||r||^3)
+ */
 __device__ __forceinline__ auto
 computeZeroOrderContribution(const Vec3_bf16 &coeff, const Vec3_bf16 &r,
                              const nv_bfloat16 inv_r3 // 1/(4 pi |r|^3)
                              ) -> float {
 #if __CUDA_ARCH__ >= 800
+// #if FALSE
   // Pack bf16s into 32-bit registers
   nv_bfloat162 c_xy = __halves2bfloat162(coeff.x, coeff.y);
   nv_bfloat162 c_z = __halves2bfloat162(coeff.z, __float2bfloat16(0.0f));
@@ -132,6 +137,7 @@ computeFirstOrderContribution(const Mat3x3_bf16 &C, const Vec3_bf16 &r,
                               const nv_bfloat16 inv_r5  // 3 / (4 pi |r|^5)
                               ) -> float {
 #if __CUDA_ARCH__ >= 800
+// #if FALSE
   nv_bfloat16 three = __float2bfloat16(3.F);
   // After unrolling and factoring we compute:
   // Contribution = (C_11+C_22+C_33)/(4pi||r||^3) -
@@ -142,7 +148,7 @@ computeFirstOrderContribution(const Mat3x3_bf16 &C, const Vec3_bf16 &r,
   // diagonal part
   nv_bfloat16 trace_C = (C.data[0] + C.data[4]) + C.data[8];
 
-  // Pre-sum off-diagonals (symetric parts)
+  // Pre-sum off-diagonals (symmetric parts)
   nv_bfloat16 C_xy_yx = C.data[1] + C.data[3];
   nv_bfloat16 C_xz_zx = C.data[2] + C.data[6];
   nv_bfloat16 C_yz_zy = C.data[5] + C.data[7];
@@ -268,6 +274,7 @@ computeSecondOrderContribution(const Tensor3_bf16_compressed &C,
                                const nv_bfloat16 inv_r7 // 15.0f / (4pi * |r|^7)
                                ) -> float {
 #if __CUDA_ARCH__ >= 800
+// #if FALSE
   const nv_bfloat16 two = __float2bfloat16(2.0f);
 
   // Vector Trace V
@@ -381,7 +388,7 @@ computeSecondOrderContribution(const Tensor3_bf16_compressed &C,
          (C_f.data[6] + C_f.data[13]) + C_f.data[17]};
   float v_dot_r = v.dot(r_f);
 
-  float r3_part = 0.f;
+  float r3_part = 0.F;
   r3_part += r_f.x * r_f.x * r_f.x * C_f.data[0];
   r3_part += r_f.x * r_f.x * r_f.y * C_f.data[1];
   r3_part += r_f.x * r_f.x * r_f.z * C_f.data[2];
@@ -432,5 +439,6 @@ __device__ __forceinline__ auto compute_node_approximation(
   // Second order
   result += computeSecondOrderContribution(second_order_coeff, r_bf16,
                                            inv_4_pi_normr5, inv_4_pi_normr7);
+
   return result;
 }

@@ -8,7 +8,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cuda_runtime_api.h>
+#include <format>
 #include <math.h>
+#include <string>
 #include <vector_types.h>
 
 // symetric 3x3 matrix for tailor coefficient computation
@@ -73,9 +75,10 @@ struct Triangle {
   __host__ __device__ __forceinline__ auto
   contributionToQuery(const Vec3 &query, float inf_epsilon) const -> float;
 
-  __host__ __device__ __forceinline__ auto debug_print() const -> void {
-    printf("debug: Triangle{{%f,%f,%f}, {%f,%f,%f}, {%f,%f,%f}}\n", v0.x, v0.y,
-           v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
+   [[nodiscard]] auto dump() const -> std::string {
+     std::string result = std::format("Triangle {{v0: ({}, {}, {}), v1: ({}, {}, {}), v2: ({}, {}, {})}}\n", 
+         v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
+     return result;
   }
 };
 
@@ -98,9 +101,10 @@ struct PointNormal {
   __host__ __device__ __forceinline__ auto
   contributionToQuery(const Vec3 &query, float inv_epsilon) const -> float;
 
-  __host__ __device__ __forceinline__ auto debug_print() const -> void {
-    printf("debug: PointNormal{{%f,%f,%f}, {%f,%f,%f}}\n", p.x, p.y, p.z, n.x,
-           n.y, n.z);
+   [[nodiscard]] auto dump() const -> std::string {
+     std::string result = std::format("PointNormal {{point: ({}, {}, {}), normal: ({}, {}, {})}}\n", 
+         p.x, p.y, p.z, n.x, n.y,n.z);
+     return result;
   }
 };
 

@@ -10,6 +10,7 @@
 #include <cuda_runtime_api.h>
 #include <driver_types.h>
 #include <memory>
+#include <string>
 #include <thrust/detail/raw_pointer_cast.h>
 #include <thrust/execution_policy.h>
 #include <thrust/system/cuda/detail/par.h>
@@ -86,6 +87,8 @@ public:
                          const float *extra_wn, const float *pc_wn,
                          float alpha);
 
+  [[nodiscard]] auto dump() const -> std::string;
+
   // Used in factories
   void initialize_triangle_data(const float *triangles);
   void initialize_point_data(const float *points, const float *normals);
@@ -102,7 +105,7 @@ private:
   // them yet
   WinderBackend(size_t size, int device_id);
 
-public: // TODO DEBUG
+public: // TODO DEBUG  make private!
   size_t m_count;
 
 

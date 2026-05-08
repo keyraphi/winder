@@ -153,7 +153,10 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
       // Check the nodes parent_aabb. If it is too far away
       if (is_active && should_inner_node_be_aproximated(
                            my_query, current_node.parent_aabb, beta_2)) {
-        // Get tailor_coefficients
+        // if (false) { // NOTE: if I disable the approximation of inner nodes
+        // the result is perfect, so the bug must be here. Also if stack_ptr >= 1 the result is perfect 
+        
+        // tailor_coefficients dequantization
         float scale_factor =
             current_node.tailor_coefficients.get_shared_scale_factor();
         // Zero Order
@@ -169,7 +172,7 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
             current_node.tailor_coefficients.get_tailor_second_order(
                 scale_factor);
 
-        // Do actual approximation
+        // Do approximation
         float approx_contribution = compute_node_approximation(
             my_query,
             current_node.parent_aabb.center_of_mass.get(
@@ -214,9 +217,12 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
           bool is_detail_eval_needed = true;
           if (is_still_active &&
               should_leaf_node_be_aproximated(my_query, child_aabb, beta_2)) {
-            // load leaf tailor coefficient from global memory
-            // 60 bytes
-            // TODO test if it is worth approximating this.
+            // NOTE: this approximation is actually used, and does not create
+            // any visible differences
+
+            // load leaf tailor
+            // coefficient from global memory 60 bytes
+            // TODO measure (time) if it is worth approximating this.
             const TailorCoefficientsBf16 &current_leaf_coefficients =
                 leaf_coefficients[leaf_idx];
             const Vec3 leaf_center_of_mass =
@@ -228,7 +234,7 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
                 current_leaf_coefficients.first_order,
                 current_leaf_coefficients.second_order);
             my_winding_number += approx_contribution;
-            is_detail_eval_needed = false;          
+            is_detail_eval_needed = false;
           }
           uint32_t detailed_leaf_evaluation_mask = __ballot_sync(
               0xFFFFFFFF, is_detail_eval_needed && is_still_active);
@@ -244,8 +250,8 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
           Geometry my_geometry;
           my_geometry =
               Geometry::load(sorted_geometry, my_geometry_idx, geometry_count);
-          // Use full warp to compute contributions of interested queries one by
-          // one
+          // Use full warp to compute contributions of interested queries one
+          // by one
           Vec3 shared_query;
           while (detailed_leaf_evaluation_mask > 0) {
             int current_leader = __ffs(detailed_leaf_evaluation_mask) - 1;

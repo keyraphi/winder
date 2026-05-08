@@ -20,7 +20,7 @@ def positive_type(arg: str) -> int:
 
 
 def create_mesh_sphere(
-    target_triangle_count: int, radius: float = 1.0
+    target_triangle_count: int, sphere_id: int = 0, radius: float = 1.0
 ) -> tuple[torch.Tensor, torch.Tensor]:
     # Estimate rings/sectors to match target_triangle_count
     # Total triangles approx = 2 * sectors * (rings - 1)
@@ -38,6 +38,12 @@ def create_mesh_sphere(
     z = radius * torch.cos(grid_theta)
 
     verts = torch.stack([x, y, z], dim=-1).view(-1, 3)
+
+    if sphere_id > 0:
+        direction = torch.randn([1, 3], device=device)
+        direction = direction / torch.linalg.norm(direction, keepdim=True)
+        offset = 2 * radius * direction
+        verts = verts + offset
 
     indices = []
     for r in tqdm(range(rings - 1), desc="Creating Triangles"):
@@ -58,14 +64,16 @@ def create_mesh_sphere(
     return verts, faces
 
 
-def create_triangle_sphere(triangle_count: int, radius: float = 1.0) -> torch.Tensor:
-    verts, faces = create_mesh_sphere(triangle_count, radius)
+def create_triangle_sphere(
+    triangle_count: int, sphere_id: int = 0, radius: float = 1.0
+) -> torch.Tensor:
+    verts, faces = create_mesh_sphere(triangle_count, sphere_id, radius)
     # Convert indexed mesh to independent triangles [N, 3, 3]
     return verts[faces.long()]
 
 
 def create_point_sphere(
-    point_count: int, radius: float = 1.0
+    point_count: int, sphere_id: int = 0, radius: float = 1.0
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Creates a sphere using a Fibonacci Lattice for near-uniform density."""
     indices = torch.arange(0, point_count, dtype=torch.float32, device=device)
@@ -83,6 +91,12 @@ def create_point_sphere(
     # Each point represents exactly 1/N of the surface area
     area_per_point = (4 * torch.pi * radius**2) / point_count
     normals = (points / radius) * area_per_point
+
+    if sphere_id > 0:
+        direction = torch.randn([1, 3], device=device)
+        direction = direction / torch.linalg.norm(direction, keepdim=True)
+        offset = 2 * radius * direction
+        points = points + offset
 
     return points, normals
 
@@ -154,7 +168,13 @@ def main():
         "--geometry_count",
         type=positive_type,
         default=1000000,
-        help="How many primitives (triangles or points) to use.",
+        help="How many primitives (triangles or points) to use per sphere.",
+    )
+    _ = parser.add_argument(
+        "--sphere_count",
+        type=positive_type,
+        default=1,
+        help="Number of spheres to create",
     )
     _ = parser.add_argument(
         "--query_grid_resolution",
@@ -167,6 +187,12 @@ def main():
         type=float,
         default=5.0,
         help="Query grid extend. Sphere radius is 1.",
+    )
+    _ = parser.add_argument(
+        "--beta",
+        type=float,
+        default=-1,
+        help="Approximation factor. Larger value means more approximation. Default is around 2",
     )
     _ = parser.add_argument(
         "--geometry_type",
@@ -185,20 +211,43 @@ def main():
     )
     args = parser.parse_args()
 
+    torch.random.manual_seed(1)
+
     match args.geometry_type:
         case "triangles":
-            triangles = create_triangle_sphere(args.geometry_count)
+            triangles = []
+            for i in range(args.sphere_count):
+                tris = create_triangle_sphere(args.geometry_count, i)
+                triangles.append(tris)
+            triangles = torch.concatenate(triangles, dim=0)
             print(
-                "DEBUG: triangles", triangles.shape, triangles.dtype, triangles.device
+                "DEBUG: triangles",
+                triangles.shape,
+                triangles.dtype,
+                triangles.device,
             )
             engine = winder.WinderEngine(triangles)
         case "mesh":
-            vertices, indices = create_mesh_sphere(args.geometry_count)
+            vertices = []
+            indices = []
+            for i in range(args.sphere_count):
+                verts, inds = create_mesh_sphere(args.geometry_count, i)
+                vertices.append(verts)
+                indices.append(inds)
+            vertices = torch.concatenate(vertices, dim=0)
+            indices = torch.concatenate(indices, dim=0)
             print("DEBUG: vertices", vertices.shape, vertices.dtype, vertices.device)
             print("DEBUG: indices", indices.shape, indices.dtype, indices.device)
             engine = winder.WinderEngine(vertices, indices)
         case "points":
-            points, normals = create_point_sphere(args.geometry_count)
+            points = []
+            normals = []
+            for i in range(args.sphere_count):
+                pts, ns = create_point_sphere(args.geometry_count, i)
+                points.append(pts)
+                normals.append(ns)
+            points = torch.concatenate(points, dim=0)
+            normals = torch.concatenate(normals, dim=0)
             print("DEBUG: points", points.shape, points.dtype, points.device)
             print("DEBUG: normals", normals.shape, normals.dtype, normals.device)
             engine = winder.WinderEngine(points, normals)
@@ -211,7 +260,7 @@ def main():
     durations = []
     for _ in tqdm(range(args.evaluation_rounds), desc="Eval. Repetitions"):
         t0 = time.time()
-        winding_number_grid = engine.compute(queries)
+        winding_number_grid = engine.compute(queries, beta=args.beta)
         t1 = time.time()
         durations.append(t1 - t0)
     print_time_statistics("Approximation", durations)
@@ -230,6 +279,8 @@ def main():
         args.query_grid_resolution,
         args.figure_path,
     )
+
+    print(engine.dump())
 
 
 if __name__ == "__main__":

@@ -198,7 +198,6 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
   if (leaf_idx >= leaf_count)
     return;
 
-
   uint32_t lane_id = geometry_idx % 32;
 
   Geometry geometry =
@@ -282,7 +281,7 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
   // triangles: d_i = 1/3(1/2(x_i+xj-p')\odot(1/2(x_i+x_j)-p') +
   // 1/3(1/2(x_j+x_k)-p')\odot(1/2(x_j+x_k)-p') +
   // 1/3(1/2(x_k+x_i)-p')\odot(1/2(x_k+x_i)-p')
-  // Note: Ct is symetric. It contains only 6 unique values
+  // Note: Ct is symmetric. It contains only 6 unique values
   // For that reason second_order also only contains 18 unique values. We don't
   // compute/store duplicates.
   // For inactive threads result is 0 (neutral wrt +)
@@ -320,6 +319,22 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
   // propagate the aabbs to the inner nodes (binary_aabbs)
   // lane 0 handles the Leaf-to-Root Race
   if (lane_id == 0) {
+
+    // DEBUG
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+      Vec3 root_min = binary_aabbs[0].min;
+      Vec3 root_max = binary_aabbs[0].max;
+      float root_max_dist = binary_aabbs[0].center_of_mass.getMaxDistance(
+          binary_aabbs[0].diagonal().length());
+      Vec3 root_com = binary_aabbs[0].center_of_mass.get(
+          root_min, binary_aabbs[0].diagonal());
+      printf("binary_aabbs[0] before: {min: (%f, %f, %f), max: (%f, %f, %f), "
+             "max_dist: %f, com: (%f, %f, %f)}\n",
+             root_min.x, root_min.y, root_min.z, root_max.x, root_max.y,
+             root_max.z, root_max_dist, root_com.x, root_com.y, root_com.z);
+    }
+    // DEBUG
+
     uint32_t current_idx = leaf_idx + leaf_count - 1;
     uint32_t current_parent_idx = binary_parents[current_idx];
     // If this leaf's parent is the root marker, we are done.
@@ -334,7 +349,7 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
     uint32_t geo_count_other_child =
         atomicAdd(&atomic_counters[current_parent_idx], geo_count_in_leaf);
     if (geo_count_other_child == 0) {
-      return; // this subtree arived first and is done
+      return; // this subtree arrived first and is done
     }
     uint32_t geo_count_my_child = geo_count_in_leaf;
     while (current_parent_idx != 0xFFFFFFFF) {
@@ -364,18 +379,32 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
       // Move up to the next level
       uint32_t next_parent = binary_parents[current_parent_idx];
       if (next_parent == 0xFFFFFFFF) {
-        return;
+         break;
       }
       geo_count_my_child += geo_count_other_child; // new count for this node
       geo_count_other_child =
           atomicAdd(&atomic_counters[next_parent],
                     geo_count_my_child); // count from other node
       if (geo_count_other_child == 0) {
-        return;
+         break;
       }
       current_idx = current_parent_idx;
       current_parent_idx = next_parent;
     }
+    // DEBUG
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+      Vec3 root_min = binary_aabbs[0].min;
+      Vec3 root_max = binary_aabbs[0].max;
+      float root_max_dist = binary_aabbs[0].center_of_mass.getMaxDistance(
+          binary_aabbs[0].diagonal().length());
+      Vec3 root_com = binary_aabbs[0].center_of_mass.get(
+          root_min, binary_aabbs[0].diagonal());
+      printf("binary_aabbs[0] after: {min: (%f, %f, %f), max: (%f, %f, %f), "
+             "max_dist: %f, com: (%f, %f, %f)}\n",
+             root_min.x, root_min.y, root_min.z, root_max.x, root_max.y,
+             root_max.z, root_max_dist, root_com.x, root_com.y, root_com.z);
+    }
+    // DEBUG
   }
 }
 

@@ -249,7 +249,8 @@ int main() {
 
   // random stuff
   std::mt19937 gen(42);
-  std::vector<float> test_ranges = {1.0f, 10.0f, 100.0f, 1000.0f, 10000.0f, 100000.0f, 1000000.0f};
+  std::vector<float> test_ranges = {1.0f,     10.0f,     100.0f,    1000.0f,
+                                    10000.0f, 100000.0f, 1000000.0f};
 
   for (float range : test_ranges) {
     printf("Testing Range: [-%.1f, %.1f]... ", range, range);
