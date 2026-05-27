@@ -9,7 +9,7 @@
 // We can still make conservative assumptions based on the aabb.
 // If in doubt we don't approximate.
 __device__ __forceinline__ auto
-should_leaf_node_be_aproximated(const Vec3 &query, const AABB &leaf_aabb,
+should_leaf_node_be_approximated(const Vec3 &query, const AABB &leaf_aabb,
                                 const float beta_2) -> bool {
   // Conservative assumption:
   // center of mass is at the aabb corner with the greatest distance.
@@ -29,7 +29,7 @@ should_leaf_node_be_aproximated(const Vec3 &query, const AABB &leaf_aabb,
 }
 
 __device__ __forceinline__ auto
-should_inner_node_be_aproximated(const Vec3 &query, const AABB &aabb,
+should_inner_node_be_approximated(const Vec3 &query, const AABB &aabb,
                                  const float beta_2) -> bool {
   float max_distance_to_center =
       aabb.center_of_mass.getMaxDistance(aabb.diagonal().length());

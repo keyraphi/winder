@@ -7,6 +7,7 @@ import argparse
 import imageio.v3 as iio
 from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 
 
 device = torch.device("cuda:0")
@@ -15,7 +16,7 @@ device = torch.device("cuda:0")
 def positive_type(arg: str) -> int:
     x: int = int(arg)
     if x < 1:
-        raise argparse.ArgumentTypeError("Minimum repetition is 1")
+        raise argparse.ArgumentTypeError("Minimum value is 1")
     return x
 
 
@@ -116,7 +117,7 @@ def visualize_result(
     video_path: str | None,
 ):
     if video_path is None:
-        video_path = "sphere.mp4"
+        return
 
     gt_grid = winding_number_grid_brute_force.view(
         grid_resolution, grid_resolution, grid_resolution
@@ -124,29 +125,45 @@ def visualize_result(
     approx_grid = winding_number_grid.view(
         grid_resolution, grid_resolution, grid_resolution
     )
+    diff_grid = torch.abs(gt_grid - approx_grid)
 
-    gt_cpu = torch.clamp(gt_grid, 0.0, 1.0).cpu().numpy()
-    approx_cpu = torch.clamp(approx_grid, 0.0, 1.0).cpu().numpy()
+    gt_grid = torch.clamp(gt_grid, -2, 2)
+    approx_grid = torch.clamp(approx_grid, -2, 2)
+    diff_grid = torch.clamp(diff_grid, 0, 1)  # diff_threshold_quantile.item())
+    # normalize difference to [0,1]
 
-    cmap = plt.get_cmap("RdBu_r")
+    gt_cpu = gt_grid.cpu().numpy()
+    approx_cpu = approx_grid.cpu().numpy()
+    diff_cpu = diff_grid.cpu().numpy()
 
-    color_gt = cmap(gt_cpu)[..., :3]
-    color_approx = cmap(approx_cpu)[..., :3]
+    norm = mcolors.TwoSlopeNorm(vmin=-2, vcenter=0, vmax=2)
+
+    cmap = plt.get_cmap("vanimo")
+    cmap_diff = plt.get_cmap("magma")
+
+    color_gt = cmap(norm(gt_cpu))[..., :3]
+    color_approx = cmap(norm(approx_cpu))[..., :3]
+    color_diff = cmap_diff(diff_cpu)[..., :3]
 
     # Scale to uint8
     color_gt = (color_gt * 255).astype(np.uint8)
     color_approx = (color_approx * 255).astype(np.uint8)
+    color_diff = (color_diff * 255).astype(np.uint8)
+
+    print("DEBUG: color_diff", color_diff.min(), color_diff.max())
 
     divider = np.zeros((grid_resolution, grid_resolution, 4, 3), dtype=np.uint8)
 
-    full_video_stack = np.concatenate([color_gt, divider, color_approx], axis=2)
+    full_video_stack = np.concatenate(
+        [color_gt, divider, color_approx, divider, color_diff], axis=2
+    )
 
     print(f"Writing batch of shape {full_video_stack.shape} to {video_path}...")
     iio.imwrite(
         video_path,
         full_video_stack,
         extension=".mp4",
-        fps=16,
+        fps=25,
         codec="libx264",
         is_batch=True,
     )
@@ -266,7 +283,9 @@ def main():
     print_time_statistics("Approximation", durations)
 
     durations = []
-    for _ in tqdm(range(args.evaluation_rounds), desc="Brute Force Repetitions"):
+    for _ in tqdm(
+        range(min(args.evaluation_rounds, 3)), desc="Brute Force Repetitions"
+    ):
         t0 = time.time()
         winding_number_grid_brute_force = engine.brute_force(queries)
         t1 = time.time()
@@ -280,7 +299,7 @@ def main():
         args.figure_path,
     )
 
-    print(engine.dump())
+    # print(engine.dump())
 
 
 if __name__ == "__main__":

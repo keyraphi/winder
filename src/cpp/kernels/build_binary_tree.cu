@@ -320,21 +320,6 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
   // lane 0 handles the Leaf-to-Root Race
   if (lane_id == 0) {
 
-    // DEBUG
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-      Vec3 root_min = binary_aabbs[0].min;
-      Vec3 root_max = binary_aabbs[0].max;
-      float root_max_dist = binary_aabbs[0].center_of_mass.getMaxDistance(
-          binary_aabbs[0].diagonal().length());
-      Vec3 root_com = binary_aabbs[0].center_of_mass.get(
-          root_min, binary_aabbs[0].diagonal());
-      printf("binary_aabbs[0] before: {min: (%f, %f, %f), max: (%f, %f, %f), "
-             "max_dist: %f, com: (%f, %f, %f)}\n",
-             root_min.x, root_min.y, root_min.z, root_max.x, root_max.y,
-             root_max.z, root_max_dist, root_com.x, root_com.y, root_com.z);
-    }
-    // DEBUG
-
     uint32_t current_idx = leaf_idx + leaf_count - 1;
     uint32_t current_parent_idx = binary_parents[current_idx];
     // If this leaf's parent is the root marker, we are done.
@@ -391,20 +376,6 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
       current_idx = current_parent_idx;
       current_parent_idx = next_parent;
     }
-    // DEBUG
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-      Vec3 root_min = binary_aabbs[0].min;
-      Vec3 root_max = binary_aabbs[0].max;
-      float root_max_dist = binary_aabbs[0].center_of_mass.getMaxDistance(
-          binary_aabbs[0].diagonal().length());
-      Vec3 root_com = binary_aabbs[0].center_of_mass.get(
-          root_min, binary_aabbs[0].diagonal());
-      printf("binary_aabbs[0] after: {min: (%f, %f, %f), max: (%f, %f, %f), "
-             "max_dist: %f, com: (%f, %f, %f)}\n",
-             root_min.x, root_min.y, root_min.z, root_max.x, root_max.y,
-             root_max.z, root_max_dist, root_com.x, root_com.y, root_com.z);
-    }
-    // DEBUG
   }
 }
 

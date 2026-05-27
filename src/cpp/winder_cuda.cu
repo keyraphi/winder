@@ -697,6 +697,47 @@ void WinderBackend<Triangle>::solve_for_normals(
 
 template <IsGeometry Geometry>
 auto WinderBackend<Geometry>::dump() const -> std::string {
+  // Edge Case: No geometry at all
+  if (m_count == 0) {
+    return "";
+  }
+
+  // Edge Case: Only a single leaf exists (no BVH8 nodes to traverse)
+  if (m_count <= LEAF_SIZE) {
+    std::string result;
+
+    // Copy only the single leaf's AABB and its geometry
+    std::vector<AABB> leaf_aabbs(1);
+    CUDA_CHECK(cudaMemcpy(leaf_aabbs.data(), m_binary_aabbs, sizeof(AABB),
+                          cudaMemcpyDeviceToHost));
+
+    std::vector<Geometry> geometry(m_count);
+    CUDA_CHECK(cudaMemcpy(geometry.data(), m_sorted_geometry,
+                          m_count * sizeof(Geometry), cudaMemcpyDeviceToHost));
+
+    result += "Leaf {\n";
+
+    AABB leaf_aabb = leaf_aabbs[0];
+    Vec3 leaf_com =
+        leaf_aabb.center_of_mass.get(leaf_aabb.min, leaf_aabb.diagonal());
+    float leaf_max_distance =
+        leaf_aabb.center_of_mass.getMaxDistance(leaf_aabb.diagonal().length());
+
+    result +=
+        std::format("  AABB {{min: ({}, {}, {}), max: ({}, {}, {}), com: ({}, "
+                    "{}, {}) max_distance: {}}}\n",
+                    leaf_aabb.min.x, leaf_aabb.min.y, leaf_aabb.min.z,
+                    leaf_aabb.max.x, leaf_aabb.max.y, leaf_aabb.max.z,
+                    leaf_com.x, leaf_com.y, leaf_com.z, leaf_max_distance);
+
+    for (size_t g_id = 0; g_id < m_count; g_id++) {
+      const Geometry &g = geometry[g_id];
+      result += "  " + g.dump();
+    }
+
+    result += "}\n";
+    return result;
+  }
   uint32_t node_count = 0;
   CUDA_CHECK(cudaMemcpy(&node_count, m_bvh8_node_count, sizeof(uint32_t),
                         cudaMemcpyDeviceToHost));
@@ -750,7 +791,6 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
     float max_dist =
         aabb.center_of_mass.getMaxDistance(aabb.diagonal().length());
 
-    // 1. Open the Node
     result +=
         indent +
         std::format("BVH8Node {{ id: {}, com: ({:.4f}, {:.4f}, "
@@ -760,11 +800,10 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
                     aabb.min.x, aabb.min.y, aabb.min.z, aabb.max.x, aabb.max.y,
                     aabb.max.z);
 
-    // 2. Push the closing marker for THIS node
+    // Push the closing marker for THIS node
     stack.push_back({entry.node_id, true, entry.depth});
 
-    // 3. Prepare children (Push in REVERSE order so first child is processed
-    // first)
+    //  Prepare children
     uint32_t child_base = current_node.child_base;
 
     // Count internal children first to handle child_offset correctly

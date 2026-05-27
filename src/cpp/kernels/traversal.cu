@@ -115,8 +115,9 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
     // Always start traversal on root
     int stack_ptr = 0;
     if (lane_id == 0) {
-      shared_stack[warp_id][stack_ptr++] = 0;
+      shared_stack[warp_id][stack_ptr] = 0;
     }
+    stack_ptr++; // increment stack pointer for all lanes
 
     // Do traversal as full warps
     while (true) {
@@ -128,8 +129,9 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
       }
       // warp leader pops next node into cache
       uint32_t current_node_idx;
+      --stack_ptr; // decrement stack pointer for all lanes
       if (lane_id == 0) {
-        current_node_idx = shared_stack[warp_id][--stack_ptr];
+        current_node_idx = shared_stack[warp_id][stack_ptr];
       }
       // share current_node_idx with the rest
       current_node_idx = __shfl_sync(0xFFFFFFFF, current_node_idx, 0);
@@ -150,12 +152,10 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
       }
 
       // process current node
-      // Check the nodes parent_aabb. If it is too far away
-      if (is_active && should_inner_node_be_aproximated(
+      // Check the nodes parent_aabb. If it is too far away approximate using
+      // tailor coefficients
+      if (is_active && should_inner_node_be_approximated(
                            my_query, current_node.parent_aabb, beta_2)) {
-        // if (false) { // NOTE: if I disable the approximation of inner nodes
-        // the result is perfect, so the bug must be here. Also if stack_ptr >= 1 the result is perfect 
-        
         // tailor_coefficients dequantization
         float scale_factor =
             current_node.tailor_coefficients.get_shared_scale_factor();
@@ -215,14 +215,19 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
               current_node.parent_aabb,
               current_node.child_aabb_approx[child_idx]);
           bool is_detail_eval_needed = true;
-          if (is_still_active &&
-              should_leaf_node_be_aproximated(my_query, child_aabb, beta_2)) {
+          if (
+              // is_still_active && false) { // TODO DEBUG
+            should_leaf_node_be_approximated(my_query, child_aabb, beta_2)) {
             // NOTE: this approximation is actually used, and does not create
             // any visible differences
 
             // load leaf tailor
             // coefficient from global memory 60 bytes
             // TODO measure (time) if it is worth approximating this.
+            // Test on 4090 avg of 1000 runs:
+            // PointNormal:
+            // 0.06088708114624024 sec without approximation with 100000 geometry and 512^3 queries
+            // 0.06075870871543884 sec with approximation with 100000 geometry and 512^3 queries
             const TailorCoefficientsBf16 &current_leaf_coefficients =
                 leaf_coefficients[leaf_idx];
             const Vec3 leaf_center_of_mass =
@@ -280,12 +285,13 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
           }
         } else {
           // Child is inner node
+          uint32_t child_node_idx =
+              current_node.child_base + added_inner_node_counter;
+          added_inner_node_counter++;
           if (lane_id == 0) {
-            uint32_t child_node_idx =
-                current_node.child_base + added_inner_node_counter;
-            added_inner_node_counter++;
-            shared_stack[warp_id][stack_ptr++] = child_node_idx;
+            shared_stack[warp_id][stack_ptr] = child_node_idx;
           }
+          stack_ptr++; // increment stack pointer for all lanes
         }
       } // child for
     } // traversal while

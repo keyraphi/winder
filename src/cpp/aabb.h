@@ -97,17 +97,18 @@ struct AABB {
                    a.center_of_mass.getMaxDistance(a.diagonal().length());
     float dist_b = (com_new - com_b).length() +
                    b.center_of_mass.getMaxDistance(b.diagonal().length());
+    float new_dist = fmaxf(dist_a, dist_b);
 
-    result.center_of_mass.setMaxDistance(fmaxf(dist_a, dist_b),
+    // Compute the maximum posible distance from the com in the aabb
+    float dx = fmaxf(com_new.x - result.min.x, result.max.x - com_new.x);
+    float dy = fmaxf(com_new.y - result.min.y, result.max.y - com_new.y);
+    float dz = fmaxf(com_new.z - result.min.z, result.max.z - com_new.z);
+    float max_possible_dist = sqrtf(dx * dx + dy * dy + dz * dz);
+
+    new_dist = fminf(new_dist, max_possible_dist);
+
+    result.center_of_mass.setMaxDistance(new_dist,
                                          result.diagonal().inv_length());
-    if (isnan(result.min.x) || isnan(result.min.y) || isnan(result.min.z) ||
-        isnan(result.max.x) || isnan(result.max.y) || isnan(result.max.z)) {
-      printf("DEBUG AABB::merge: result aabb contains nan after setting com: "
-             "{(%f,%f,%f), "
-             "(%f,%f,%f)\n",
-             result.min.x, result.min.y, result.min.z, result.max.x,
-             result.max.y, result.max.z);
-    }
     return result;
   }
 };
