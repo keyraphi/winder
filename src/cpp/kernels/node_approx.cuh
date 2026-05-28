@@ -10,7 +10,7 @@
 // If in doubt we don't approximate.
 __device__ __forceinline__ auto
 should_leaf_node_be_approximated(const Vec3 &query, const AABB &leaf_aabb,
-                                const float beta_2) -> bool {
+                                 const float beta_2) -> bool {
   // Conservative assumption:
   // center of mass is at the aabb corner with the greatest distance.
   float dx =
@@ -30,7 +30,7 @@ should_leaf_node_be_approximated(const Vec3 &query, const AABB &leaf_aabb,
 
 __device__ __forceinline__ auto
 should_inner_node_be_approximated(const Vec3 &query, const AABB &aabb,
-                                 const float beta_2) -> bool {
+                                  const float beta_2) -> bool {
   float max_distance_to_center =
       aabb.center_of_mass.getMaxDistance(aabb.diagonal().length());
   Vec3 com = aabb.center_of_mass.get(aabb.min, aabb.diagonal());
@@ -49,7 +49,6 @@ __device__ __forceinline__ auto to_bits(const nv_bfloat16 bf16) -> short {
   return result;
 }
 
-// TODO: Write a test for this!
 /**
  * Computes the Zero Order Tailor contribution to the Winding Number.
  * This is the dot product between the normal and the Dipole Derivative.
@@ -60,7 +59,7 @@ computeZeroOrderContribution(const Vec3_bf16 &coeff, const Vec3_bf16 &r,
                              const nv_bfloat16 inv_r3 // 1/(4 pi |r|^3)
                              ) -> float {
 #if __CUDA_ARCH__ >= 800
-// #if FALSE
+  // #if FALSE
   // Pack bf16s into 32-bit registers
   nv_bfloat162 c_xy = __halves2bfloat162(coeff.x, coeff.y);
   nv_bfloat162 c_z = __halves2bfloat162(coeff.z, __float2bfloat16(0.0f));
@@ -68,41 +67,49 @@ computeZeroOrderContribution(const Vec3_bf16 &coeff, const Vec3_bf16 &r,
   nv_bfloat162 r_xy = __halves2bfloat162(r.x, r.y);
   nv_bfloat162 r_z = __halves2bfloat162(r.z, __float2bfloat16(0.0f));
 
-  uint32_t result;
-  uint32_t zero = 0;
+  //  [cx*rx, cy*ry]
+  nv_bfloat162 accumulator = __hmul2(c_xy, r_xy);
+  // [ (cx*rx + cz*rz) | (cy*ry) ]
+  accumulator = __hfma2(c_z, r_z, accumulator);
+  nv_bfloat16 result =
+      __hadd(__low2bfloat16(accumulator), __high2bfloat16(accumulator));
+  result = __hmul(result, inv_r3);
+  return __bfloat162float(result);
 
-  // use bf16x2 for math
-  asm("{\n\t"
-      ".reg .b16 lo, hi;\n\t"
-      // %0 = (cx*rx, cy*ry) + 0
-      "fma.rn.bf16x2 %0, %1, %2, %6;\n\t"
-      // %0 is [ (cx*rx + cz*rz) | (cy*ry) ]
-      "fma.rn.bf16x2 %0, %3, %4, %0;\n\t"
-      "mov.b32 {lo, hi}, %0;\n\t"
-#if __CUDA_ARCH__ >= 900
-      "add.bf16 hi, lo, hi;\n\t"
-      "mul.bf16 hi, hi, %5;\n\t"
-#else
-      ".reg .b16 tmp;\n\t"
-      "cvt.rn.bf16.f32 tmp, 1.0;\n\t"    // tmp = 1
-      "fma.rn.bf16 hi, lo, tmp, hi;\n\t" // hi = lo * 1.0 + hi
-      "cvt.rn.bf16.f32 tmp, 0.0;\n\t"    // tmp = 0
-      "fma.rn.bf16 hi, hi, %5, tmp;\n\t" // hi = hi * inv_r3 + 0.0
-#endif
-      // move 'hi' in the bottom 16 bits of the result
-      // mov.b32 d {a, b}:
-      // d = a.x | (a.y << 16)
-      "mov.b32 %0, {hi, 0};\n\t"
-      "}"
-      : "=r"(result)          // %0
-      : "r"(to_bits(c_xy)),   // %1
-        "r"(to_bits(r_xy)),   // %2
-        "r"(to_bits(c_z)),    // %3
-        "r"(to_bits(r_z)),    // %4
-        "h"(to_bits(inv_r3)), // %5
-        "r"(zero));           // %6
-
-  return __bfloat162float(*(nv_bfloat16 *)&result);
+  //   // use bf16x2 for math
+  // uint32_t result;
+  // uint32_t zero = 0;
+//   asm("{\n\t"
+//       ".reg .b16 lo, hi;\n\t"
+//       // %0 = (cx*rx, cy*ry) + 0
+//       "fma.rn.bf16x2 %0, %1, %2, %6;\n\t"
+//       // %0 is [ (cx*rx + cz*rz) | (cy*ry) ]
+//       "fma.rn.bf16x2 %0, %3, %4, %0;\n\t"
+//       "mov.b32 {lo, hi}, %0;\n\t"
+// #if __CUDA_ARCH__ >= 900
+//       "add.bf16 hi, lo, hi;\n\t"
+//       "mul.bf16 hi, hi, %5;\n\t"
+// #else
+//       ".reg .b16 tmp;\n\t"
+//       "cvt.rn.bf16.f32 tmp, 1.0;\n\t"    // tmp = 1
+//       "fma.rn.bf16 hi, lo, tmp, hi;\n\t" // hi = lo * 1.0 + hi
+//       "cvt.rn.bf16.f32 tmp, 0.0;\n\t"    // tmp = 0
+//       "fma.rn.bf16 hi, hi, %5, tmp;\n\t" // hi = hi * inv_r3 + 0.0
+// #endif
+//       // move 'hi' in the bottom 16 bits of the result
+//       // mov.b32 d {a, b}:
+//       // d = a.x | (a.y << 16)
+//       "mov.b32 %0, {hi, 0};\n\t"
+//       "}"
+//       : "=r"(result)          // %0
+//       : "r"(to_bits(c_xy)),   // %1
+//         "r"(to_bits(r_xy)),   // %2
+//         "r"(to_bits(c_z)),    // %3
+//         "r"(to_bits(r_z)),    // %4
+//         "h"(to_bits(inv_r3)), // %5
+//         "r"(zero));           // %6
+//
+//   return __bfloat162float(*(nv_bfloat16 *)&result);
 #else
   // there is no bfloat hardware before sm80
   float cx = __bfloat162float(coeff.x);
@@ -121,7 +128,6 @@ computeZeroOrderContribution(const Vec3_bf16 &coeff, const Vec3_bf16 &r,
 #endif
 }
 
-// TODO: Write a test for this!
 /**
  * Computes the First Order Taylor contribution to the Winding Number.
  * * Mathematically, this is the Frobenius inner product (contraction)
@@ -137,7 +143,7 @@ computeFirstOrderContribution(const Mat3x3_bf16 &C, const Vec3_bf16 &r,
                               const nv_bfloat16 inv_r5  // 3 / (4 pi |r|^5)
                               ) -> float {
 #if __CUDA_ARCH__ >= 800
-// #if FALSE
+  // #if FALSE
   nv_bfloat16 three = __float2bfloat16(3.F);
   // After unrolling and factoring we compute:
   // Contribution = (C_11+C_22+C_33)/(4pi||r||^3) -
@@ -146,17 +152,18 @@ computeFirstOrderContribution(const Mat3x3_bf16 &C, const Vec3_bf16 &r,
   //                (C_23+C_32)*r_2*r_3)/(4pi||r||^5)
 
   // diagonal part
-  nv_bfloat16 trace_C = (C.data[0] + C.data[4]) + C.data[8];
+  nv_bfloat16 trace_C = __hadd(__hadd(C.data[0], C.data[4]), C.data[8]);
 
   // Pre-sum off-diagonals (symmetric parts)
-  nv_bfloat16 C_xy_yx = C.data[1] + C.data[3];
-  nv_bfloat16 C_xz_zx = C.data[2] + C.data[6];
-  nv_bfloat16 C_yz_zy = C.data[5] + C.data[7];
+  nv_bfloat16 C_xy_yx = __hadd(C.data[1], C.data[3]);
+  nv_bfloat16 C_xz_zx = __hadd(C.data[2], C.data[6]);
+  nv_bfloat16 C_yz_zy = __hadd(C.data[5], C.data[7]);
 
   // Prepare r_i * r_j pairs
-  nv_bfloat162 r2_xy = __halves2bfloat162(r.x * r.x, r.y * r.y);
-  nv_bfloat162 r2_z_xy = __halves2bfloat162(r.z * r.z, r.x * r.y);
-  nv_bfloat162 r2_xz_yz = __halves2bfloat162(r.x * r.z, r.y * r.z);
+  nv_bfloat162 r2_xy = __halves2bfloat162(__hmul(r.x, r.x), __hmul(r.y, r.y));
+  nv_bfloat162 r2_z_xy = __halves2bfloat162(__hmul(r.z, r.z), __hmul(r.x, r.y));
+  nv_bfloat162 r2_xz_yz =
+      __halves2bfloat162(__hmul(r.x, r.z), __hmul(r.y, r.z));
 
   // Pack G components
   nv_bfloat162 c_xy = __halves2bfloat162(C.data[0],
@@ -165,59 +172,75 @@ computeFirstOrderContribution(const Mat3x3_bf16 &C, const Vec3_bf16 &r,
   nv_bfloat162 c_xz_yz =
       __halves2bfloat162(C_xz_zx, C_yz_zy); // Cxz+zx, Cyz+Czy
 
-  uint32_t result;
-  uint32_t zero = 0;
+  nv_bfloat162 zero = __halves2bfloat162(0.F, 0.F);
+  // TODO TEST
+  // accumulator = {Cxx*rx*rx + Czz*rz*rz + (Cxz+Czy)*rx*rz},
+  //      {Cyy*ry*ry + (Cxy+Cyx)*rx*ry + (Cyz+Czy)*ry*rz}
+  nv_bfloat162 accumulator = __hfma2(c_xy, r2_xy, zero);
+  accumulator = __hfma2(c_z_xy, r2_z_xy, accumulator);
+  accumulator = __hfma2(c_xz_yz, r2_xz_yz, accumulator);
+  // result = (Cxx + Cyy + Czz) * inv_3 - (Cxx*rx*rx + Czz*rz*rz +
+  // (Cxz+Czy)*rx*rz + Cyy*ry*ry + (Cxy+Cyx)*rx*ry + (Cyz+Czy)*ry*rz) * inv_5
+  nv_bfloat16 result =
+      __hadd(__low2bfloat16(accumulator), __high2bfloat16(accumulator));
+  result = __hmul(result, inv_r5);
+  nv_bfloat16 tmp = __hmul(trace_C, inv_r3);
+  result = __hsub(tmp, result);
+  return __bfloat162float(result);
+  // TODO TEST DONE
 
-  // PTX for enforced packed fma logic
-  asm("{\n\t"
-      ".reg .b16 lo, hi, final_sum;\n\t"
-      // %0 = {Cxx*rx*rx + Czz*rz*rz + (Cxz+Czy)*rx*rz},
-      //      {Cyy*ry*ry + (Cxy+Cyx)*rx*ry + (Cyz+Czy)*ry*rz}
-      "fma.rn.bf16x2 %0, %1, %2, %10;\n\t"
-      "fma.rn.bf16x2 %0, %3, %4, %0;\n\t"
-      "fma.rn.bf16x2 %0, %5, %6, %0;\n\t"
-      "mov.b32 {lo, hi}, %0;\n\t"
-#if __CUDA_ARCH__ >= 900
-      // hi = (Cxx*rx*rx + Czz*rz*rz + (Cxz+Czy)*rx*rz +
-      //       Cyy*ry*ry + (Cxy+Cyx)*rx*ry + (Cyz+Czy)*ry*rz) * inv_5
-      "add.bf16 hi, lo, hi;\n\t"
-      "mul.bf16 hi, hi, %9;\n\t"
-      // lo = (Cxx+Cyy+Czz) * inv_3
-      "mul.bf16 lo, %7, %8;\n\t"
-      // hi = lo - hi
-      "sub.bf16 hi, lo, hi;\n\t"
-#else
-      ".reg .b16 tmp;\n\t"
-      // "add.bf16 hi, lo, hi;\n\t"
-      "cvt.rn.bf16.f32 tmp, 1.0;\n\t" // tmp = 1
-      "fma.rn.bf16 hi, lo, tmp, hi;\n\t"
-      // "mul.bf16 hi, hi, %9;\n\t"
-      "cvt.rn.bf16.f32 tmp, 0.0;\n\t" // tmp = 0
-      "fma.rn.bf16 hi, hi, %9, tmp;\n\t"
-      // "mul.bf16 lo, %7, %8;\n\t"
-      "fma.rn.bf16 lo, %7, %8, tmp;\n\t"
-      // "sub.bf16 hi, lo, hi;\n\t"
-      "cvt.rn.bf16.f32 tmp, -1.0;\n\t"   // tmp = -1
-      "fma.rn.bf16 hi, tmp, hi, lo;\n\t" // hi = -1*hi+lo
-#endif
-
-      // write out result (lowest 16 bit are the same for bf16)
-      "mov.b32 %0, {hi, 0};\n\t"
-      "}"
-      : "=r"(result)            // %0
-      : "r"(to_bits(c_xy)),     // %1
-        "r"(to_bits(r2_xy)),    // %2
-        "r"(to_bits(c_z_xy)),   // %3
-        "r"(to_bits(r2_z_xy)),  // %4
-        "r"(to_bits(c_xz_yz)),  // %5
-        "r"(to_bits(r2_xz_yz)), // %6
-        "h"(to_bits(trace_C)),  // %7
-        "h"(to_bits(inv_r3)),   // %8
-        "h"(to_bits(inv_r5)),   // %9
-        "r"(zero)               // %10
-  );
-
-  return __bfloat162float(*(nv_bfloat16 *)&result);
+//   uint32_t result;
+//   uint32_t zero = 0;
+//   // PTX for enforced packed fma logic
+//   asm("{\n\t"
+//       ".reg .b16 lo, hi, final_sum;\n\t"
+//       // %0 = {Cxx*rx*rx + Czz*rz*rz + (Cxz+Czy)*rx*rz},
+//       //      {Cyy*ry*ry + (Cxy+Cyx)*rx*ry + (Cyz+Czy)*ry*rz}
+//       "fma.rn.bf16x2 %0, %1, %2, %10;\n\t"
+//       "fma.rn.bf16x2 %0, %3, %4, %0;\n\t"
+//       "fma.rn.bf16x2 %0, %5, %6, %0;\n\t"
+//       "mov.b32 {lo, hi}, %0;\n\t"
+// #if __CUDA_ARCH__ >= 900
+//       // hi = (Cxx*rx*rx + Czz*rz*rz + (Cxz+Czy)*rx*rz +
+//       //       Cyy*ry*ry + (Cxy+Cyx)*rx*ry + (Cyz+Czy)*ry*rz) * inv_5
+//       "add.bf16 hi, lo, hi;\n\t"
+//       "mul.bf16 hi, hi, %9;\n\t"
+//       // lo = (Cxx+Cyy+Czz) * inv_3
+//       "mul.bf16 lo, %7, %8;\n\t"
+//       // hi = lo - hi
+//       "sub.bf16 hi, lo, hi;\n\t"
+// #else
+//       ".reg .b16 tmp;\n\t"
+//       // "add.bf16 hi, lo, hi;\n\t"
+//       "cvt.rn.bf16.f32 tmp, 1.0;\n\t" // tmp = 1
+//       "fma.rn.bf16 hi, lo, tmp, hi;\n\t"
+//       // "mul.bf16 hi, hi, %9;\n\t"
+//       "cvt.rn.bf16.f32 tmp, 0.0;\n\t" // tmp = 0
+//       "fma.rn.bf16 hi, hi, %9, tmp;\n\t"
+//       // "mul.bf16 lo, %7, %8;\n\t"
+//       "fma.rn.bf16 lo, %7, %8, tmp;\n\t"
+//       // "sub.bf16 hi, lo, hi;\n\t"
+//       "cvt.rn.bf16.f32 tmp, -1.0;\n\t"   // tmp = -1
+//       "fma.rn.bf16 hi, tmp, hi, lo;\n\t" // hi = -1*hi+lo
+// #endif
+//
+//       // write out result (lowest 16 bit are the same for bf16)
+//       "mov.b32 %0, {hi, 0};\n\t"
+//       "}"
+//       : "=r"(result)            // %0
+//       : "r"(to_bits(c_xy)),     // %1
+//         "r"(to_bits(r2_xy)),    // %2
+//         "r"(to_bits(c_z_xy)),   // %3
+//         "r"(to_bits(r2_z_xy)),  // %4
+//         "r"(to_bits(c_xz_yz)),  // %5
+//         "r"(to_bits(r2_xz_yz)), // %6
+//         "h"(to_bits(trace_C)),  // %7
+//         "h"(to_bits(inv_r3)),   // %8
+//         "h"(to_bits(inv_r5)),   // %9
+//         "r"(zero)               // %10
+//   );
+//
+//   return __bfloat162float(*(nv_bfloat16 *)&result);
 #else
   // Explicitly promote to float once to prevent forward and backward casting
   float c0 = C.data[0];
@@ -243,7 +266,6 @@ computeFirstOrderContribution(const Mat3x3_bf16 &C, const Vec3_bf16 &r,
 #endif
 }
 
-// TODO: Write a test for this!
 /**
  * Computes the Second Order Taylor contribution to the Winding Number.
  *
@@ -274,109 +296,184 @@ computeSecondOrderContribution(const Tensor3_bf16_compressed &C,
                                const nv_bfloat16 inv_r7 // 15.0f / (4pi * |r|^7)
                                ) -> float {
 #if __CUDA_ARCH__ >= 800
-// #if FALSE
+  // #if FALSE
   const nv_bfloat16 two = __float2bfloat16(2.0f);
 
   // Vector Trace V
   // Cxxx+Cxyy+Cxzz
-  nv_bfloat16 vx = (C.data[0] + C.data[4]) + C.data[8];
+  nv_bfloat16 vx = __hadd(__hadd(C.data[0], C.data[4]), C.data[8]);
   // Cyxx+Cyyy+Cyzz
-  nv_bfloat16 vy = (C.data[3] + C.data[10]) + C.data[14];
+  nv_bfloat16 vy = __hadd(__hadd(C.data[3], C.data[10]), C.data[14]);
   // Czxx+Czyy+Czzz
-  nv_bfloat16 vz = (C.data[6] + C.data[13]) + C.data[17];
+  nv_bfloat16 vz = __hadd(__hadd(C.data[6], C.data[13]), C.data[17]);
   // V dot r
-  nv_bfloat16 v_dot_r = vx * r.x + vy * r.y + vz * r.z;
+  nv_bfloat16 v_dot_r =
+      __hadd(__hadd(__hmul(vx, r.x), __hmul(vy, r.y)), __hmul(vz, r.z));
 
-  // 18 Weighted r-products
-  // Pre-multiply by 2.0 where the coefficient is shared by two tensor slots
-  nv_bfloat16 r_prods[18];
-  r_prods[0] = r.x * r.x * r.x;          // data[0]: xxx
-  r_prods[1] = r.x * r.x * r.y;          // data[1]: xxy
-  r_prods[2] = r.x * r.x * r.z;          // data[2]: xxz
-  r_prods[3] = (r.y * r.x * r.x) * two;  // data[3]: yxx + xyx
-  r_prods[4] = (r.x * r.y * r.y) * two;  // data[4]: xyy + yxy
-  r_prods[5] = (r.x * r.y * r.z) * two;  // data[5]: xyz + yxz
-  r_prods[6] = (r.z * r.x * r.x) * two;  // data[6]: zxx + xzx
-  r_prods[7] = (r.z * r.x * r.y) * two;  // data[7]: zxy + xzy
-  r_prods[8] = (r.z * r.x * r.z) * two;  // data[8]: zxz + xzz
-  r_prods[9] = r.y * r.y * r.x;          // data[9]: yyx
-  r_prods[10] = r.y * r.y * r.y;         // data[10]: yyy
-  r_prods[11] = r.y * r.y * r.z;         // data[11]: yyz
-  r_prods[12] = (r.y * r.z * r.x) * two; // data[12]: yzx + zyx
-  r_prods[13] = (r.z * r.y * r.y) * two; // data[13]: zyy + yzy
-  r_prods[14] = (r.y * r.z * r.z) * two; // data[14]: yzz + zyz
-  r_prods[15] = r.z * r.z * r.x;         // data[15]: zzx
-  r_prods[16] = r.z * r.z * r.y;         // data[16]: zzy
-  r_prods[17] = r.z * r.z * r.z;         // data[17]: zzz
+  // Pre-calculate baseline quadratic components
+  nv_bfloat16 r_xx = __hmul(r.x, r.x);
+  nv_bfloat16 r_yy = __hmul(r.y, r.y);
+  nv_bfloat16 r_zz = __hmul(r.z, r.z);
+  nv_bfloat16 r_xy = __hmul(r.x, r.y);
+  nv_bfloat16 r_xz = __hmul(r.x, r.z);
+  nv_bfloat16 r_yz = __hmul(r.y, r.z);
 
-  // FMA
-  uint32_t res_raw;
-  uint32_t zero = 0;
+  // Accumulate on the fly
+  // Chunk 0 & 1: xxx, xxy
+  nv_bfloat162 accumulator =
+      __hmul2(__halves2bfloat162(C.data[0], C.data[1]),
+              __halves2bfloat162(__hmul(r_xx, r.x), __hmul(r_xx, r.y)));
 
-  asm("{\n\t"
-      ".reg .b16 lo, hi;\n\t"
+  // Chunk 2 & 3: xxz, (yxx + xyx)*2
+  accumulator = __hfma2(
+      __halves2bfloat162(C.data[2], C.data[3]),
+      __halves2bfloat162(__hmul(r_xx, r.z), __hmul(__hmul(r_xy, r.x), two)),
+      accumulator);
 
-      // 9 Vector FMAs for 18 terms (8 instructions)
-      "fma.rn.bf16x2 %0, %1,  %2,  %19;\n\t"
-      "fma.rn.bf16x2 %0, %3,  %4,  %0;\n\t"
-      "fma.rn.bf16x2 %0, %5,  %6,  %0;\n\t"
-      "fma.rn.bf16x2 %0, %7,  %8,  %0;\n\t"
-      "fma.rn.bf16x2 %0, %9,  %10, %0;\n\t"
-      "fma.rn.bf16x2 %0, %11, %12, %0;\n\t"
-      "fma.rn.bf16x2 %0, %13, %14, %0;\n\t"
-      "fma.rn.bf16x2 %0, %15, %16, %0;\n\t"
-      "fma.rn.bf16x2 %0, %17, %18, %0;\n\t"
-      "mov.b32 {lo, hi}, %0;\n\t"
-#if __CUDA_ARCH__ >= 900
-      // add together both results for the r^3 part
-      "add.bf16 lo, lo, hi;\n\t"
-      // Final Scale: (lo * inv_r7) - (v_dot_r * inv_r5)
-      "mul.bf16 lo, lo, %20;\n\t"
-      "mul.bf16 hi, %21, %22;\n\t"
-      "sub.bf16 lo, lo, hi;\n\t"
-#else
-      ".reg .b16 tmp;\n\t"
-      // "add.bf16 lo, lo, hi;\n\t"
-      "cvt.rn.bf16.f32 tmp, 1.0;\n\t"    // tmp = 1
-      "fma.rn.bf16 lo, lo, tmp, hi;\n\t" // lo = lo*1 + hi
-      // "mul.bf16 lo, lo, %20;\n\t"
-      "cvt.rn.bf16.f32 tmp, 0.0;\n\t"     // tmp = 0
-      "fma.rn.bf16 lo, lo, %20, tmp;\n\t" // lo = lo * inv_r7
-      // "mul.bf16 hi, %21, %22;\n\t"
-      "fma.rn.bf16 hi, %21, %22, tmp;\n\t"
-      // "sub.bf16 lo, lo, hi;\n\t"
-      "cvt.rn.bf16.f32 tmp, -1.0;\n\t"   // tmp = -1
-      "fma.rn.bf16 lo, tmp, hi, lo;\n\t" // lo = -1*hi+lo
-#endif
+  // Chunk 4 & 5: (xyy + yxy)*2, (xyz + yxz)*2
+  accumulator = __hfma2(__halves2bfloat162(C.data[4], C.data[5]),
+                        __halves2bfloat162(__hmul(__hmul(r_xy, r.y), two),
+                                           __hmul(__hmul(r_xz, r.y), two)),
+                        accumulator);
 
-      "mov.b32 %0, {lo, 0};\n\t"
-      "}"
-      : "=r"(res_raw)                                               // %0
-      : "r"(to_bits(__halves2bfloat162(C.data[0], C.data[1]))),     // %1
-        "r"(to_bits(__halves2bfloat162(r_prods[0], r_prods[1]))),   // %2
-        "r"(to_bits(__halves2bfloat162(C.data[2], C.data[3]))),     // %3
-        "r"(to_bits(__halves2bfloat162(r_prods[2], r_prods[3]))),   // %4
-        "r"(to_bits(__halves2bfloat162(C.data[4], C.data[5]))),     // %5
-        "r"(to_bits(__halves2bfloat162(r_prods[4], r_prods[5]))),   // %6
-        "r"(to_bits(__halves2bfloat162(C.data[6], C.data[7]))),     // %7
-        "r"(to_bits(__halves2bfloat162(r_prods[6], r_prods[7]))),   // %8
-        "r"(to_bits(__halves2bfloat162(C.data[8], C.data[9]))),     // %9
-        "r"(to_bits(__halves2bfloat162(r_prods[8], r_prods[9]))),   // %10
-        "r"(to_bits(__halves2bfloat162(C.data[10], C.data[11]))),   // %11
-        "r"(to_bits(__halves2bfloat162(r_prods[10], r_prods[11]))), // %12
-        "r"(to_bits(__halves2bfloat162(C.data[12], C.data[13]))),   // %13
-        "r"(to_bits(__halves2bfloat162(r_prods[12], r_prods[13]))), // %14
-        "r"(to_bits(__halves2bfloat162(C.data[14], C.data[15]))),   // %15
-        "r"(to_bits(__halves2bfloat162(r_prods[14], r_prods[15]))), // %16
-        "r"(to_bits(__halves2bfloat162(C.data[16], C.data[17]))),   // %17
-        "r"(to_bits(__halves2bfloat162(r_prods[16], r_prods[17]))), // %18
-        "r"(zero),                                                  // %19
-        "h"(to_bits(inv_r7)),                                       // %20
-        "h"(to_bits(v_dot_r)),                                      // %21
-        "h"(to_bits(inv_r5))                                        // %22
-  );
+  // Chunk 6 & 7: (zxx + xzx)*2, (zxy + xzy)*2
+  accumulator = __hfma2(__halves2bfloat162(C.data[6], C.data[7]),
+                        __halves2bfloat162(__hmul(__hmul(r_xz, r.x), two),
+                                           __hmul(__hmul(r_yz, r.x), two)),
+                        accumulator);
 
-  return __bfloat162float(*(nv_bfloat16 *)&res_raw);
+  // Chunk 8 & 9: (zxz + xzz)*2, yyx
+  accumulator = __hfma2(
+      __halves2bfloat162(C.data[8], C.data[9]),
+      __halves2bfloat162(__hmul(__hmul(r_xz, r.z), two), __hmul(r_yy, r.x)),
+      accumulator);
+
+  // Chunk 10 & 11: yyy, yyz
+  accumulator = __hfma2(
+      __halves2bfloat162(C.data[10], C.data[11]),
+      __halves2bfloat162(__hmul(r_yy, r.y), __hmul(r_yy, r.z)), accumulator);
+
+  // Chunk 12 & 13: (yzx + zyx)*2, (zyy + yzy)*2
+  accumulator = __hfma2(__halves2bfloat162(C.data[12], C.data[13]),
+                        __halves2bfloat162(__hmul(__hmul(r_yz, r.x), two),
+                                           __hmul(__hmul(r_yz, r.y), two)),
+                        accumulator);
+
+  // Chunk 14 & 15: (yzz + zyz)*2, zzx
+  accumulator = __hfma2(
+      __halves2bfloat162(C.data[14], C.data[15]),
+      __halves2bfloat162(__hmul(__hmul(r_yz, r.z), two), __hmul(r_zz, r.x)),
+      accumulator);
+
+  // Chunk 16 & 17: zzy, zzz
+  accumulator = __hfma2(
+      __halves2bfloat162(C.data[16], C.data[17]),
+      __halves2bfloat162(__hmul(r_zz, r.y), __hmul(r_zz, r.z)), accumulator);
+
+  // add together both results for the r^5 part
+  nv_bfloat16 result =
+      __hadd(__low2bfloat16(accumulator), __high2bfloat16(accumulator));
+  // Final Scale: (result * inv_r7) - (v_dot_r * inv_r5)
+  result = __hmul(result, inv_r7);
+  result = __hsub(result, __hmul(v_dot_r, inv_r5));
+
+  return __bfloat162float(result);
+
+  // const nv_bfloat16 two = __float2bfloat16(2.0f);
+  //
+  // // 18 Weighted r-products
+  // // Pre-multiply by 2.0 where the coefficient is shared by two tensor slots
+  // nv_bfloat16 r_prods[18];
+  // r_prods[0] = __hmul(__hmul(r.x, r.x), r.x);              // data[0]: xxx
+  // r_prods[1] = __hmul(__hmul(r.x, r.x), r.y);              // data[1]: xxy
+  // r_prods[2] = __hmul(__hmul(r.x, r.x), r.z);              // data[2]: xxz
+  // r_prods[3] = __hmul(__hmul(__hmul(r.y, r.x), r.x), two); // data[3]: yxx + xyx
+  // r_prods[4] = __hmul(__hmul(__hmul(r.x, r.y), r.y), two); // data[4]: xyy + yxy
+  // r_prods[5] = __hmul(__hmul(__hmul(r.x, r.y), r.z), two); // data[5]: xyz + yxz
+  // r_prods[6] = __hmul(__hmul(__hmul(r.z, r.x), r.x), two); // data[6]: zxx + xzx
+  // r_prods[7] = __hmul(__hmul(__hmul(r.z, r.x), r.y), two); // data[7]: zxy + xzy
+  // r_prods[8] = __hmul(__hmul(__hmul(r.z, r.x), r.z), two); // data[8]: zxz + xzz
+  // r_prods[9] = __hmul(__hmul(r.y, r.y), r.x);              // data[9]: yyx
+  // r_prods[10] = __hmul(__hmul(r.y, r.y), r.y);             // data[10]: yyy
+  // r_prods[11] = __hmul(__hmul(r.y, r.y), r.z);             // data[11]: yyz
+  // r_prods[12] =
+  //     __hmul(__hmul(__hmul(r.y, r.z), r.x), two); // data[12]: yzx + zyx
+  // r_prods[13] =
+  //     __hmul(__hmul(__hmul(r.z, r.y), r.y), two); // data[13]: zyy + yzy
+  // r_prods[14] =
+  //     __hmul(__hmul(__hmul(r.y, r.z), r.z), two); // data[14]: yzz + zyz
+  // r_prods[15] = __hmul(__hmul(r.z, r.z), r.x);    // data[15]: zzx
+  // r_prods[16] = __hmul(__hmul(r.z, r.z), r.y);    // data[16]: zzy
+  // r_prods[17] = __hmul(__hmul(r.z, r.z), r.z);    // data[17]: zzz
+  //
+//   // FMA
+//   uint32_t res_raw;
+//   uint32_t zero = 0;
+//
+//   asm("{\n\t"
+//       ".reg .b16 lo, hi;\n\t"
+//
+//       // 9 Vector FMAs for 18 terms (8 instructions)
+//       "fma.rn.bf16x2 %0, %1,  %2,  %19;\n\t"
+//       "fma.rn.bf16x2 %0, %3,  %4,  %0;\n\t"
+//       "fma.rn.bf16x2 %0, %5,  %6,  %0;\n\t"
+//       "fma.rn.bf16x2 %0, %7,  %8,  %0;\n\t"
+//       "fma.rn.bf16x2 %0, %9,  %10, %0;\n\t"
+//       "fma.rn.bf16x2 %0, %11, %12, %0;\n\t"
+//       "fma.rn.bf16x2 %0, %13, %14, %0;\n\t"
+//       "fma.rn.bf16x2 %0, %15, %16, %0;\n\t"
+//       "fma.rn.bf16x2 %0, %17, %18, %0;\n\t"
+//       "mov.b32 {lo, hi}, %0;\n\t"
+// #if __CUDA_ARCH__ >= 900
+//       // add together both results for the r^3 part
+//       "add.bf16 lo, lo, hi;\n\t"
+//       // Final Scale: (lo * inv_r7) - (v_dot_r * inv_r5)
+//       "mul.bf16 lo, lo, %20;\n\t"
+//       "mul.bf16 hi, %21, %22;\n\t"
+//       "sub.bf16 lo, lo, hi;\n\t"
+// #else
+//       ".reg .b16 tmp;\n\t"
+//       // "add.bf16 lo, lo, hi;\n\t"
+//       "cvt.rn.bf16.f32 tmp, 1.0;\n\t"    // tmp = 1
+//       "fma.rn.bf16 lo, lo, tmp, hi;\n\t" // lo = lo*1 + hi
+//       // "mul.bf16 lo, lo, %20;\n\t"
+//       "cvt.rn.bf16.f32 tmp, 0.0;\n\t"     // tmp = 0
+//       "fma.rn.bf16 lo, lo, %20, tmp;\n\t" // lo = lo * inv_r7
+//       // "mul.bf16 hi, %21, %22;\n\t"
+//       "fma.rn.bf16 hi, %21, %22, tmp;\n\t"
+//       // "sub.bf16 lo, lo, hi;\n\t"
+//       "cvt.rn.bf16.f32 tmp, -1.0;\n\t"   // tmp = -1
+//       "fma.rn.bf16 lo, tmp, hi, lo;\n\t" // lo = -1*hi+lo
+// #endif
+//
+//       "mov.b32 %0, {lo, 0};\n\t"
+//       "}"
+//       : "=r"(res_raw)                                               // %0
+//       : "r"(to_bits(__halves2bfloat162(C.data[0], C.data[1]))),     // %1
+//         "r"(to_bits(__halves2bfloat162(r_prods[0], r_prods[1]))),   // %2
+//         "r"(to_bits(__halves2bfloat162(C.data[2], C.data[3]))),     // %3
+//         "r"(to_bits(__halves2bfloat162(r_prods[2], r_prods[3]))),   // %4
+//         "r"(to_bits(__halves2bfloat162(C.data[4], C.data[5]))),     // %5
+//         "r"(to_bits(__halves2bfloat162(r_prods[4], r_prods[5]))),   // %6
+//         "r"(to_bits(__halves2bfloat162(C.data[6], C.data[7]))),     // %7
+//         "r"(to_bits(__halves2bfloat162(r_prods[6], r_prods[7]))),   // %8
+//         "r"(to_bits(__halves2bfloat162(C.data[8], C.data[9]))),     // %9
+//         "r"(to_bits(__halves2bfloat162(r_prods[8], r_prods[9]))),   // %10
+//         "r"(to_bits(__halves2bfloat162(C.data[10], C.data[11]))),   // %11
+//         "r"(to_bits(__halves2bfloat162(r_prods[10], r_prods[11]))), // %12
+//         "r"(to_bits(__halves2bfloat162(C.data[12], C.data[13]))),   // %13
+//         "r"(to_bits(__halves2bfloat162(r_prods[12], r_prods[13]))), // %14
+//         "r"(to_bits(__halves2bfloat162(C.data[14], C.data[15]))),   // %15
+//         "r"(to_bits(__halves2bfloat162(r_prods[14], r_prods[15]))), // %16
+//         "r"(to_bits(__halves2bfloat162(C.data[16], C.data[17]))),   // %17
+//         "r"(to_bits(__halves2bfloat162(r_prods[16], r_prods[17]))), // %18
+//         "r"(zero),                                                  // %19
+//         "h"(to_bits(inv_r7)),                                       // %20
+//         "h"(to_bits(v_dot_r)),                                      // %21
+//         "h"(to_bits(inv_r5))                                        // %22
+//   );
+//
+//   return __bfloat162float(*(nv_bfloat16 *)&res_raw);
 #else
   // convert to float once
   Tensor3_compressed C_f = Tensor3_compressed::from_bf16(C);
