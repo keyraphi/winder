@@ -111,7 +111,7 @@ public: // TODO DEBUG  make private!
 
   // --- Geometric Data & Permutation Maps ---
   uint32_t *m_to_internal;     // [N] Map: Original index -> Morton sorted index
-  Geometry *m_sorted_geometry; // [N] Interleaved P and N (or Triangles)
+  float *m_sorted_geometry;    // [N] Interleaved P and N (or Triangles)
 
   AABB *m_binary_aabbs;        // [2L-1] AABBs for all binary nodes/leaves
   uint32_t

@@ -6,17 +6,17 @@
 #include <driver_types.h>
 
 template <IsGeometry Geometry>
-void compute_brute_force(const Vec3 *queries_vec3, const Geometry *geometry,
+void compute_brute_force(const Vec3 *queries_vec3, const float *geometry,
                          uint32_t query_count, uint32_t geometry_count,
                          float *winding_numbers, float epsilon,
                          cudaStream_t compute_stream);
 
 extern template void
 compute_brute_force<Triangle>(const Vec3 *queries_vec3,
-                              const Triangle *geometry, uint32_t query_count,
+                              const float *geometry, uint32_t query_count,
                               uint32_t geometry_count, float *winding_numbers,
                               float epsilon, cudaStream_t compute_stream);
 extern template void compute_brute_force<PointNormal>(
-    const Vec3 *queries_vec3, const PointNormal *geometry, uint32_t query_count,
+    const Vec3 *queries_vec3, const float *geometry, uint32_t query_count,
     uint32_t geometry_count, float *winding_numbers, float epsilon,
     cudaStream_t compute_stream);

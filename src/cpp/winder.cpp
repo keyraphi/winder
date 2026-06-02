@@ -240,7 +240,7 @@ NB_MODULE(winder_module, m) {
            nb::sig("def __init__(self, vertices: Array[M, 3; float32; cuda], "
                    "triange_indices: Array[N, 3; uint32; cuda]) -> None"),
            R"doc(
-                Initialize the engine using a triangle soup with shared vertices.
+                Initialize the engine using a triangle soup with N Triangles using M shared vertices.
                 
                 Parameters
                 ----------

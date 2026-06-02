@@ -30,7 +30,7 @@ protected:
     uint32_t count = h_indices_in.size();
     if (count == 0) {
       // Test the kernel with zero count to ensure no-op safety
-      interleave_gather_geometry(nullptr, nullptr, nullptr, nullptr, 0);
+      gather_point_normals_soa(nullptr, nullptr, nullptr, nullptr, 0);
       return;
     }
 
@@ -38,35 +38,38 @@ protected:
     thrust::device_vector<float> d_points = h_points_in;
     thrust::device_vector<float> d_normals = h_normals_in;
     thrust::device_vector<uint32_t> d_indices = h_indices_in;
-    thrust::device_vector<PointNormal> d_out(count);
+    thrust::device_vector<float> d_out(count * 6);
 
     // 2. Launch (Wrapper now handles blocks/threads)
-    interleave_gather_geometry(thrust::raw_pointer_cast(d_points.data()),
-                               thrust::raw_pointer_cast(d_normals.data()),
-                               thrust::raw_pointer_cast(d_indices.data()),
-                               thrust::raw_pointer_cast(d_out.data()), count);
+    gather_point_normals_soa(thrust::raw_pointer_cast(d_points.data()),
+                             thrust::raw_pointer_cast(d_normals.data()),
+                             thrust::raw_pointer_cast(d_indices.data()),
+                             thrust::raw_pointer_cast(d_out.data()), count);
 
     // 3. Transfe
-    thrust::host_vector<PointNormal> h_out = d_out;
+    thrust::host_vector<float> h_out = d_out;
+    SoAView<PointNormal> geometry_view{h_out.data(), count};
 
     // 4. Verification
     for (uint32_t i = 0; i < count; ++i) {
       uint32_t src_idx = h_indices_in[i];
 
+      PointNormal pn = PointNormal::load(geometry_view, i, count);
+
       // Expected Point (XYZ)
-      EXPECT_FLOAT_EQ(h_out[i].p.x, h_points_in[src_idx * 3 + 0])
+      EXPECT_FLOAT_EQ(pn.p.x, h_points_in[src_idx * 3 + 0])
           << "Point X mismatch at index " << i;
-      EXPECT_FLOAT_EQ(h_out[i].p.y, h_points_in[src_idx * 3 + 1])
+      EXPECT_FLOAT_EQ(pn.p.y, h_points_in[src_idx * 3 + 1])
           << "Point Y mismatch at index " << i;
-      EXPECT_FLOAT_EQ(h_out[i].p.z, h_points_in[src_idx * 3 + 2])
+      EXPECT_FLOAT_EQ(pn.p.z, h_points_in[src_idx * 3 + 2])
           << "Point Z mismatch at index " << i;
 
       // Expected Normal (XYZ)
-      EXPECT_FLOAT_EQ(h_out[i].n.x, h_normals_in[src_idx * 3 + 0])
+      EXPECT_FLOAT_EQ(pn.n.x, h_normals_in[src_idx * 3 + 0])
           << "Normal X mismatch at index " << i;
-      EXPECT_FLOAT_EQ(h_out[i].n.y, h_normals_in[src_idx * 3 + 1])
+      EXPECT_FLOAT_EQ(pn.n.y, h_normals_in[src_idx * 3 + 1])
           << "Normal Y mismatch at index " << i;
-      EXPECT_FLOAT_EQ(h_out[i].n.z, h_normals_in[src_idx * 3 + 2])
+      EXPECT_FLOAT_EQ(pn.n.z, h_normals_in[src_idx * 3 + 2])
           << "Normal Z mismatch at index " << i;
     }
   }
@@ -319,6 +322,16 @@ TEST(BinaryTreeRefit, BottomUpAABB) {
     h_geometry[i].n.y = 1.0f;
     h_geometry[i].n.z = 0.0f;
   }
+  // geometry to soa
+  std::vector<float> h_geometry_soa(point_count * 6);
+  for (uint32_t i = 0; i < point_count; ++i) {
+    h_geometry_soa[i + point_count * 0] = h_geometry[i].p.x;
+    h_geometry_soa[i + point_count * 1] = h_geometry[i].p.y;
+    h_geometry_soa[i + point_count * 2] = h_geometry[i].p.z;
+    h_geometry_soa[i + point_count * 3] = h_geometry[i].n.x;
+    h_geometry_soa[i + point_count * 4] = h_geometry[i].n.y;
+    h_geometry_soa[i + point_count * 5] = h_geometry[i].n.z;
+  }
 
   // 2. Mock Tree Topology:
   // Root (Node 0) has children Leaf 0 and Leaf 1
@@ -334,7 +347,7 @@ TEST(BinaryTreeRefit, BottomUpAABB) {
   h_parents[0] = 0xFFFFFFFF; // Root parent
 
   // 3. Move to Device
-  thrust::device_vector<PointNormal> d_geom = h_geometry;
+  thrust::device_vector<float> d_geom = h_geometry_soa;
   thrust::device_vector<BinaryNode> d_nodes = h_nodes;
   thrust::device_vector<uint32_t> d_parents = h_parents;
   thrust::device_vector<AABB> d_aabbs(leaf_count + node_count);
@@ -384,8 +397,19 @@ TEST(BinaryTreeRefit, SingleLeafCoefficients) {
     h_geometry[i].n = n_val;
   }
 
+  // geometry to soa
+  std::vector<float> h_geometry_soa(point_count * 6);
+  for (uint32_t i = 0; i < point_count; ++i) {
+    h_geometry_soa[i + point_count * 0] = h_geometry[i].p.x;
+    h_geometry_soa[i + point_count * 1] = h_geometry[i].p.y;
+    h_geometry_soa[i + point_count * 2] = h_geometry[i].p.z;
+    h_geometry_soa[i + point_count * 3] = h_geometry[i].n.x;
+    h_geometry_soa[i + point_count * 4] = h_geometry[i].n.y;
+    h_geometry_soa[i + point_count * 5] = h_geometry[i].n.z;
+  }
+
   // 2. Mock minimal tree for 1 leaf
-  thrust::device_vector<PointNormal> d_geom = h_geometry;
+  thrust::device_vector<float> d_geom = h_geometry_soa;
   thrust::device_vector<TailorCoefficientsBf16> d_coeffs(leaf_count);
   thrust::device_vector<AABB> d_aabbs(leaf_count); // Just the leaf AABB
   thrust::device_vector<uint32_t> d_parents(1, 0xFFFFFFFF);

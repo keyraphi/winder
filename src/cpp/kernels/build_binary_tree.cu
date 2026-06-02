@@ -7,6 +7,7 @@
 #include "tensor3.h"
 #include "vec3.h"
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cub/block/block_scan.cuh>
 #include <cub/util_type.cuh>
@@ -20,48 +21,97 @@
 #include <vector_types.h>
 
 __global__ void __launch_bounds__(256)
-    interleave_gather_geometry_kernel(const float *__restrict__ points,
-                                      const float *__restrict__ normals,
-                                      const uint32_t *__restrict__ indices,
-                                      PointNormal *__restrict__ out_geometry,
-                                      const uint32_t count) {
+    gather_point_normals_soa_kernel(const float *__restrict__ points_aos,
+                                    const float *__restrict__ normals_aos,
+                                    const uint32_t *__restrict__ indices,
+                                    float *__restrict__ out_point_normals_soa,
+                                    const uint32_t count) {
   const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= count) {
     return;
   }
 
   const uint32_t src_idx = indices[idx];
-  const uint32_t src_offset = src_idx * 3;
+  const float *point_src_ptr = points_aos + static_cast<size_t>(src_idx) * 3;
+  const float *normal_src_ptr = normals_aos + static_cast<size_t>(src_idx) * 3;
 
-  float p_x = points[src_offset];
-  float p_y = points[src_offset + 1];
-  float p_z = points[src_offset + 2];
-  float n_x = normals[src_offset + 0];
-  float n_y = normals[src_offset + 1];
-  float n_z = normals[src_offset + 2];
+  // batch reads together
+  const size_t float_count = 6; // PointNormal has 6 floats
+  float values[float_count];
+#pragma unroll
+  for (uint32_t i = 0; i < 3; ++i) {
+    values[i] = point_src_ptr[i];
+  }
+#pragma unroll
+  for (uint32_t i = 0; i < 3; ++i) {
+    values[i + 3] = normal_src_ptr[i];
+  }
 
-  out_geometry[idx].p.x = p_x;
-  out_geometry[idx].p.y = p_y;
-  out_geometry[idx].p.z = p_z;
-  out_geometry[idx].n.x = n_x;
-  out_geometry[idx].n.y = n_y;
-  out_geometry[idx].n.z = n_z;
+// write into the SoA coalesced
+#pragma unroll
+  for (uint32_t i = 0; i < float_count; ++i) {
+    out_point_normals_soa[i * count + idx] = values[i];
+  }
 }
 
-void interleave_gather_geometry(const float *__restrict__ points,
-                                const float *__restrict__ normals,
-                                const uint32_t *__restrict__ indices,
-                                PointNormal *__restrict__ out_geometry,
-                                const uint32_t count,
-                                const cudaStream_t &stream) {
+void gather_point_normals_soa(const float *__restrict__ points,
+                             const float *__restrict__ normals,
+                             const uint32_t *__restrict__ indices,
+                             float *__restrict__ out_geometry,
+                             const uint32_t count, const cudaStream_t &stream) {
   if (count < 1) {
     return;
   }
   // one thread per point
   const uint32_t threads = 256;
   const uint32_t blocks = (count + threads - 1) / threads;
-  interleave_gather_geometry_kernel<<<blocks, threads, 0, stream>>>(
+  gather_point_normals_soa_kernel<<<blocks, threads, 0, stream>>>(
       points, normals, indices, out_geometry, count);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+__global__ void __launch_bounds__(256) gather_triangles_aos_to_soa_kernel(
+    const float *__restrict__ input_triangles_aos,
+    const uint32_t *__restrict__ src_idxs,
+    float *__restrict__ output_triangle_soa, uint32_t count) {
+  uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= count) {
+    return;
+  }
+  uint32_t src_idx = src_idxs[idx];
+
+  const size_t float_count = 9; // Triangle has 9 floats
+
+  float value[float_count];
+  const float *src_ptr = input_triangles_aos + (src_idx * float_count);
+
+  // batch reads together
+#pragma unroll
+  for (uint32_t i = 0; i < float_count; ++i) {
+    value[i] = src_ptr[i];
+  }
+
+// write into the SoA coalesced
+#pragma unroll
+  for (uint32_t i = 0; i < float_count; ++i) {
+    output_triangle_soa[i * count + idx] = value[i];
+  }
+}
+
+void gather_triangles_soa(const float *__restrict__ input_triangles,
+                          const uint32_t *__restrict__ to_internal_map,
+                          float *__restrict__ output_triangles_soa,
+                          uint32_t count, const cudaStream_t &stream) {
+  if (count < 1) {
+    return;
+  }
+
+  uint32_t threads = 256;
+  uint32_t blocks = (count + threads - 1) / threads;
+
+  gather_triangles_aos_to_soa_kernel<<<blocks, threads, 0, stream>>>(
+      input_triangles, to_internal_map, output_triangles_soa, count);
+
   CUDA_CHECK(cudaGetLastError());
 }
 
@@ -188,7 +238,7 @@ __device__ __forceinline__ auto warp_reduce_add_down(float val) -> float {
 
 template <IsGeometry Geometry>
 __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
-    const Geometry *__restrict__ sorted_geometry,
+    const SoAView<Geometry> sorted_geometry,
     TailorCoefficientsBf16 *leaf_coefficients, const uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, uint32_t *atomic_counters,
@@ -364,14 +414,14 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
       // Move up to the next level
       uint32_t next_parent = binary_parents[current_parent_idx];
       if (next_parent == 0xFFFFFFFF) {
-         break;
+        break;
       }
       geo_count_my_child += geo_count_other_child; // new count for this node
       geo_count_other_child =
           atomicAdd(&atomic_counters[next_parent],
                     geo_count_my_child); // count from other node
       if (geo_count_other_child == 0) {
-         break;
+        break;
       }
       current_idx = current_parent_idx;
       current_parent_idx = next_parent;
@@ -381,7 +431,7 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
 
 template <IsGeometry Geometry>
 void populate_binary_tree_aabb_and_leaf_coefficients(
-    const Geometry *__restrict__ sorted_geometry,
+    const float *__restrict__ sorted_geometry,
     TailorCoefficientsBf16 *leaf_coefficients, const uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, uint32_t *atomic_counters,
@@ -394,21 +444,22 @@ void populate_binary_tree_aabb_and_leaf_coefficients(
   const uint32_t blocks = (leaf_count * 32 + threads - 1) / threads;
   populate_binary_tree_aabb_and_leaf_coefficients_kernel<Geometry>
       <<<blocks, threads, 0, stream>>>(
-          sorted_geometry, leaf_coefficients, leaf_count, binary_nodes,
-          binary_aabbs, binary_parents, atomic_counters, geometry_count);
+          SoAView<Geometry>{sorted_geometry, geometry_count}, leaf_coefficients,
+          leaf_count, binary_nodes, binary_aabbs, binary_parents,
+          atomic_counters, geometry_count);
   CUDA_CHECK(cudaGetLastError());
 }
 
 // Tell the compiler to generate the code for these types
 template void populate_binary_tree_aabb_and_leaf_coefficients<PointNormal>(
-    const PointNormal *__restrict__ sorted_geometry,
+    const float *__restrict__ sorted_geometry,
     TailorCoefficientsBf16 *leaf_coefficients, uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, uint32_t *atomic_counters,
     uint32_t geometry_count, const cudaStream_t &stream);
 
 template void populate_binary_tree_aabb_and_leaf_coefficients<Triangle>(
-    const Triangle *__restrict__ sorted_geometry,
+    const float *__restrict__ sorted_geometry,
     TailorCoefficientsBf16 *leaf_coefficients, uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, uint32_t *atomic_counters,

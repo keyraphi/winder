@@ -9,7 +9,7 @@
 
 template <IsGeometry Geometry>
 __global__ void compute_winding_numbers_brute_force_kernel(
-    const Vec3 *queries, const Geometry *geometry, const uint32_t query_count,
+    const Vec3 *queries, const SoAView<Geometry> geometry, const uint32_t query_count,
     const uint32_t geometry_count, float *winding_numbers,
     const float inv_epsilon) {
   // One thread per query
@@ -53,7 +53,7 @@ __global__ void compute_winding_numbers_brute_force_kernel(
 }
 
 template <IsGeometry Geometry>
-void compute_brute_force(const Vec3 *queries_vec3, const Geometry *geometry,
+void compute_brute_force(const Vec3 *queries_vec3, const float *geometry,
                           uint32_t query_count,
                           uint32_t geometry_count, float *winding_numbers,
                           float epsilon, cudaStream_t compute_stream) {
@@ -68,17 +68,17 @@ void compute_brute_force(const Vec3 *queries_vec3, const Geometry *geometry,
   size_t smem_size = threads * sizeof(Geometry);
   compute_winding_numbers_brute_force_kernel<Geometry>
       <<<blocks, threads, smem_size, compute_stream>>>(
-          queries_vec3, geometry, query_count, geometry_count, winding_numbers,
+          queries_vec3, SoAView<Geometry>{geometry, geometry_count}, query_count, geometry_count, winding_numbers,
           inv_epsilon);
   CUDA_CHECK(cudaGetLastError());
 
 }
 
 template void compute_brute_force<PointNormal>(
-    const Vec3 *queries_vec3, const PointNormal *geometry,
+    const Vec3 *queries_vec3, const float *geometry,
      uint32_t query_count,  uint32_t geometry_count,
     float *winding_numbers,  float epsilon, cudaStream_t compute_stream);
 template void compute_brute_force<Triangle>(
-    const Vec3 *queries_vec3, const Triangle *geometry,
+    const Vec3 *queries_vec3, const float *geometry,
      uint32_t query_count,  uint32_t geometry_count,
     float *winding_numbers,  float epsilon, cudaStream_t compute_stream);

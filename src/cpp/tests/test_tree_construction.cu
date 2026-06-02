@@ -188,13 +188,10 @@ __global__ void dequantizeTailorCoefficients(const BVH8Node *nodes,
   uint32_t tid = threadIdx.x + blockIdx.x * blockDim.x;
   if (tid < node_count) {
     BVH8Node node = nodes[tid];
-    float scalar_factor = node.tailor_coefficients.get_shared_scale_factor();
-    result[tid].zero_order =
-        node.tailor_coefficients.get_tailor_zero_order(scalar_factor);
-    result[tid].first_order =
-        node.tailor_coefficients.get_tailor_first_order(scalar_factor);
+    result[tid].zero_order = node.tailor_coefficients.get_tailor_zero_order();
+    result[tid].first_order = node.tailor_coefficients.get_tailor_first_order();
     result[tid].second_order =
-        node.tailor_coefficients.get_tailor_second_order(scalar_factor);
+        node.tailor_coefficients.get_tailor_second_order();
   }
 }
 
@@ -206,13 +203,20 @@ TEST(TreeConstruction, TreeStructure) {
   thrust::host_vector<Vec3> normals;
   thrust::host_vector<PointNormal> point_normals;
   // fill each leaf with equal points
+  // fill each leaf with equal points
   for (size_t z = 1; z <= leaf_per_dim; z++) {
     for (size_t y = 1; y <= leaf_per_dim; y++) {
       for (size_t x = 1; x <= leaf_per_dim; x++) {
-        Vec3 p{static_cast<float>(x), static_cast<float>(y),
-               static_cast<float>(z)};
+
+        // Add a tiny unique perturbation per cell to break axis-sorting ties
+        float shift_x = static_cast<float>(x) + static_cast<float>(y) * 0.01f;
+        float shift_y = static_cast<float>(y) + static_cast<float>(z) * 0.01f;
+        float shift_z = static_cast<float>(z) + static_cast<float>(x) * 0.01f;
+
+        Vec3 p{shift_x, shift_y, shift_z};
         Vec3 n = p / (p.length() + 1e-8F);
         PointNormal pn = {p, n};
+
         for (size_t i = 0; i < leaf_size; i++) {
           point_normals.push_back(pn);
           points.push_back(pn.p);
@@ -243,15 +247,20 @@ TEST(TreeConstruction, TreeStructure) {
 
   // sorted geometry - each leaf should contain the exact same points
   thrust::host_vector<PointNormal> sorted_geometry(point_normals.size());
+  SoAView<PointNormal> geometry_view{
+      reinterpret_cast<float *>(sorted_geometry.data()),
+      sorted_geometry.size()};
   cudaMemcpy(sorted_geometry.data(), backend->m_sorted_geometry,
              sizeof(PointNormal) * backend->m_count, cudaMemcpyDeviceToHost);
   CUDA_CHECK(cudaGetLastError());
   for (size_t i = 0; i < leaf_per_dim * leaf_per_dim * leaf_per_dim; i++) {
     size_t first_idx = i * leaf_size;
-    PointNormal first_pn = sorted_geometry[first_idx];
+    PointNormal first_pn =
+        PointNormal::load(geometry_view, first_idx, sorted_geometry.size());
     for (size_t j = 0; j < leaf_size; j++) {
       size_t idx = first_idx + j;
-      PointNormal pn = sorted_geometry[idx];
+      PointNormal pn =
+          PointNormal::load(geometry_view, idx, sorted_geometry.size());
       ASSERT_EQ(pn.p.x, first_pn.p.x);
       ASSERT_EQ(pn.p.y, first_pn.p.y);
       ASSERT_EQ(pn.p.z, first_pn.p.z);
@@ -295,7 +304,7 @@ TEST(TreeConstruction, TreeStructure) {
 }
 
 TEST(TreeConstruction, RandomTreeStructure) {
-  size_t gen_leafs = 1000000/32;
+  size_t gen_leafs = 1000000 / 32;
   size_t leaf_size = 32;
 
   thrust::host_vector<Vec3> points;

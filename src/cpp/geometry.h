@@ -13,7 +13,12 @@
 #include <string>
 #include <vector_types.h>
 
-// symetric 3x3 matrix for tailor coefficient computation
+template <typename T> struct SoAView {
+  const float *base_ptr;
+  size_t stride;
+};
+
+// symmetric 3x3 matrix for tailor coefficient computation
 struct SymMat3x3 {
   // 0:xx, 1:xy, 2:xz, 3:yy, 4:yz, 5:zz
   float data[6];
@@ -29,8 +34,8 @@ struct SymMat3x3 {
             data[4] + other.data[4], data[5] + other.data[5]};
   }
 
-  __host__ __device__ __forceinline__ auto operator*(float s) const
-      -> SymMat3x3 {
+  __host__ __device__ __forceinline__ auto
+  operator*(float s) const -> SymMat3x3 {
     return {data[0] * s, data[1] * s, data[2] * s,
             data[3] * s, data[4] * s, data[5] * s};
   }
@@ -62,23 +67,23 @@ struct Triangle {
     return (v0 + v1 + v2) / 3.F;
   }
 
-  __device__ __forceinline__ static auto load(const Triangle *base,
-                                              uint32_t idx, uint32_t count)
-      -> Triangle;
+  __host__ __device__ __forceinline__ static auto
+  load(const SoAView<Triangle> &view, uint32_t idx, uint32_t count) -> Triangle;
   __host__ __device__ __forceinline__ auto get_scaled_normal() const -> Vec3;
 
   __host__ __device__ __forceinline__ auto
   get_tailor_terms(const Vec3 &p_center, bool is_active, Vec3 &zero_order,
-                   Mat3x3 &first_order, Tensor3_compressed &second_order) const
-      -> void;
+                   Mat3x3 &first_order,
+                   Tensor3_compressed &second_order) const -> void;
 
   __host__ __device__ __forceinline__ auto
   contributionToQuery(const Vec3 &query, float inf_epsilon) const -> float;
 
-   [[nodiscard]] auto dump() const -> std::string {
-     std::string result = std::format("Triangle {{v0: ({}, {}, {}), v1: ({}, {}, {}), v2: ({}, {}, {})}}\n", 
-         v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
-     return result;
+  [[nodiscard]] auto dump() const -> std::string {
+    std::string result = std::format(
+        "Triangle {{v0: ({}, {}, {}), v1: ({}, {}, {}), v2: ({}, {}, {})}}\n",
+        v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
+    return result;
   }
 };
 
@@ -86,64 +91,72 @@ struct PointNormal {
   Vec3 p;
   Vec3 n;
 
-  __device__ __forceinline__ static auto load(const PointNormal *base,
-                                              uint32_t idx, uint32_t count)
-      -> PointNormal;
+  __host__ __device__ __forceinline__ static auto load(const SoAView<PointNormal> &view,
+                                              uint32_t idx,
+                                              uint32_t count) -> PointNormal;
 
   __host__ __device__ __forceinline__ auto get_aabb() const -> AABB;
   __host__ __device__ __forceinline__ auto centroid() const -> Vec3;
   __host__ __device__ __forceinline__ auto get_scaled_normal() const -> Vec3;
   __host__ __device__ __forceinline__ auto
   get_tailor_terms(const Vec3 &p_center, bool is_active, Vec3 &zero_order,
-                   Mat3x3 &first_order, Tensor3_compressed &second_order) const
-      -> void;
+                   Mat3x3 &first_order,
+                   Tensor3_compressed &second_order) const -> void;
 
   __host__ __device__ __forceinline__ auto
   contributionToQuery(const Vec3 &query, float inv_epsilon) const -> float;
 
-   [[nodiscard]] auto dump() const -> std::string {
-     std::string result = std::format("PointNormal {{point: ({}, {}, {}), normal: ({}, {}, {})}}\n", 
-         p.x, p.y, p.z, n.x, n.y,n.z);
-     return result;
+  [[nodiscard]] auto dump() const -> std::string {
+    std::string result = std::format(
+        "PointNormal {{point: ({}, {}, {}), normal: ({}, {}, {})}}\n", p.x, p.y,
+        p.z, n.x, n.y, n.z);
+    return result;
   }
 };
 
-__device__ __forceinline__ auto Triangle::load(const Triangle *base,
-                                               uint32_t idx, uint32_t count)
-    -> Triangle {
+__host__ __device__ __forceinline__ auto Triangle::load(const SoAView<Triangle> &view,
+                                               uint32_t idx,
+                                               uint32_t count) -> Triangle {
   if (idx < count) {
-    // Triangle is 9 floats (36 bytes).
-    const Vec3 *ptr = reinterpret_cast<const Vec3 *>(base + idx);
-    return {ptr[0], ptr[1], ptr[2]};
+    return {.v0 = Vec3{.x = view.base_ptr[0 * view.stride + idx],
+                       .y = view.base_ptr[1 * view.stride + idx],
+                       .z = view.base_ptr[2 * view.stride + idx]},
+            .v1 = Vec3{.x = view.base_ptr[3 * view.stride + idx],
+                       .y = view.base_ptr[4 * view.stride + idx],
+                       .z = view.base_ptr[5 * view.stride + idx]},
+            .v2 = Vec3{.x = view.base_ptr[6 * view.stride + idx],
+                       .y = view.base_ptr[7 * view.stride + idx],
+                       .z = view.base_ptr[8 * view.stride + idx]}};
   }
   return {{1e38F, 1e38F, 1e38F}, {1e38F, 1e38F, 1e38F}, {1e38F, 1e38F, 1e38F}};
 }
 
-__device__ __forceinline__ auto Triangle::get_scaled_normal() const -> Vec3 {
+__host__ __device__ __forceinline__ auto Triangle::get_scaled_normal() const -> Vec3 {
   // Area-weighted normal for Winding Number approx
-  return Vec3::cross(v1 - v0, v2 - v0) * 0.5f;
+  return Vec3::cross(v1 - v0, v2 - v0) * 0.5F;
 }
 
-__device__ __forceinline__ auto PointNormal::load(const PointNormal *base,
-                                                  uint32_t idx, uint32_t count)
-    -> PointNormal {
+__host__ __device__ __forceinline__ auto
+PointNormal::load(const SoAView<PointNormal> &view, uint32_t idx,
+                  uint32_t count) -> PointNormal {
   if (idx < count) {
-    const auto *ptr = reinterpret_cast<const float2 *>(base + idx);
-    float2 c0 = ptr[0]; // px, py
-    float2 c1 = ptr[1]; // pz, nx
-    float2 c2 = ptr[2]; // ny, nz
-    return {{c0.x, c0.y, c1.x}, {c1.y, c2.x, c2.y}};
+    return {.p = Vec3{.x = view.base_ptr[0 * view.stride + idx],
+                      .y = view.base_ptr[1 * view.stride + idx],
+                      .z = view.base_ptr[2 * view.stride + idx]},
+            .n = Vec3{.x = view.base_ptr[3 * view.stride + idx],
+                      .y = view.base_ptr[4 * view.stride + idx],
+                      .z = view.base_ptr[5 * view.stride + idx]}};
   }
   return {{1e38F, 1e38F, 1e38F}, {0.F, 0.F, 0.F}};
 }
 
-__device__ __forceinline__ auto PointNormal::get_aabb() const -> AABB {
+__host__ __device__ __forceinline__ auto PointNormal::get_aabb() const -> AABB {
   return p.get_aabb();
 }
-__device__ __forceinline__ auto PointNormal::centroid() const -> Vec3 {
+__host__ __device__ __forceinline__ auto PointNormal::centroid() const -> Vec3 {
   return p;
 }
-__device__ __forceinline__ auto PointNormal::get_scaled_normal() const -> Vec3 {
+__host__ __device__ __forceinline__ auto PointNormal::get_scaled_normal() const -> Vec3 {
   return n;
 }
 
@@ -162,7 +175,7 @@ Triangle::get_tailor_terms(const Vec3 &p_center, bool is_active,
 
   // Ct = 1/3 * (m_ij \otimes m_ij + m_jk \otimes m_jk + m_ki \otimes m_ki)
   // This captures the "spread" of the triangle surface
-  // Direct symetric 6-element construction
+  // Direct symmetric 6-element construction
   auto outer_sym = [](const Vec3 &v) -> SymMat3x3 {
     return {v.x * v.x, v.x * v.y, v.x * v.z, v.y * v.y, v.y * v.z, v.z * v.z};
   };
@@ -216,7 +229,7 @@ PointNormal::get_tailor_terms(const Vec3 &p_center, bool is_active,
   // Second Order: For a point, the spatial distribution
   // tensor is just the outer product of the offset.
   // Ct = d \otimes d
-  // direct symetric construction of outer product
+  // direct symmetric construction of outer product
   SymMat3x3 Ct = {r.x * r.x, r.x * r.y, r.x * r.z,
                   r.y * r.y, r.y * r.z, r.z * r.z};
 
@@ -252,10 +265,9 @@ PointNormal::get_tailor_terms(const Vec3 &p_center, bool is_active,
 #define INV_FOUR_PI 0.07957747154F
 #define INV_TWO_PI 0.15915494309F
 
-__host__ __device__ __forceinline__ auto
-Triangle::contributionToQuery(const Vec3 &query,
-                              [[maybe_unused]] const float inv_epsilon) const
-    -> float {
+__host__ __device__ __forceinline__ auto Triangle::contributionToQuery(
+    const Vec3 &query,
+    [[maybe_unused]] const float inv_epsilon) const -> float {
   // TODO: for gradient: this has discontinuities on the edges. Use inv_epsilon
   // to create a regularized version:
   // if (min_dist2 < 4.0f * eps2) {a_len =
@@ -278,8 +290,8 @@ Triangle::contributionToQuery(const Vec3 &query,
   return atan2f(det, div) * INV_TWO_PI;
 }
 
-__host__ __device__ __forceinline__ auto S_regularization(const float t)
-    -> float {
+__host__ __device__ __forceinline__ auto
+S_regularization(const float t) -> float {
   // For small t use Taylor expansion to avoid numerical issues in subtraction
   // as both terms approach the same value.
   // S(t) \approx (4/(3*sqrt(pi))) * t^3
@@ -334,14 +346,15 @@ PointNormal::contributionToQuery(const Vec3 &query,
 
 // Concept for Geometry template
 template <typename T>
-concept IsGeometry = requires(T g, T *gp, Vec3 p, bool active, Vec3 &z, Mat3x3 &m,
-                              Tensor3_compressed &t, float f, uint32_t u) {
-  { T::load(gp, u, u) } -> std::same_as<T>;
-  { g.get_aabb() } -> std::same_as<AABB>;
-  { g.centroid() } -> std::same_as<Vec3>;
-  { g.get_tailor_terms(p, active, z, m, t) } -> std::same_as<void>;
-  { g.contributionToQuery(p, f) } -> std::same_as<float>;
-};
+concept IsGeometry =
+    requires(T g, SoAView<T> gp, Vec3 p, bool active, Vec3 &z, Mat3x3 &m,
+             Tensor3_compressed &t, float f, uint32_t u) {
+      { T::load(gp, u, u) } -> std::same_as<T>;
+      { g.get_aabb() } -> std::same_as<AABB>;
+      { g.centroid() } -> std::same_as<Vec3>;
+      { g.get_tailor_terms(p, active, z, m, t) } -> std::same_as<void>;
+      { g.contributionToQuery(p, f) } -> std::same_as<float>;
+    };
 
 template <typename T>
 concept IsPrimitiveGeometry = requires(T g) {

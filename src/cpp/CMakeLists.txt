@@ -97,6 +97,24 @@ FetchContent_Declare(
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
+
+option(ADDRESS_SANITIZER "Build with address sanitizer" OFF)
+if(ADDRESS_SANITIZER)
+    message(STATUS "Building with Address sanitizer")
+
+    add_compile_options(
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-fsanitize=address,-fno-omit-frame-pointer>
+        $<$<COMPILE_LANGUAGE:CXX>:-fsanitize=address>
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-omit-frame-pointer>
+    )
+
+    add_link_options(
+        $<$<LINK_LANGUAGE:CUDA>:-Xcompiler=-fsanitize=address,-lasan>
+        $<$<NOT:$<LINK_LANGUAGE:CUDA>>:-fsanitize=address>
+    )
+endif()
+
+
 add_executable(
     test_binary_tree_construction
     tests/test_binary_tree_construction.cu
@@ -106,6 +124,7 @@ add_executable(test_m2m tests/test_m2m.cu)
 add_executable(test_util_functions tests/test_util_functions.cu)
 add_executable(test_traversal tests/test_traversal.cu)
 add_executable(test_tree_construction tests/test_tree_construction.cu)
+
 
 target_link_libraries(
     test_binary_tree_construction

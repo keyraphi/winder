@@ -6,13 +6,18 @@
 #include <cstdint>
 #include <driver_types.h>
 
-// Gather kernel that interleaves positions and normals in the sorted geometry
-// array
-void interleave_gather_geometry(const float *__restrict__ points,
-                                const float *__restrict__ normals,
-                                const uint32_t *__restrict__ indices,
-                                PointNormal *__restrict__ out_geometry,
-                                uint32_t count, const cudaStream_t &stream = 0);
+// Gather kernel to read PointNormals into SoA format
+void gather_point_normals_soa(const float *__restrict__ points,
+                             const float *__restrict__ normals,
+                             const uint32_t *__restrict__ indices,
+                             float *__restrict__ out_geometry, uint32_t count,
+                             const cudaStream_t &stream = 0);
+
+// Gather kernel to read Triangles into SoA format
+void gather_triangles_soa(const float *__restrict__ input_triangles,
+                          const uint32_t *__restrict__ to_internal_map,
+                          float *__restrict__ output_triangles_soa,
+                          uint32_t count, const cudaStream_t &stream = 0);
 
 void build_binary_topology(const uint32_t *__restrict__ morton_codes,
                            BinaryNode *nodes, uint32_t *parents,
@@ -20,7 +25,7 @@ void build_binary_topology(const uint32_t *__restrict__ morton_codes,
 
 template <IsGeometry Geometry>
 void populate_binary_tree_aabb_and_leaf_coefficients(
-    const Geometry *__restrict__ sorted_geometry,
+    const float *__restrict__ sorted_geometry,
     TailorCoefficientsBf16 *leaf_coefficients, uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, uint32_t *atomic_counters,

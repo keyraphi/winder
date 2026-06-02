@@ -11,51 +11,6 @@
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
 
-template <IsGeometry Geometry>
-__global__ void compute_winding_numbers_brute_force_kernel(
-    const Vec3 *queries, const Geometry *geometry, const uint32_t query_count,
-    const uint32_t geometry_count, float *winding_numbers,
-    const float inv_epsilon) {
-  // One thread per query
-  uint32_t q_idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-  // Use shared memory to cache a tile of geometry for the whole block
-  extern __shared__ char shared_mem[];
-  Geometry *tile = reinterpret_cast<Geometry *>(shared_mem);
-
-  float my_wn = 0.0F;
-  float c = 0.F;
-  Vec3 my_q = (q_idx < query_count) ? queries[q_idx] : Vec3{0, 0, 0};
-
-  // Loop over geometry in tiles of blockDim.x
-  for (uint32_t i = 0; i < geometry_count; i += blockDim.x) {
-    uint32_t load_idx = i + threadIdx.x;
-
-    // Cooperatively load geometry into shared memory
-    if (load_idx < geometry_count) {
-      tile[threadIdx.x] = Geometry::load(geometry, load_idx, geometry_count);
-    }
-    __syncthreads();
-
-    // Accumulate contribution if query is in bounds
-    if (q_idx < query_count) {
-      uint32_t num_elements_in_tile = min(blockDim.x, geometry_count - i);
-      for (uint32_t j = 0; j < num_elements_in_tile; ++j) {
-        // Kahan summation
-        float contrib = tile[j].contributionToQuery(my_q, inv_epsilon) - c;
-        float t = my_wn + contrib;
-        c = (t - my_wn) - contrib;
-        my_wn = t;
-      }
-    }
-    __syncthreads();
-  }
-
-  if (q_idx < query_count) {
-    winding_numbers[q_idx] = my_wn;
-  }
-}
-
 struct WinderTestParams {
   std::string name;
   size_t count;
@@ -177,21 +132,8 @@ template <typename T> void RunAccuracyTest(const WinderTestParams &params) {
   // compute gt using brute force
   thrust::device_vector<Vec3> queries_d = queries_h;
   thrust::device_vector<T> geom_d = geometry_h;
-  thrust::device_vector<float> gt_wn_d(params.query_count);
 
-  int threads = 256;
-  int blocks = (params.query_count + threads - 1) / threads;
-  size_t smem_size = threads * sizeof(T);
-
-  printf("DEBUG: geometry_h.size(): %lu\n", geometry_h.size());
-  compute_winding_numbers_brute_force_kernel<<<blocks, threads, smem_size>>>(
-      (Vec3 *)thrust::raw_pointer_cast(queries_d.data()),
-      (T *)thrust::raw_pointer_cast(geom_d.data()), params.query_count,
-      geometry_h.size(), thrust::raw_pointer_cast(gt_wn_d.data()),
-      1.0f / params.epsilon);
-  CUDA_CHECK(cudaGetLastError());
-
-  thrust::host_vector<float> gt_h = gt_wn_d;
+  thrust::host_vector<float> gt_h(params.query_count);
 
   // Ensure CPU wn = brute force gpu wn
   // for (size_t i = 0; i < query_count; ++i) {
@@ -209,16 +151,19 @@ template <typename T> void RunAccuracyTest(const WinderTestParams &params) {
         (float *)points_d.data().get(), (float *)scaled_normals_d.data().get(),
         points_d.size(), 0);
   } else {
-    backend = WinderBackend<T>::CreateFromTriangles((float *)geom_d.data().get(),
-                                               geom_d.size(), 0);
+    backend = WinderBackend<T>::CreateFromTriangles(
+        (float *)geom_d.data().get(), geom_d.size(), 0);
   }
 
   // DEBUG
   printf("Waiting until tree construction is actually done\n");
   cudaDeviceSynchronize();
-  printf("Tree construction is done!\n");
 
-  printf("DEBUG: calling compute with beta: %f\n", beta);
+  auto wn_gt =
+      backend->brute_force((float *)queries_d.data().get(), queries_d.size());
+  cudaMemcpy(&gt_h[0], wn_gt.get(), params.query_count*sizeof(float),
+             cudaMemcpyDeviceToHost);
+
   auto wn = backend->compute((float *)queries_d.data().get(), queries_d.size(),
                              beta, epsilon, 0);
 

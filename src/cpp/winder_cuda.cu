@@ -225,8 +225,8 @@ void WinderBackend<Triangle>::initialize_triangle_data(const float *triangles) {
   thrust::sort_by_key(m_stream_0_policy, geometry_morton_codes,
                       geometry_morton_codes + m_count, m_to_internal);
   // sort triangles using m_to_internal
-  thrust::gather(m_stream_0_policy, m_to_internal, m_to_internal + m_count,
-                 triangles_tri, m_sorted_geometry);
+  gather_triangles_soa(triangles, m_to_internal, m_sorted_geometry, m_count,
+                       m_stream_0);
 
   // each leaf contains 32 (LEAF_SIZE) elements
   uint32_t leaf_count = (m_count + LEAF_SIZE - 1) / LEAF_SIZE;
@@ -334,8 +334,8 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
   thrust::sort_by_key(m_stream_0_policy, geometry_morton_codes,
                       geometry_morton_codes + m_count, m_to_internal);
 
-  interleave_gather_geometry(points, normals, m_to_internal, m_sorted_geometry,
-                             m_count, m_stream_0);
+  gather_point_normals_soa(points, normals, m_to_internal, m_sorted_geometry,
+                          m_count, m_stream_0);
 
   // each leaf contains 32 (LEAF_SIZE) elements
   uint32_t leaf_count = (m_count + LEAF_SIZE - 1) / LEAF_SIZE;
@@ -519,15 +519,6 @@ auto WinderBackend<Geometry>::compute(
   CUDA_CHECK(
       cudaStreamWaitEvent(compute_stream, m_tree_construction_finished_event));
 
-  // DEBUG optimize
-  float construction_elapsed_time_ms;
-  CUDA_CHECK(cudaEventElapsedTime(&construction_elapsed_time_ms,
-                                  m_start_tree_construction_event,
-                                  m_tree_construction_finished_event));
-  printf("DEBUG OPTIM: tree construction took %f ms.\n",
-         construction_elapsed_time_ms);
-  // END DBUG optimize
-
   if (beta < 0.F) {
     // defaults from Fast Winding Numbers paper
     beta = GeometryTraits<Geometry>::default_beta;
@@ -539,18 +530,19 @@ auto WinderBackend<Geometry>::compute(
   uint32_t *global_counter;
   CUDA_CHECK(
       cudaMallocAsync(&global_counter, sizeof(uint32_t), compute_stream));
-  ComputeWindingNumbersParams<Geometry> params{queries_vec3,
-                                               queries_to_internal,
-                                               m_bvh8_nodes,
-                                               m_bvh8_leaf_pointers,
-                                               m_leaf_coefficients,
-                                               m_sorted_geometry,
-                                               (uint32_t)query_count,
-                                               (uint32_t)m_count,
-                                               winding_numbers,
-                                               global_counter,
-                                               beta,
-                                               epsilon};
+  ComputeWindingNumbersParams<Geometry> params{
+      queries_vec3,
+      queries_to_internal,
+      m_bvh8_nodes,
+      m_bvh8_leaf_pointers,
+      m_leaf_coefficients,
+      SoAView<Geometry>{m_sorted_geometry, m_count},
+      (uint32_t)query_count,
+      (uint32_t)m_count,
+      winding_numbers,
+      global_counter,
+      beta,
+      epsilon};
   compute_winding_numbers<Geometry>(params, m_device, compute_stream);
   // free temporary memory
   CUDA_CHECK(cudaFreeAsync(queries_to_internal, compute_stream));
@@ -714,6 +706,8 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
     std::vector<Geometry> geometry(m_count);
     CUDA_CHECK(cudaMemcpy(geometry.data(), m_sorted_geometry,
                           m_count * sizeof(Geometry), cudaMemcpyDeviceToHost));
+    SoAView<Geometry> geometry_view{reinterpret_cast<float *>(geometry.data()),
+                                    m_count};
 
     result += "Leaf {\n";
 
@@ -731,7 +725,7 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
                     leaf_com.x, leaf_com.y, leaf_com.z, leaf_max_distance);
 
     for (size_t g_id = 0; g_id < m_count; g_id++) {
-      const Geometry &g = geometry[g_id];
+      const Geometry &g = Geometry::load(geometry_view, g_id, m_count);
       result += "  " + g.dump();
     }
 
@@ -751,6 +745,8 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
   std::vector<Geometry> geometry(m_count);
   CUDA_CHECK(cudaMemcpy(geometry.data(), m_sorted_geometry,
                         m_count * sizeof(Geometry), cudaMemcpyDeviceToHost));
+  SoAView<Geometry> geometry_view{reinterpret_cast<float *>(geometry.data()),
+                                  m_count};
   std::vector<LeafPointers> leaf_pointers(node_count);
   CUDA_CHECK(cudaMemcpy(leaf_pointers.data(), m_bvh8_leaf_pointers,
                         node_count * sizeof(LeafPointers),
@@ -858,7 +854,8 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
                       leaf_com.x, leaf_com.y, leaf_com.z, leaf_max_distance);
         size_t g_off = l_id * LEAF_SIZE;
         for (size_t g_id = 0; g_id < LEAF_SIZE; g_id++) {
-          const Geometry &g = geometry[g_off + g_id];
+          const Geometry &g =
+              Geometry::load(geometry_view, g_off + g_id, m_count);
           result += indent + "    " + g.dump();
           if (g_off + g_id >= m_count) {
             break;

@@ -68,7 +68,8 @@ __global__ void test_TailorCoefficientQuantization_kernel(
 
   // unpack
   TailorCoefficientsBf16 tailor;
-  float shared_scale_factor = tailor_q.get_shared_scale_factor();
+  float shared_scale_factor_low = tailor_q.get_shared_scale_factor_low();
+  float shared_scale_factor_second = tailor_q.get_shared_scale_factor_second();
   // printf("SHARED SCALE FACTOR\n");
   // printf("shared_exponent: %u\n", tailor_q.tailor_data[43]);
   // printf("shared_scale_factor: %f\n", shared_scale_factor);
@@ -81,10 +82,11 @@ __global__ void test_TailorCoefficientQuantization_kernel(
   //     tailor_q.tailor_data[8], tailor_q.tailor_data[9],
   //     tailor_q.tailor_data[10]);
   // printf("tailor_data[7] hex: 0x%08X\n", tailor_q.tailor_data[7]);
-  shared_scale_out[0] = shared_scale_factor;
-  tailor.zero_order = tailor_q.get_tailor_zero_order(shared_scale_factor);
-  tailor.first_order = tailor_q.get_tailor_first_order(shared_scale_factor);
-  tailor.second_order = tailor_q.get_tailor_second_order(shared_scale_factor);
+  shared_scale_out[0] = shared_scale_factor_low;
+  shared_scale_out[1] = shared_scale_factor_second;
+  tailor.zero_order = tailor_q.get_tailor_zero_order();
+  tailor.first_order = tailor_q.get_tailor_first_order();
+  tailor.second_order = tailor_q.get_tailor_second_order();
   tailor_out[0] = tailor;
 
   // Verify values after quantization
@@ -241,7 +243,7 @@ int main() {
   TailorCoefficientsBf16 *tailor_input_device;
   TailorCoefficientsQuantized *tailor_quantized_device;
   TailorCoefficientsBf16 *tailor_output_device;
-  CUDA_CHECK(cudaMalloc(&shared_scale_device, sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&shared_scale_device, 2 * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&tailor_input_device, sizeof(TailorCoefficientsBf16)));
   CUDA_CHECK(cudaMalloc(&tailor_quantized_device,
                         sizeof(TailorCoefficientsQuantized)));
@@ -256,7 +258,7 @@ int main() {
     printf("Testing Range: [-%.1f, %.1f]... ", range, range);
 
     TailorCoefficientsBf16 input_host, output_host;
-    float scale_host;
+    std::vector<float> scale_host(2);
 
     // 1. Generate Data
     float max_val = fill_random(input_host, range, gen);
@@ -270,7 +272,7 @@ int main() {
         shared_scale_device);
 
     CUDA_CHECK(cudaDeviceSynchronize());
-    CUDA_CHECK(cudaMemcpy(&scale_host, shared_scale_device, sizeof(float),
+    CUDA_CHECK(cudaMemcpy(scale_host.data(), shared_scale_device, sizeof(float),
                           cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(&output_host, tailor_output_device,
                           sizeof(TailorCoefficientsBf16),
@@ -278,7 +280,7 @@ int main() {
 
     // 3. Validation
     // The max error for rounding to nearest is scale/2.
-    float max_allowed_error = scale_host * 0.5f;
+    float max_allowed_error = scale_host[0] * 0.5F;
     bool success = true;
 
     // Check a few samples or the whole set
@@ -308,7 +310,7 @@ int main() {
     }
 
     if (success) {
-      printf("PASSED (Scale: %f, Max Err: %f)\n", scale_host,
+      printf("PASSED (Scale low: %f, scale high: %f, Max Err: %f)\n", scale_host[0], scale_host[1],
              max_allowed_error);
     } else {
       printf("RANGE FAIL at %.1f\n", range);

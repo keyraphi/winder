@@ -60,11 +60,11 @@ load_shared_cooperative(T *shared_dst, const T *global_src, uint32_t lane_id) {
 }
 
 template <IsGeometry Geometry>
-__global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
+__global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
     const Vec3 *queries, const uint32_t *sort_indirections,
     const BVH8Node *bvh8_nodes, const LeafPointers *bvh8_leaf_pointers,
     const TailorCoefficientsBf16 *leaf_coefficients,
-    const Geometry *sorted_geometry, const uint32_t query_count,
+    const SoAView<Geometry> sorted_geometry, const uint32_t query_count,
     const uint32_t geometry_count, float *winding_numbers,
     uint32_t *global_device_counter, const float beta_2,
     const float inv_epsilon) {
@@ -157,20 +157,15 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
       if (is_active && should_inner_node_be_approximated(
                            my_query, current_node.parent_aabb, beta_2)) {
         // tailor_coefficients dequantization
-        float scale_factor =
-            current_node.tailor_coefficients.get_shared_scale_factor();
         // Zero Order
         Vec3_bf16 zero_order_coeff =
-            current_node.tailor_coefficients.get_tailor_zero_order(
-                scale_factor);
+            current_node.tailor_coefficients.get_tailor_zero_order();
         // First Order
         Mat3x3_bf16 first_order_coeff =
-            current_node.tailor_coefficients.get_tailor_first_order(
-                scale_factor);
+            current_node.tailor_coefficients.get_tailor_first_order();
         // Second order
         Tensor3_bf16_compressed second_order_coeff =
-            current_node.tailor_coefficients.get_tailor_second_order(
-                scale_factor);
+            current_node.tailor_coefficients.get_tailor_second_order();
 
         // Do approximation
         float approx_contribution = compute_node_approximation(
@@ -217,7 +212,7 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
           bool is_detail_eval_needed = true;
           if (
               // is_still_active && false) { // TODO DEBUG
-            should_leaf_node_be_approximated(my_query, child_aabb, beta_2)) {
+              should_leaf_node_be_approximated(my_query, child_aabb, beta_2)) {
             // NOTE: this approximation is actually used, and does not create
             // any visible differences
 
@@ -226,8 +221,9 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
             // TODO measure (time) if it is worth approximating this.
             // Test on 4090 avg of 1000 runs:
             // PointNormal:
-            // 0.06088708114624024 sec without approximation with 100000 geometry and 512^3 queries
-            // 0.06075870871543884 sec with approximation with 100000 geometry and 512^3 queries
+            // 0.06088708114624024 sec without approximation with 100000
+            // geometry and 512^3 queries 0.06075870871543884 sec with
+            // approximation with 100000 geometry and 512^3 queries
             const TailorCoefficientsBf16 &current_leaf_coefficients =
                 leaf_coefficients[leaf_idx];
             const Vec3 leaf_center_of_mass =
@@ -305,7 +301,7 @@ __global__ void __launch_bounds__(128, 8) compute_winding_numbers_kernel(
 template <IsGeometry Geometry>
 __global__ void compute_winding_numbers_single_leaf_kernel(
     const Vec3 *queries, const uint32_t *sort_indirections,
-    const Geometry *sorted_geometry, const uint32_t query_count,
+    const SoAView<Geometry> sorted_geometry, const uint32_t query_count,
     const uint32_t geometry_count, float *winding_numbers,
     const float inv_epsilon) {
   // Global index of the query this thread is responsible for
