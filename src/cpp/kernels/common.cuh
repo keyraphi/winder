@@ -29,13 +29,42 @@ __host__ __device__ inline auto morton3D_30bit(uint32_t x, uint32_t y,
   return (expand_bits(x) << 2) | (expand_bits(y) << 1) | expand_bits(z);
 }
 
-__host__ __device__ __forceinline__ auto quantize_value(float value, float p_min, float p_inv_ext) {
+__host__ __device__ inline auto splitBy3(uint32_t v) -> uint64_t {
+  // see
+  // https://www.forceflow.be/2013/10/07/morton-encodingdecoding-through-bit-interleaving-implementations/
+  uint64_t x = v & 0x1fffff; // we only look at the first 21 bits
+  x = (x | x << 32) &
+      0x1f00000000ffff; // shift left 32 bits, OR with self, and
+                        // 00011111000000000000000000000000000000001111111111111111
+  x = (x | x << 16) &
+      0x1f0000ff0000ff; // shift left 32 bits, OR with self, and
+                        // 00011111000000000000000011111111000000000000000011111111
+  x = (x | x << 8) &
+      0x100f00f00f00f00f; // shift left 32 bits, OR with self, and
+                          // 0001000000001111000000001111000000001111000000001111000000000000
+  x = (x | x << 4) &
+      0x10c30c30c30c30c3; // shift left 32 bits, OR with self, and
+                          // 0001000011000011000011000011000011000011000011000011000100000000
+  x = (x | x << 2) & 0x1249249249249249;
+  return x;
+}
+
+__host__ __device__ inline uint64_t morton3D_63bit(uint32_t x, uint32_t y, uint32_t z) {
+  // see
+  // https://www.forceflow.be/2013/10/07/morton-encodingdecoding-through-bit-interleaving-implementations/
+  uint64_t answer = 0;
+  answer |= splitBy3(x) | splitBy3(y) << 1 | splitBy3(z) << 2;
+  return answer;
+}
+
+__host__ __device__ __forceinline__ auto
+quantize_value(float value, float p_min, float p_inv_ext) {
 #ifdef __CUDA_ARCH__
-    float normalized = __saturatef((value - p_min) * p_inv_ext) * 255.F;
-    return (uint8_t)__float2uint_rn(normalized);
+  float normalized = __saturatef((value - p_min) * p_inv_ext) * 255.F;
+  return (uint8_t)__float2uint_rn(normalized);
 #else
-    float val = (value - p_min) * p_inv_ext;
-    float normalized = std::max(0.F, std::min(1.F, val)) * 255.F;
-    return (uint8_t)(normalized + 0.5F); // round-to-nearest
+  float val = (value - p_min) * p_inv_ext;
+  float normalized = std::max(0.F, std::min(1.F, val)) * 255.F;
+  return (uint8_t)(normalized + 0.5F); // round-to-nearest
 #endif
 }

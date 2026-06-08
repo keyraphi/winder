@@ -115,21 +115,33 @@ void gather_triangles_soa(const float *__restrict__ input_triangles,
   CUDA_CHECK(cudaGetLastError());
 }
 
-// Longest Common Prefix for code[i] and code[j]
+// Longest Common Prefix for 63-bit code[i] and code[j] with 32-bit index tiebreaker
 __device__ inline auto delta_with_tiebreaker(int i, int j,
-                                             const uint32_t *__restrict__ codes,
+                                             const uint64_t *__restrict__ codes,
                                              int codes_len) -> int {
   if (j < 0 || j >= codes_len) {
     return -1;
   }
-  // for collisons use i j in the lsb to get unique bit patterns
-  uint64_t x = static_cast<uint64_t>(codes[i]) << 32 | static_cast<uint64_t>(i);
-  uint64_t y = static_cast<uint64_t>(codes[j]) << 32 | static_cast<uint64_t>(j);
-  return __clzll(x ^ y);
+
+  uint64_t x_high = codes[i];
+  uint64_t y_high = codes[j];
+
+  // If the spatial Morton codes differ, they dictate the prefix length
+  if (x_high != y_high) {
+    return __clzll(x_high ^ y_high);
+  }
+
+  // Tie-breaker: If the codes match, append the 32-bit index to the key.
+  // Left-shift by 32 bits so the index's MSB sits at the top of the lower word.
+  uint64_t x_low = static_cast<uint64_t>(i) << 32;
+  uint64_t y_low = static_cast<uint64_t>(j) << 32;
+
+  // 64 bits from the identical high words + the matching prefix of the indices
+  return 64 + __clzll(x_low ^ y_low);
 }
 
 __global__ void build_binary_topology_kernel(
-    const uint32_t
+    const uint64_t
         *__restrict__ morton_codes, // morton code of first leaf entry
     BinaryNode *nodes, uint32_t *parents, const uint32_t leaf_count) {
   uint32_t thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -208,7 +220,7 @@ __global__ void build_binary_topology_kernel(
   parents[right_node_idx] = thread_idx;
 }
 
-void build_binary_topology(const uint32_t *__restrict__ morton_codes,
+void build_binary_topology(const uint64_t *__restrict__ morton_codes,
                            BinaryNode *nodes, uint32_t *parents,
                            const uint32_t leaf_count,
                            const cudaStream_t &stream) {

@@ -211,11 +211,11 @@ TEST(MortonPipeline, FullSequenceTest) {
 TEST(BinaryTopology, BasicHierarchy) {
   // 3 leaves -> 2 internal nodes
   // Morton: 0, 4, 7 (Binary: 000, 100, 111)
-  std::vector<uint32_t> h_leaf_codes = {0, 4, 7};
+  std::vector<uint64_t> h_leaf_codes = {0, 4, 7};
   uint32_t leaf_count = h_leaf_codes.size();
   uint32_t node_count = leaf_count - 1;
 
-  thrust::device_vector<uint32_t> d_codes = h_leaf_codes;
+  thrust::device_vector<uint64_t> d_codes = h_leaf_codes;
   thrust::device_vector<BinaryNode> d_nodes(node_count);
   thrust::device_vector<uint32_t> d_parents(node_count + leaf_count);
 
@@ -257,10 +257,10 @@ TEST(BinaryTopology, BasicHierarchy) {
 
 TEST(BinaryTopology, DuplicateMortonCodes) {
   // Two leaves with exact same code
-  std::vector<uint32_t> h_leaf_codes = {10, 10, 20};
+  std::vector<uint64_t> h_leaf_codes = {10, 10, 20};
   uint32_t leaf_count = 3;
 
-  thrust::device_vector<uint32_t> d_codes = h_leaf_codes;
+  thrust::device_vector<uint64_t> d_codes = h_leaf_codes;
   thrust::device_vector<BinaryNode> d_nodes(leaf_count - 1);
   thrust::device_vector<uint32_t> d_parents(leaf_count + (leaf_count - 1));
 
@@ -296,7 +296,7 @@ TEST(BinaryTopology, EdgeCaseZeroAndOne) {
   // Case: 1 Leaf
   // Karras algorithm builds L-1 internal nodes. 1-1 = 0 nodes.
   // Should handle gracefully (no-op or just setting parent for the single leaf)
-  thrust::device_vector<uint32_t> d_code(1, 123);
+  thrust::device_vector<uint64_t> d_code(1, 123);
   thrust::device_vector<BinaryNode> d_nodes(0); // 0 size
   thrust::device_vector<uint32_t> d_parents(1);
 

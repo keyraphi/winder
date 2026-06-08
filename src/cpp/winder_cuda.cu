@@ -35,7 +35,6 @@
 #include <thrust/scatter.h>
 #include <thrust/sequence.h>
 #include <thrust/sort.h>
-#include <thrust/system/cuda/detail/par.h>
 #include <thrust/transform.h>
 #include <vector>
 #include <vector_functions.h>
@@ -162,7 +161,7 @@ struct MergeAABB {
 
 template <IsPrimitiveGeometry PrimitiveGeometry> struct GeometryToMorton {
 
-  __device__ auto operator()(const PrimitiveGeometry &g) const -> uint32_t {
+  __device__ auto operator()(const PrimitiveGeometry &g) const -> uint64_t {
     const float scale = d_scene_params.scale;
     const Vec3 min_p = d_scene_params.bounds.min;
     // Scale to range [0, 1]
@@ -171,21 +170,24 @@ template <IsPrimitiveGeometry PrimitiveGeometry> struct GeometryToMorton {
     float ty = (geometry_center.y - min_p.y) * scale;
     float tz = (geometry_center.z - min_p.z) * scale;
 
-    // Scale to 10-bit integer range [0, 1023]
-    auto x = static_cast<uint32_t>(fminf(fmaxf(tx * 1024.F, 0.F), 1023.F));
-    auto y = static_cast<uint32_t>(fminf(fmaxf(ty * 1024.F, 0.F), 1023.F));
-    auto z = static_cast<uint32_t>(fminf(fmaxf(tz * 1024.F, 0.F), 1023.F));
+    // Fixed 21-bit integer quantization range [0, 2097151]
+    auto x =
+        static_cast<uint32_t>(fminf(fmaxf(tx * 2097151.F, 0.F), 2097151.F));
+    auto y =
+        static_cast<uint32_t>(fminf(fmaxf(ty * 2097151.F, 0.F), 2097151.F));
+    auto z =
+        static_cast<uint32_t>(fminf(fmaxf(tz * 2097151.F, 0.F), 2097151.F));
 
     // Expand bits (interleave x, y, z)
-    return morton3D_30bit(x, y, z);
+    return morton3D_63bit(x, y, z);
   }
 };
 
 template <IsGeometry Geometry>
 template <IsPrimitiveGeometry PrimitiveGeometry>
 auto WinderBackend<Geometry>::initializeMortonCodes(
-    const PrimitiveGeometry *geometry,
-    uint32_t *geometry_morton_codes) -> void {
+    const PrimitiveGeometry *geometry, uint64_t *geometry_morton_codes)
+    -> void {
   // compute scene bounds
   auto aabb_transform = thrust::make_transform_iterator(
       geometry, GeometryToAABB<PrimitiveGeometry>{});
@@ -214,8 +216,8 @@ void WinderBackend<Triangle>::initialize_triangle_data(const float *triangles) {
 
   CUDA_CHECK(cudaEventRecord(m_start_tree_construction_event, m_stream_0));
 
-  uint32_t *geometry_morton_codes;
-  CUDA_CHECK(cudaMallocAsync(&geometry_morton_codes, m_count * sizeof(uint32_t),
+  uint64_t *geometry_morton_codes;
+  CUDA_CHECK(cudaMallocAsync(&geometry_morton_codes, m_count * sizeof(uint64_t),
                              m_stream_0));
   initializeMortonCodes(triangles_tri, geometry_morton_codes);
 
@@ -233,15 +235,15 @@ void WinderBackend<Triangle>::initialize_triangle_data(const float *triangles) {
   uint32_t max_bvh8_nodes = leaf_count - 1; // DEBUG worst case scenario!!
 
   auto morton_leaf_stride_idx = thrust::make_transform_iterator(
-      thrust::make_counting_iterator<uint32_t>(0),
-      [] __host__ __device__(uint32_t i) -> uint32_t { return i * LEAF_SIZE; });
+      thrust::make_counting_iterator<uint64_t>(0),
+      [] __host__ __device__(uint64_t i) -> uint64_t { return i * LEAF_SIZE; });
   // thrust::make_strided_iterator<LEAF_SIZE>(geometry_morton_codes.begin());
   // // requires cuda 13
   auto morton_leaf_stride = thrust::make_permutation_iterator(
       geometry_morton_codes, morton_leaf_stride_idx);
 
-  uint32_t *leaf_morton_codes;
-  CUDA_CHECK(cudaMallocAsync(&leaf_morton_codes, m_count * sizeof(uint32_t),
+  uint64_t *leaf_morton_codes;
+  CUDA_CHECK(cudaMallocAsync(&leaf_morton_codes, m_count * sizeof(uint64_t),
                              m_stream_0));
   thrust::copy(m_stream_0_policy, morton_leaf_stride,
                morton_leaf_stride + leaf_count, leaf_morton_codes);
@@ -323,8 +325,8 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
 
   CUDA_CHECK(cudaEventRecord(m_start_tree_construction_event, m_stream_0));
 
-  uint32_t *geometry_morton_codes;
-  CUDA_CHECK(cudaMallocAsync(&geometry_morton_codes, m_count * sizeof(uint32_t),
+  uint64_t *geometry_morton_codes;
+  CUDA_CHECK(cudaMallocAsync(&geometry_morton_codes, m_count * sizeof(uint64_t),
                              m_stream_0));
   initializeMortonCodes<Vec3>(points_v3, geometry_morton_codes);
 
@@ -335,7 +337,7 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
                       geometry_morton_codes + m_count, m_to_internal);
 
   gather_point_normals_soa(points, normals, m_to_internal, m_sorted_geometry,
-                          m_count, m_stream_0);
+                           m_count, m_stream_0);
 
   // each leaf contains 32 (LEAF_SIZE) elements
   uint32_t leaf_count = (m_count + LEAF_SIZE - 1) / LEAF_SIZE;
@@ -343,13 +345,13 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
       leaf_count - 1; // DEBUG worst case scenario - very pesimistic!!
 
   auto morton_leaf_stride_idx = thrust::make_transform_iterator(
-      thrust::make_counting_iterator<uint32_t>(0),
-      [] __host__ __device__(uint32_t i) -> uint32_t { return i * LEAF_SIZE; });
+      thrust::make_counting_iterator<uint64_t>(0),
+      [] __host__ __device__(uint32_t i) -> uint64_t { return i * LEAF_SIZE; });
   // thrust::make_strided_iterator<LEAF_SIZE>(geometry_morton_codes.begin());
   auto morton_leaf_stride = thrust::make_permutation_iterator(
       geometry_morton_codes, morton_leaf_stride_idx);
-  uint32_t *leaf_morton_codes;
-  CUDA_CHECK(cudaMallocAsync(&leaf_morton_codes, m_count * sizeof(uint32_t),
+  uint64_t *leaf_morton_codes;
+  CUDA_CHECK(cudaMallocAsync(&leaf_morton_codes, m_count * sizeof(uint64_t),
                              m_stream_0));
   thrust::copy(m_stream_0_policy, morton_leaf_stride,
                morton_leaf_stride + leaf_count, leaf_morton_codes);
@@ -433,9 +435,10 @@ template <> struct GeometryTraits<PointNormal> {
 };
 
 template <IsGeometry Geometry>
-auto WinderBackend<Geometry>::brute_force(
-    const float *queries, size_t query_count, float epsilon,
-    size_t stream) const -> CudaUniquePtr<float> {
+auto WinderBackend<Geometry>::brute_force(const float *queries,
+                                          size_t query_count, float epsilon,
+                                          size_t stream) const
+    -> CudaUniquePtr<float> {
   ScopedCudaDevice device_scope{m_device};
   const Vec3 *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
 
@@ -474,9 +477,10 @@ auto WinderBackend<Geometry>::brute_force(
 }
 
 template <IsGeometry Geometry>
-auto WinderBackend<Geometry>::compute(
-    const float *queries, size_t query_count, float beta, float epsilon,
-    size_t stream) const -> CudaUniquePtr<float> {
+auto WinderBackend<Geometry>::compute(const float *queries, size_t query_count,
+                                      float beta, float epsilon,
+                                      size_t stream) const
+    -> CudaUniquePtr<float> {
   cudaEvent_t start, finish;
   CUDA_CHECK(cudaEventCreate(&start));
   CUDA_CHECK(cudaEventCreate(&finish));
@@ -496,10 +500,10 @@ auto WinderBackend<Geometry>::compute(
   CUDA_CHECK(cudaMallocAsync(&winding_numbers, query_count * sizeof(float),
                              compute_stream));
   uint32_t *queries_to_internal;
-  uint32_t *queries_morton;
+  uint64_t *queries_morton;
   CUDA_CHECK(cudaMallocAsync(&queries_to_internal,
                              query_count * sizeof(uint32_t), compute_stream));
-  CUDA_CHECK(cudaMallocAsync(&queries_morton, query_count * sizeof(uint32_t),
+  CUDA_CHECK(cudaMallocAsync(&queries_morton, query_count * sizeof(uint64_t),
                              compute_stream));
 
   // sort queries by morton code, scaled with bvh8s aabb
@@ -561,9 +565,11 @@ auto WinderBackend<Geometry>::compute(
 }
 
 template <>
-auto WinderBackend<PointNormal>::CreateFromPoints(
-    const float *points, const float *normals, size_t point_count,
-    int device_id) -> std::unique_ptr<WinderBackend<PointNormal>> {
+auto WinderBackend<PointNormal>::CreateFromPoints(const float *points,
+                                                  const float *normals,
+                                                  size_t point_count,
+                                                  int device_id)
+    -> std::unique_ptr<WinderBackend<PointNormal>> {
   ScopedCudaDevice device_scope(device_id);
 
   printf("CreateFromPoints!\n");
@@ -574,9 +580,10 @@ auto WinderBackend<PointNormal>::CreateFromPoints(
 }
 
 template <>
-auto WinderBackend<Triangle>::CreateFromTriangles(
-    const float *triangles, size_t triangle_count,
-    int device_id) -> std::unique_ptr<WinderBackend<Triangle>> {
+auto WinderBackend<Triangle>::CreateFromTriangles(const float *triangles,
+                                                  size_t triangle_count,
+                                                  int device_id)
+    -> std::unique_ptr<WinderBackend<Triangle>> {
   ScopedCudaDevice device_scope(device_id);
   printf("CreateFromTriangles!\n");
   auto self = std::unique_ptr<WinderBackend>{
@@ -587,10 +594,12 @@ auto WinderBackend<Triangle>::CreateFromTriangles(
 }
 
 template <>
-auto WinderBackend<Triangle>::CreateFromMesh(
-    const float *vertices, size_t vertex_count,
-    const uint32_t *triangle_indices, size_t triangle_count,
-    int device_id) -> std::unique_ptr<WinderBackend<Triangle>> {
+auto WinderBackend<Triangle>::CreateFromMesh(const float *vertices,
+                                             size_t vertex_count,
+                                             const uint32_t *triangle_indices,
+                                             size_t triangle_count,
+                                             int device_id)
+    -> std::unique_ptr<WinderBackend<Triangle>> {
   ScopedCudaDevice device_scope(device_id);
   printf("CreateFromMesh!\n");
   auto self = std::unique_ptr<WinderBackend>{
@@ -623,9 +632,10 @@ auto WinderBackend<Triangle>::CreateFromMesh(
 }
 
 template <>
-auto WinderBackend<PointNormal>::CreateForSolver(
-    const float *points, size_t point_count,
-    int device_id) -> std::unique_ptr<WinderBackend<PointNormal>> {
+auto WinderBackend<PointNormal>::CreateForSolver(const float *points,
+                                                 size_t point_count,
+                                                 int device_id)
+    -> std::unique_ptr<WinderBackend<PointNormal>> {
   ScopedCudaDevice device_scope(device_id);
   auto self = std::unique_ptr<WinderBackend<PointNormal>>{
       new WinderBackend<PointNormal>(point_count, device_id)};

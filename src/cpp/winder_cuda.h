@@ -13,7 +13,6 @@
 #include <string>
 #include <thrust/detail/raw_pointer_cast.h>
 #include <thrust/execution_policy.h>
-#include <thrust/system/cuda/detail/par.h>
 #include <vector_types.h>
 
 // one warp per leaf
@@ -130,5 +129,5 @@ public: // TODO DEBUG  make private!
 private: // TODO DEBUG
   // private helpers
   template <IsPrimitiveGeometry PrimitiveGeometry>
-  auto initializeMortonCodes(const PrimitiveGeometry *geometry, uint32_t *geometry_morton_codes) -> void;
+  auto initializeMortonCodes(const PrimitiveGeometry *geometry, uint64_t *geometry_morton_codes) -> void;
 };

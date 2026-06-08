@@ -1,7 +1,7 @@
 # Keep kernels separate, speeding up incremental builds.
 file(GLOB KERNEL_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/kernels/*.cu")
 add_library(winder_kernels STATIC ${KERNEL_SOURCES})
-add_library(winder_backend STATIC winder_cuda.cu)
+add_library(winder_backend STATIC winder_cuda.cu utils.cu)
 # make sure to use position independent code (pic)
 set_target_properties(winder_kernels PROPERTIES POSITION_INDEPENDENT_CODE ON)
 set_target_properties(winder_backend PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -26,7 +26,6 @@ target_include_directories(winder_backend PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # Main nanobind Module
 nanobind_add_module(winder_module
     winder.cpp
-    utils.cu
 )
 
 # Link and Configure Module

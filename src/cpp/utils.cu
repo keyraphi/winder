@@ -3,8 +3,6 @@
 #include <cstdio>
 #include <cuda_runtime_api.h>
 #include <driver_types.h>
-#include <nanobind/ndarray.h>
-#include <optional>
 #include <thrust/device_ptr.h>
 #include <thrust/fill.h>
 #include <vector_functions.h>
@@ -17,8 +15,6 @@
               __LINE__, result, cudaGetErrorString(result));                   \
     }                                                                          \
   } while (0)
-
-namespace nb = nanobind;
 
 namespace winder_cuda {
 // Helper to get CUDA device from nanobind ndarray
@@ -42,15 +38,10 @@ void cuda_free(void *ptr) {
   }
 }
 
-Scalar_t scalar_with_default(const ::std::optional<Scalar_t> &maybe_pc_wn,
-                             size_t count, float default_value) {
-  if (maybe_pc_wn.has_value()) {
-    return maybe_pc_wn.value();
-  }
-  auto *data = static_cast<float *>(cuda_allocate(count * sizeof(float)));
-  thrust::fill(data, data + count, default_value);
-  nb::capsule owner(data, [](void *p) noexcept -> void { cuda_free(p); });
-  return {data, {count}, owner};
+void thrust_fill_float(float *ptr, size_t count, float value) {
+  thrust::device_ptr<float> dev_ptr(ptr);
+  thrust::fill(dev_ptr, dev_ptr + count, value);
 }
+
 
 } // namespace cuda

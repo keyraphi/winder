@@ -27,6 +27,23 @@ using TriangleIdx_t = nb::ndarray<nb::array_api, uint32_t, nb::shape<-1, 3>,
                                   nb::c_contig, nb::device::cuda>;
 using Scalar_t = nb::ndarray<nb::array_api, float, nb::shape<-1>, nb::c_contig,
                              nb::device::cuda>;
+namespace winder_cuda {
+
+auto scalar_with_default(const std::optional<Scalar_t> &maybe_pc_wn,
+                         size_t count, float default_value) -> Scalar_t {
+  if (maybe_pc_wn.has_value()) {
+    return maybe_pc_wn.value();
+  }
+  // Allocate raw memory via our decoupled utility
+  auto *data = static_cast<float *>(cuda_allocate(count * sizeof(float)));
+  thrust_fill_float(data, count, default_value);
+  // Wrap the raw pointer in a Python capsule with a safe custom deleter
+  nb::capsule owner(data, [](void *p) noexcept -> void { cuda_free(p); });
+
+  return {data, {count}, owner};
+}
+
+} // namespace winder_cuda
 
 class WinderEngine {
 public:
@@ -120,8 +137,8 @@ public:
   }
 
   auto compute(const Vec3_t &queries, const float beta = -1.F,
-               const float epsilon = -1.F,
-               const size_t stream = 0) -> Scalar_t {
+               const float epsilon = -1.F, const size_t stream = 0)
+      -> Scalar_t {
     size_t n = queries.shape(0);
     // todo ensure queries are on same device as m_impl
 

@@ -19,7 +19,7 @@ void gather_triangles_soa(const float *__restrict__ input_triangles,
                           float *__restrict__ output_triangles_soa,
                           uint32_t count, const cudaStream_t &stream = 0);
 
-void build_binary_topology(const uint32_t *__restrict__ morton_codes,
+void build_binary_topology(const uint64_t *__restrict__ morton_codes,
                            BinaryNode *nodes, uint32_t *parents,
                            uint32_t leaf_count, const cudaStream_t &stream = 0);
 
