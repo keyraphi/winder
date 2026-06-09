@@ -1,9 +1,6 @@
 #include "aabb.h"
 #include "bvh8.h"
 #include "common.cuh"
-#include "mat3x3.h"
-#include "tailor_coefficients.h"
-#include "tensor3.h"
 #include "vec3.h"
 #include "winder_cuda.h"
 #include <cooperative_groups.h>
@@ -21,9 +18,9 @@
 
 __global__ void compute_internal_tailor_coefficients_m2m_kernel(
     BVH8Node *nodes, const uint32_t *internal_parent_map,
-    const AABB *leaf_aabbs, const TailorCoefficientsBf16 *leaf_coefficients,
+    const AABB *leaf_aabbs, SoAViewConst<Vec3> leaf_zero_order,
     const uint32_t *leaf_parents, const LeafPointers *leaf_pointers,
-    TailorCoefficients *m2m_f32_coefficients, const uint32_t leaf_count,
+    const uint32_t *node_child_count, const uint32_t leaf_count,
     uint32_t *atomic_counters) {
 
   uint32_t leaf_idx = threadIdx.x + blockIdx.x * blockDim.x;
@@ -36,147 +33,40 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
   while (current_node_idx != 0xFFFFFFFF) {
     BVH8Node node = nodes[current_node_idx];
     // race to the top
-    uint32_t expected_children =
-        node.tailor_coefficients.get_expected_children();
+    uint32_t expected_children = node_child_count[current_node_idx];
 
     if (atomicAdd(&atomic_counters[current_node_idx], 1) <
         expected_children - 1) {
       return;
     }
 
-    // only one thread for current node survives
-    Vec3 parent_center = node.parent_aabb.center_of_mass.get(
-        node.parent_aabb.min, node.parent_aabb.diagonal());
-
     Vec3 zero_order = {0.F, 0.F, 0.F};
-    Mat3x3 first_order = {0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F};
-    Tensor3_compressed second_order = {0.F, 0.F, 0.F, 0.F, 0.F, 0.F,
-                                       0.F, 0.F, 0.F, 0.F, 0.F, 0.F,
-                                       0.F, 0.F, 0.F, 0.F, 0.F, 0.F};
-
     uint32_t internal_child_count = 0;
 #pragma unroll
     for (uint32_t i = 0; i < 8; ++i) {
-      if (node.getChildMeta(i) == ChildType::EMPTY) {
+      if (node.child_meta[i] == ChildType::EMPTY) {
         continue;
       }
-      Vec3 child_center;
-      TailorCoefficients child_coefficients;
-      if (node.getChildMeta(i) == ChildType::LEAF) {
+      Vec3 child_zero_order;
+      if (node.child_meta[i] == ChildType::LEAF) {
         uint32_t leaf_idx = leaf_pointers[current_node_idx].indices[i];
         const AABB &leaf_aabb = leaf_aabbs[leaf_idx];
-        child_center =
-            leaf_aabb.center_of_mass.get(leaf_aabb.min, leaf_aabb.diagonal());
-        child_coefficients =
-            TailorCoefficients::from_bf16(leaf_coefficients[leaf_idx]);
+        child_zero_order = Vec3::load(leaf_zero_order, leaf_idx, leaf_count);
       } else {
         uint32_t child_idx = node.child_base + internal_child_count;
         internal_child_count++;
         BVH8Node child_node = nodes[child_idx];
-        child_center = child_node.parent_aabb.center_of_mass.get(
-            child_node.parent_aabb.min, child_node.parent_aabb.diagonal());
-
-        // Load the float32 coefficients (no quantization happened here)
-        child_coefficients = m2m_f32_coefficients[child_idx];
+        child_zero_order = child_node.zero_order_coefficients;
       }
 
-      // Merge child coefficients into parent tailor by recentering child
-      //
-      Vec3 shift_vector = child_center - parent_center; // v in equations
       // zero order doesn't change
       // M_0' = M_0
-      const Vec3 &zero_child = child_coefficients.zero_order;
+      const Vec3 &zero_child = child_zero_order;
       zero_order += zero_child;
-      // first order
-      // M_1' = M_1 + v \otimes M_0
-      const Mat3x3 &child_first = child_coefficients.first_order;
-      first_order += child_first + shift_vector.outer_product(zero_child);
-      // second order
-      // M_2' = M_2 + 1/2 * (v \times M_1 + perm(v \times M_1)) + 1/2 * (v
-      // \times v \times M_0)
-      // M2_jkl′ = M2_jkl + 1/2*(v_j * M1_kl + v_k * M1_jl) + 1/2 v_j * v_k *
-      //           M0_l
-      const Tensor3_compressed &child_second = child_coefficients.second_order;
-      second_order.data[0] +=
-          child_second.data[0] + shift_vector.x * child_first.data[0] +
-          0.5F * shift_vector.x * shift_vector.x * zero_child.x;
-      second_order.data[1] +=
-          child_second.data[1] + shift_vector.x * child_first.data[1] +
-          0.5F * shift_vector.x * shift_vector.x * zero_child.y;
-      second_order.data[2] +=
-          child_second.data[2] + shift_vector.x * child_first.data[2] +
-          0.5F * shift_vector.x * shift_vector.x * zero_child.z;
-      second_order.data[3] +=
-          child_second.data[3] +
-          0.5F * (shift_vector.x * child_first.data[3] +
-                  shift_vector.y * child_first.data[0]) +
-          0.5F * shift_vector.x * shift_vector.y * zero_child.x;
-      second_order.data[4] +=
-          child_second.data[4] +
-          0.5F * (shift_vector.x * child_first.data[4] +
-                  shift_vector.y * child_first.data[1]) +
-          0.5F * shift_vector.x * shift_vector.y * zero_child.y;
-      second_order.data[5] +=
-          child_second.data[5] +
-          0.5F * (shift_vector.x * child_first.data[5] +
-                  shift_vector.y * child_first.data[2]) +
-          0.5F * shift_vector.x * shift_vector.y * zero_child.z;
-      second_order.data[6] +=
-          child_second.data[6] +
-          0.5F * (shift_vector.x * child_first.data[6] +
-                  shift_vector.z * child_first.data[0]) +
-          0.5F * shift_vector.x * shift_vector.z * zero_child.x;
-      second_order.data[7] +=
-          child_second.data[7] +
-          0.5F * (shift_vector.x * child_first.data[7] +
-                  shift_vector.z * child_first.data[1]) +
-          0.5F * shift_vector.x * shift_vector.z * zero_child.y;
-      second_order.data[8] +=
-          child_second.data[8] +
-          0.5F * (shift_vector.x * child_first.data[8] +
-                  shift_vector.z * child_first.data[2]) +
-          0.5F * shift_vector.x * shift_vector.z * zero_child.z;
-      second_order.data[9] +=
-          child_second.data[9] + shift_vector.y * child_first.data[3] +
-          0.5F * shift_vector.y * shift_vector.y * zero_child.x;
-      second_order.data[10] +=
-          child_second.data[10] + shift_vector.y * child_first.data[4] +
-          0.5F * shift_vector.y * shift_vector.y * zero_child.y;
-      second_order.data[11] +=
-          child_second.data[11] + shift_vector.y * child_first.data[5] +
-          0.5F * shift_vector.y * shift_vector.y * zero_child.z;
-      second_order.data[12] +=
-          child_second.data[12] +
-          0.5F * (shift_vector.y * child_first.data[6] +
-                  shift_vector.z * child_first.data[3]) +
-          0.5F * shift_vector.y * shift_vector.z * zero_child.x;
-      second_order.data[13] +=
-          child_second.data[13] +
-          0.5F * (shift_vector.y * child_first.data[7] +
-                  shift_vector.z * child_first.data[4]) +
-          0.5F * shift_vector.y * shift_vector.z * zero_child.y;
-      second_order.data[14] +=
-          child_second.data[14] +
-          0.5F * (shift_vector.y * child_first.data[8] +
-                  shift_vector.z * child_first.data[5]) +
-          0.5F * shift_vector.y * shift_vector.z * zero_child.z;
-      second_order.data[15] +=
-          child_second.data[15] + shift_vector.z * child_first.data[6] +
-          0.5F * shift_vector.z * shift_vector.z * zero_child.x;
-      second_order.data[16] +=
-          child_second.data[16] + shift_vector.z * child_first.data[7] +
-          0.5F * shift_vector.z * shift_vector.z * zero_child.y;
-      second_order.data[17] +=
-          child_second.data[17] + shift_vector.z * child_first.data[8] +
-          0.5F * shift_vector.z * shift_vector.z * zero_child.z;
     }
     // store accumulated coefficients in current node (quantized)
-    node.tailor_coefficients.set_tailor_coefficients(zero_order, first_order,
-                                                     second_order);
+    node.zero_order_coefficients = zero_order;
     nodes[current_node_idx] = node;
-    // store accumulated in m2m_f32_coefficients (full resolution)
-    m2m_f32_coefficients[current_node_idx] =
-        TailorCoefficients{zero_order, first_order, second_order};
 
     __threadfence(); // ensure the tailor coefficients of childs are written
                      // before continuing with the next
@@ -186,15 +76,17 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
 
 void compute_internal_tailor_coefficients_m2m(
     BVH8Node *nodes, const uint32_t *internal_parent_map,
-    const AABB *leaf_aabbs, const TailorCoefficientsBf16 *leaf_coefficients,
+    const AABB *leaf_aabbs, const float *leaf_zero_order,
     const uint32_t *leaf_parents, const LeafPointers *leaf_pointers,
-    TailorCoefficients *m2m_f32_coefficients, const uint32_t leaf_count,
+    const uint32_t *node_child_count, const uint32_t leaf_count,
     uint32_t *atomic_counters, const cudaStream_t &stream) {
   uint32_t threads = 256;
   uint32_t blocks = (leaf_count + threads - 1) / threads;
   compute_internal_tailor_coefficients_m2m_kernel<<<blocks, threads, 0,
                                                     stream>>>(
-      nodes, internal_parent_map, leaf_aabbs, leaf_coefficients, leaf_parents,
-      leaf_pointers, m2m_f32_coefficients, leaf_count, atomic_counters);
+      nodes, internal_parent_map, leaf_aabbs,
+      SoAViewConst<Vec3>{const_cast<float *>(leaf_zero_order), leaf_count},
+      leaf_parents, leaf_pointers, node_child_count, leaf_count,
+      atomic_counters);
   CUDA_CHECK(cudaGetLastError());
 }

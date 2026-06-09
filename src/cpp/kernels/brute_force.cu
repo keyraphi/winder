@@ -9,7 +9,7 @@
 
 template <IsGeometry Geometry>
 __global__ void compute_winding_numbers_brute_force_kernel(
-    const Vec3 *queries, const SoAView<Geometry> geometry, const uint32_t query_count,
+    const Vec3 *queries, const SoAViewConst<Geometry> geometry, const uint32_t query_count,
     const uint32_t geometry_count, float *winding_numbers,
     const float inv_epsilon) {
   // One thread per query
@@ -68,7 +68,7 @@ void compute_brute_force(const Vec3 *queries_vec3, const float *geometry,
   size_t smem_size = threads * sizeof(Geometry);
   compute_winding_numbers_brute_force_kernel<Geometry>
       <<<blocks, threads, smem_size, compute_stream>>>(
-          queries_vec3, SoAView<Geometry>{geometry, geometry_count}, query_count, geometry_count, winding_numbers,
+          queries_vec3, SoAViewConst<Geometry>{geometry, geometry_count}, query_count, geometry_count, winding_numbers,
           inv_epsilon);
   CUDA_CHECK(cudaGetLastError());
 

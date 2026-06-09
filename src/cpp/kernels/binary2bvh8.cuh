@@ -17,6 +17,7 @@ struct ConvertBinary2BVH8Params {
   const BinaryNode *binary_nodes;
   uint32_t *bvh8_leaf_parents;
   BVH8Node *bvh8_nodes;
+  uint32_t *bvh8_node_child_count;
   LeafPointers *bvh8_leaf_pointers;
   uint32_t *bvh8_node_count;
 };

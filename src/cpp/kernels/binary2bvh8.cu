@@ -141,12 +141,6 @@ convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
       out_node.parent_aabb = parent_aabb;
       out_node.child_base = my_child_base;
 
-      // AABB Quantization & Writing out the BVH8Node
-      Vec3 parent_min = parent_aabb.min;
-      // Note: can be inf - doesn't matter because of implementation of
-      // quantize_aabb
-      Vec3 parent_inv_ext = 1.F / (parent_aabb.max - parent_aabb.min);
-
       int internal_found = 0;
       uint32_t my_leaf_indices[8];
 
@@ -157,14 +151,8 @@ convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
           bool is_child_leaf =
               BinaryNode::is_leaf(binary_child_idx, params.leaf_count);
 
-          // Quantize Child AABB
-          AABB child_box = params.binary_aabbs[binary_child_idx];
-
-          out_node.child_aabb_approx[i] = AABB8BitApprox::quantize_aabb(
-              child_box, parent_min, parent_inv_ext);
-
           if (is_child_leaf) {
-            out_node.setChildMeta(i, ChildType::LEAF);
+            out_node.child_meta[i] = ChildType::LEAF;
             uint32_t leaf_raw_idx = binary_child_idx - (params.leaf_count - 1);
 
             my_leaf_indices[i] = leaf_raw_idx;
@@ -172,7 +160,7 @@ convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
             // Let the leaf know which BVH8Node is its parent
             params.bvh8_leaf_parents[leaf_raw_idx] = bvh8_idx;
           } else {
-            out_node.setChildMeta(i, ChildType::INTERNAL);
+            out_node.child_meta[i] = ChildType::INTERNAL;
             // Calculate the specific global index for this child in the next
             // level
             uint32_t next_bvh8_idx = my_child_base + internal_found;
@@ -188,13 +176,13 @@ convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
             internal_found++;
           }
         } else {
-          out_node.setChildMeta(i, ChildType::EMPTY);
+          out_node.child_meta[i] = ChildType::EMPTY;
           my_leaf_indices[i] = 0xFFFFFFFF;
         }
       }
 
       // let the inner nodes know how many childs they have
-      out_node.tailor_coefficients.set_expected_children(child_count);
+      params.bvh8_node_child_count[bvh8_idx] = child_count;
 
       // Coalesced Writes
       params.bvh8_nodes[bvh8_idx] = out_node;

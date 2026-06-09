@@ -2,9 +2,6 @@
 #include "binary_node.h"
 #include "common.cuh"
 #include "geometry.h"
-#include "mat3x3.h"
-#include "tailor_coefficients.h"
-#include "tensor3.h"
 #include "vec3.h"
 #include <cmath>
 #include <cstddef>
@@ -55,10 +52,11 @@ __global__ void __launch_bounds__(256)
 }
 
 void gather_point_normals_soa(const float *__restrict__ points,
-                             const float *__restrict__ normals,
-                             const uint32_t *__restrict__ indices,
-                             float *__restrict__ out_geometry,
-                             const uint32_t count, const cudaStream_t &stream) {
+                              const float *__restrict__ normals,
+                              const uint32_t *__restrict__ indices,
+                              float *__restrict__ out_geometry,
+                              const uint32_t count,
+                              const cudaStream_t &stream) {
   if (count < 1) {
     return;
   }
@@ -115,7 +113,8 @@ void gather_triangles_soa(const float *__restrict__ input_triangles,
   CUDA_CHECK(cudaGetLastError());
 }
 
-// Longest Common Prefix for 63-bit code[i] and code[j] with 32-bit index tiebreaker
+// Longest Common Prefix for 63-bit code[i] and code[j] with 32-bit index
+// tiebreaker
 __device__ inline auto delta_with_tiebreaker(int i, int j,
                                              const uint64_t *__restrict__ codes,
                                              int codes_len) -> int {
@@ -250,11 +249,10 @@ __device__ __forceinline__ auto warp_reduce_add_down(float val) -> float {
 
 template <IsGeometry Geometry>
 __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
-    const SoAView<Geometry> sorted_geometry,
-    TailorCoefficientsBf16 *leaf_coefficients, const uint32_t leaf_count,
-    const BinaryNode *binary_nodes, AABB *binary_aabbs,
-    const uint32_t *binary_parents, uint32_t *atomic_counters,
-    const uint32_t geometry_count) {
+    const SoAViewConst<Geometry> sorted_geometry, SoAView<Vec3> leaf_zero_order,
+   const uint32_t leaf_count, const BinaryNode *binary_nodes,
+    AABB *binary_aabbs, const uint32_t *binary_parents,
+    uint32_t *atomic_counters, const uint32_t geometry_count) {
   uint32_t geometry_idx = threadIdx.x + blockIdx.x * blockDim.x;
   uint32_t leaf_idx = geometry_idx / 32;
   if (leaf_idx >= leaf_count)
@@ -307,48 +305,18 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
   // write aggregated AABB for leaf
   binary_aabbs[leaf_idx + leaf_count - 1].min = p_min;
   binary_aabbs[leaf_idx + leaf_count - 1].max = p_max;
-  Vec3 diagonal = p_max - p_min;
-  Vec3 inv_extend = 1.F / diagonal;
-  float inv_diagonal_length = diagonal.inv_length();
-  binary_aabbs[leaf_idx + leaf_count - 1].center_of_mass.set(center_of_mass,
-                                                             p_min, inv_extend);
-  binary_aabbs[leaf_idx + leaf_count - 1].center_of_mass.setMaxDistance(
-      dist_to_com, inv_diagonal_length);
-  leaf_coefficients[leaf_idx].center_of_mass.set(center_of_mass, p_min,
-                                                 inv_extend);
-  leaf_coefficients[leaf_idx].center_of_mass.setMaxDistance(
-      dist_to_com, inv_diagonal_length);
-
-  // Make sure the quantized center of mask is the actual position for which we
-  // compute the tailor coefficients
-  center_of_mass =
-      leaf_coefficients[leaf_idx].center_of_mass.get(p_min, diagonal);
+  binary_aabbs[leaf_idx + leaf_count - 1].center_of_mass = center_of_mass;
+  binary_aabbs[leaf_idx + leaf_count - 1].max_distance_to_center = dist_to_com;
 
   // Compute tailor coefficients
   Vec3 zero_order;
-  Mat3x3 first_order;
-  Tensor3_compressed second_order;
 
   // Zero order
   //\sum_{i=1}^m a_i n_i
   // points: a_i*n_i is scaled normal
   // triangles: a_i*n_i is surface area * normal
-  // First order
-  // \sum_{i=1}^m a_i*d_i \otimes n_i
-  // points: d_i = p_i-center
-  // triangles: d_i = triangle_centroid_i - center
-  // second order
-  // 1/2 (\sum_{i=1}^m Ct \otimes n)
-  // points: Ct = a_i (p_i-center) \odot (p_i-center)
-  // triangles: d_i = 1/3(1/2(x_i+xj-p')\odot(1/2(x_i+x_j)-p') +
-  // 1/3(1/2(x_j+x_k)-p')\odot(1/2(x_j+x_k)-p') +
-  // 1/3(1/2(x_k+x_i)-p')\odot(1/2(x_k+x_i)-p')
-  // Note: Ct is symmetric. It contains only 6 unique values
-  // For that reason second_order also only contains 18 unique values. We don't
-  // compute/store duplicates.
   // For inactive threads result is 0 (neutral wrt +)
-  geometry.get_tailor_terms(center_of_mass, is_thread_active, zero_order,
-                            first_order, second_order);
+  geometry.get_tailor_terms(is_thread_active, zero_order);
 
   // aggregate zero order
   zero_order.x = warp_reduce_add_down(zero_order.x);
@@ -356,28 +324,8 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
   zero_order.z = warp_reduce_add_down(zero_order.z);
   // write aggregated coefficient for leaf
   if (lane_id == 0) {
-    leaf_coefficients[leaf_idx].zero_order = zero_order;
+    Vec3::store(zero_order, leaf_zero_order, leaf_idx);
   }
-
-// aggregate first order
-#pragma unroll
-  for (int i = 0; i < 9; ++i) {
-    first_order.data[i] = warp_reduce_add_down(first_order.data[i]);
-  }
-  // write aggregated coefficient for leaf
-  if (lane_id == 0) {
-    leaf_coefficients[leaf_idx].first_order = first_order;
-  }
-// aggregate second order
-#pragma unroll
-  for (int i = 0; i < 18; ++i) {
-    second_order.data[i] = warp_reduce_add_down(second_order.data[i]);
-  }
-  // write aggregated coefficient for leaf
-  if (lane_id == 0) {
-    leaf_coefficients[leaf_idx].second_order = second_order;
-  }
-
   // propagate the aabbs to the inner nodes (binary_aabbs)
   // lane 0 handles the Leaf-to-Root Race
   if (lane_id == 0) {
@@ -444,7 +392,7 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
 template <IsGeometry Geometry>
 void populate_binary_tree_aabb_and_leaf_coefficients(
     const float *__restrict__ sorted_geometry,
-    TailorCoefficientsBf16 *leaf_coefficients, const uint32_t leaf_count,
+    float *__restrict__ leaf_zero_order, const uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, uint32_t *atomic_counters,
     const uint32_t geometry_count, const cudaStream_t &stream) {
@@ -456,7 +404,7 @@ void populate_binary_tree_aabb_and_leaf_coefficients(
   const uint32_t blocks = (leaf_count * 32 + threads - 1) / threads;
   populate_binary_tree_aabb_and_leaf_coefficients_kernel<Geometry>
       <<<blocks, threads, 0, stream>>>(
-          SoAView<Geometry>{sorted_geometry, geometry_count}, leaf_coefficients,
+          SoAViewConst<Geometry>{sorted_geometry, geometry_count}, SoAView<Vec3>{leaf_zero_order, leaf_count},
           leaf_count, binary_nodes, binary_aabbs, binary_parents,
           atomic_counters, geometry_count);
   CUDA_CHECK(cudaGetLastError());
@@ -465,14 +413,14 @@ void populate_binary_tree_aabb_and_leaf_coefficients(
 // Tell the compiler to generate the code for these types
 template void populate_binary_tree_aabb_and_leaf_coefficients<PointNormal>(
     const float *__restrict__ sorted_geometry,
-    TailorCoefficientsBf16 *leaf_coefficients, uint32_t leaf_count,
+    float *__restrict__ leaf_zero_order,  const uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, uint32_t *atomic_counters,
-    uint32_t geometry_count, const cudaStream_t &stream);
+    const uint32_t geometry_count, const cudaStream_t &stream);
 
 template void populate_binary_tree_aabb_and_leaf_coefficients<Triangle>(
     const float *__restrict__ sorted_geometry,
-    TailorCoefficientsBf16 *leaf_coefficients, uint32_t leaf_count,
+    float *__restrict__ leaf_zero_order,  const uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, uint32_t *atomic_counters,
-    uint32_t geometry_count, const cudaStream_t &stream);
+    const uint32_t geometry_count, const cudaStream_t &stream);

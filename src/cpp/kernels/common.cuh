@@ -1,7 +1,9 @@
 #pragma once
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cuda_runtime_api.h>
+#include <cstdio>
 
 #define CUDA_CHECK(expr_to_check)                                              \
   do {                                                                         \
@@ -56,3 +58,16 @@ __host__ __device__ inline uint64_t morton3D_63bit(uint32_t x, uint32_t y, uint3
   answer |= splitBy3(x) | splitBy3(y) << 1 | splitBy3(z) << 2;
   return answer;
 }
+
+template <typename T>
+struct SoAViewConst {
+  const float *base_ptr;
+  size_t stride;
+};
+
+template <typename T>
+struct SoAView {
+  float *base_ptr;
+  size_t stride;
+};
+

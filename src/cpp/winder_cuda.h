@@ -3,7 +3,6 @@
 #include "binary_node.h"
 #include "bvh8.h"
 #include "geometry.h"
-#include "tailor_coefficients.h"
 #include "vec3.h"
 #include <cstddef>
 #include <cstdint>
@@ -119,8 +118,7 @@ public: // TODO DEBUG  make private!
   // --- BVH8 Tree Structure (Final Output) ---
   BVH8Node *m_bvh8_nodes; // [~0.2L] The 8-way wide-tree nodes (Quantized AABBs
                           // + Topology)
-  TailorCoefficientsBf16 *m_leaf_coefficients; // [L] Taylor expansion terms for
-                                               // leaf clusters (Bfloat16)
+  float *m_leaf_zero_order; // [L] Zero order Taylor terms for leafs  Vec3 data
 
   // --- BVH8 Construction & M2M Support ---
   LeafPointers *m_bvh8_leaf_pointers; // [0.2L] Map: BVH8Node slot -> Leaf index

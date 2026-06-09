@@ -1,7 +1,6 @@
 #pragma once
 #include "bvh8.h"
 #include "geometry.h"
-#include "tailor_coefficients.h"
 #include "vec3.h"
 #include <cstdint>
 #include <driver_types.h>
@@ -11,12 +10,14 @@ template <IsGeometry Geometry> struct ComputeWindingNumbersParams {
   const uint32_t *sort_indirections;
   const BVH8Node *bvh8_nodes;
   const LeafPointers *bvh8_leaf_pointers;
-  const TailorCoefficientsBf16 *leaf_coefficients;
-  const SoAView<Geometry> sorted_geometry;
+  const AABB *leaf_aabbs;
+  const float *leaf_zero_order;
+  const float *sorted_geometry;
   uint32_t query_count;
   uint32_t geometry_count;
   float *winding_numbers;
   uint32_t *global_device_counter;
+  uint32_t leaf_count;
   float beta;
   float epsilon;
 };
