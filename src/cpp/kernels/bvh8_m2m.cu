@@ -50,7 +50,6 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
       Vec3 child_zero_order;
       if (node.child_meta[i] == ChildType::LEAF) {
         uint32_t leaf_idx = leaf_pointers[current_node_idx].indices[i];
-        const AABB &leaf_aabb = leaf_aabbs[leaf_idx];
         child_zero_order = Vec3::load(leaf_zero_order, leaf_idx, leaf_count);
       } else {
         uint32_t child_idx = node.child_base + internal_child_count;

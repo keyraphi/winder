@@ -38,9 +38,15 @@ load_shared_cooperative(T *shared_dst, const T *global_src, uint32_t lane_id) {
   auto *dst_u32 = reinterpret_cast<uint32_t *>(shared_dst);
   const auto *src_u32 = reinterpret_cast<const uint32_t *>(global_src);
 
-  // If structure is exactly 128 bytes (BVH8Node)
+  // If structure is exactly 128 bytes (previously BVH8Node)
   if (words == 32) {
     dst_u32[lane_id] = src_u32[lane_id];
+  }
+  // If structure is 64 byte (BVH8Node)
+  else if (words == 16) {
+    if (lane_id < 16) {
+      dst_u32[lane_id] = src_u32[lane_id];
+    }
   }
   // If structure is 32 bytes (LeafPointers)
   else if (words == 8) {
@@ -82,36 +88,35 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
   const uint32_t warp_id = threadIdx.x / 32;
   const uint32_t lane_id = threadIdx.x % 32;
 
-  // We split the queries into tiles of 128.
-  // Each block of 128 threads works on one tile at a time.
-  // 4 warps per 128 threads
+  // We split the queries into tiles of 32.
+  // Each warp of 32 threads works on one tile at a time.
+  // 4 warps per 128 threads in a block
   // Each warp has its own shared traversal stack.
   __shared__ uint32_t shared_stack[4][64];
   __shared__ BVH8Node current_node_cache[4];
   __shared__ LeafPointers shared_leaf_ptrs[4];
-  __shared__ uint32_t tile_base;
+  uint32_t warp_tile_base;
 
   while (true) {
     // Claim a tile
     // Dynamic work balancing. Not all blocks will need the same amount of time
     // for their queries
-    if (threadIdx.x == 0) {
-      tile_base = atomicAdd(global_device_counter, blockDim.x);
+    if (lane_id == 0) {
+      warp_tile_base = atomicAdd(global_device_counter, 32);
     }
-    __syncthreads();
+    warp_tile_base = __shfl_sync(0xFFFFFFFF, warp_tile_base, 0);
+    if(warp_tile_base >= query_count) {
+      // No mor queries to process. Warp can exit.
+      break;
+    }
 
     // keep track of what subtrees have been approximated for this query
     int my_required_stack_depth = std::numeric_limits<int>::max();
 
-    uint32_t my_query_idx = tile_base + threadIdx.x;
+    uint32_t my_query_idx = warp_tile_base + lane_id;
     Vec3 my_query{0.F, 0.F, 0.F};
     uint32_t original_query_idx = 0xFFFFFFFF;
     if (my_query_idx >= query_count) {
-      uint32_t query_count_warpstep = 32 * ((query_count + 32 - 1) / 32);
-      if (my_query_idx >= query_count_warpstep) {
-        // The entire warp is out of bounds and can safely return.
-        return;
-      }
       // This thread has no query, but still needs to help the others in the
       // warp with their computations
       my_required_stack_depth = -1;
@@ -200,7 +205,6 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
 
       // Go through all childs together
       uint32_t added_inner_node_counter = 0;
-#pragma unroll
       for (uint32_t child_idx = 0; child_idx < 8; ++child_idx) {
         ChildType child_type = current_node.child_meta[child_idx];
         if (child_type == ChildType::EMPTY) {
@@ -210,7 +214,7 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
           uint32_t leaf_idx = shared_leaf_ptrs[warp_id].indices[child_idx];
           AABB child_aabb = leaf_aabbs[leaf_idx];
           bool is_detail_eval_needed = true;
-          if (should_node_be_approximated(my_query, child_aabb, beta_2)) {
+          if (is_still_active && should_node_be_approximated(my_query, child_aabb, beta_2)) {
             const Vec3 zero_order_coeff =
                 Vec3::load(leaf_zero_order, leaf_idx, leaf_zero_order.stride);
             const Vec3 center_of_mass = child_aabb.center_of_mass;
