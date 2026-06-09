@@ -26,3 +26,9 @@ Thumbs.db
 
 results/
 .cache/
+
+*.mp4
+*.csv
+
+examples/meshes/
+profile/
