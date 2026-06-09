@@ -518,7 +518,7 @@ def main():
     parser.add_argument(
         "--frames_per_sequence",
         type=positive_type,
-        default=100,
+        default=200,
         help="Frames per shift sweep.",
     )
     parser.add_argument(
