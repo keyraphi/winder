@@ -269,7 +269,7 @@ def create_vis_points(
             winding_numbers = []
 
             # Execute evaluations sequentially over frames using the compiled custom module
-            for q in query_list_torch:
+            for q in tqdm(query_list_torch):
                 w = gm.interp_forward(
                     points_torch,
                     q,
@@ -325,7 +325,7 @@ def create_vis_points(
 
             print("Computing winding numbers with WINDER...")
             start_time = time()
-            winding_numbers = [engine.compute(q) for q in query_list_torch]
+            winding_numbers = [engine.compute(q) for q in tqdm(query_list_torch)]
             end_time = time()
             duration = end_time - start_time
             duration_per_frame = duration / len(query_list)
@@ -407,7 +407,7 @@ def create_vis_points(
             start_time = time()
             winding_numbers = []
 
-            for q in tqdm(query_list_torch, desc="torch"):
+            for q in tqdm(query_list_torch):
                 wn = torch_winding_numbers(points_torch, normals_torch, q)
                 winding_numbers.append(wn.clone())
 

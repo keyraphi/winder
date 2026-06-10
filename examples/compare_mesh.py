@@ -164,7 +164,7 @@ def create_vis_mesh(
             print("Computing winding numbers with IGL...")
             start_time = time()
             winding_numbers = [
-                igl.fast_winding_number(vertices, indices, q) for q in query_list
+                igl.fast_winding_number(vertices, indices, q) for q in tqdm(query_list)
             ]
             end_time = time()
             duration = end_time - start_time
@@ -192,7 +192,7 @@ def create_vis_mesh(
 
             print("Computing winding numbers with WINDER...")
             start_time = time()
-            winding_numbers = [engine.compute(q) for q in query_list_torch]
+            winding_numbers = [engine.compute(q) for q in tqdm(query_list_torch)]
             end_time = time()
             duration = end_time - start_time
             duration_per_frame = duration / len(query_list)
@@ -271,7 +271,7 @@ def create_vis_mesh(
             start_time = time()
             winding_numbers = []
 
-            for q in tqdm(query_list_torch, desc="torch"):
+            for q in tqdm(query_list_torch):
                 wn = torch_winding_numbers(triangles, q)
                 winding_numbers.append(wn.clone())
 
