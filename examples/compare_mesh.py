@@ -493,7 +493,7 @@ def main():
         query_frames_np.append(base_xz @ R.T)
 
     directory = os.path.dirname(args.video_prefix)
-    csv_filename = f"{directory}_benchmark_metrics.csv"
+    csv_filename = f"{directory}/benchmark_metrics.csv"
     file_exists = os.path.isfile(csv_filename)
 
     # Compute selected evaluations sequentially

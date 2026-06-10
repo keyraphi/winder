@@ -18,10 +18,9 @@
 
 __global__ void compute_internal_tailor_coefficients_m2m_kernel(
     BVH8Node *nodes, const uint32_t *internal_parent_map,
-    const AABB *leaf_aabbs, SoAViewConst<Vec3> leaf_zero_order,
-    const uint32_t *leaf_parents, const LeafPointers *leaf_pointers,
-    const uint32_t *node_child_count, const uint32_t leaf_count,
-    uint32_t *atomic_counters) {
+    SoAViewConst<Vec3> leaf_zero_order, const uint32_t *leaf_parents,
+    const LeafPointers *leaf_pointers, const uint32_t *node_child_count,
+    const uint32_t leaf_count, uint32_t *atomic_counters) {
 
   uint32_t leaf_idx = threadIdx.x + blockIdx.x * blockDim.x;
   if (leaf_idx >= leaf_count) {
@@ -75,15 +74,15 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
 
 void compute_internal_tailor_coefficients_m2m(
     BVH8Node *nodes, const uint32_t *internal_parent_map,
-    const AABB *leaf_aabbs, const float *leaf_zero_order,
-    const uint32_t *leaf_parents, const LeafPointers *leaf_pointers,
-    const uint32_t *node_child_count, const uint32_t leaf_count,
-    uint32_t *atomic_counters, const cudaStream_t &stream) {
+    const float *leaf_zero_order, const uint32_t *leaf_parents,
+    const LeafPointers *leaf_pointers, const uint32_t *node_child_count,
+    const uint32_t leaf_count, uint32_t *atomic_counters,
+    const cudaStream_t &stream) {
   uint32_t threads = 256;
   uint32_t blocks = (leaf_count + threads - 1) / threads;
   compute_internal_tailor_coefficients_m2m_kernel<<<blocks, threads, 0,
                                                     stream>>>(
-      nodes, internal_parent_map, leaf_aabbs,
+      nodes, internal_parent_map,
       SoAViewConst<Vec3>{const_cast<float *>(leaf_zero_order), leaf_count},
       leaf_parents, leaf_pointers, node_child_count, leaf_count,
       atomic_counters);

@@ -263,9 +263,8 @@ void WinderBackend<Triangle>::initialize_triangle_data(const float *triangles) {
                              (leaf_count - 1) * sizeof(uint32_t), m_stream_0));
   thrust::fill_n(m_stream_0_policy, atomic_counters, leaf_count - 1, 0);
   populate_binary_tree_aabb_and_leaf_coefficients<Triangle>(
-      m_sorted_geometry, m_leaf_zero_order,
-      leaf_count, binary_nodes, m_binary_aabbs, binary_parents, atomic_counters,
-      m_count, m_stream_0);
+      m_sorted_geometry, m_leaf_zero_order, leaf_count, binary_nodes,
+      m_binary_aabbs, binary_parents, atomic_counters, m_count, m_stream_0);
   CUDA_CHECK(cudaFreeAsync(binary_parents, m_stream_0));
 
   // Convert binary LBVH tree into BVH8 tree
@@ -300,13 +299,18 @@ void WinderBackend<Triangle>::initialize_triangle_data(const float *triangles) {
   CUDA_CHECK(cudaFreeAsync(global_counter, m_stream_0));
   CUDA_CHECK(cudaFreeAsync(binary_nodes, m_stream_0));
 
+  // Compute the max distances of geometry from the center of mass for the nodes
+  compute_max_distances<Triangle>(m_bvh8_nodes, m_sorted_geometry,
+                                  bvh8_leaf_parents, bvh8_internal_parent_map,
+                                  static_cast<uint32_t>(m_count),
+                                  m_bvh8_node_count, m_stream_0);
   // populate BVH8 nodes with tailor coefficients using m2m
   // initialize the atomic counters to 0
   thrust::fill_n(m_stream_0_policy, atomic_counters, leaf_count - 1, 0);
   compute_internal_tailor_coefficients_m2m(
-      m_bvh8_nodes, bvh8_internal_parent_map, m_binary_aabbs + leaf_count - 1,
-      m_leaf_zero_order, bvh8_leaf_parents, m_bvh8_leaf_pointers, bvh8_node_child_count, leaf_count,
-      atomic_counters, m_stream_0);
+      m_bvh8_nodes, bvh8_internal_parent_map, m_leaf_zero_order,
+      bvh8_leaf_parents, m_bvh8_leaf_pointers, bvh8_node_child_count,
+      leaf_count, atomic_counters, m_stream_0);
 
   CUDA_CHECK(cudaFreeAsync(bvh8_node_child_count, m_stream_0));
   CUDA_CHECK(cudaFreeAsync(atomic_counters, m_stream_0));
@@ -408,13 +412,18 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
   CUDA_CHECK(cudaFreeAsync(global_counter, m_stream_0));
   CUDA_CHECK(cudaFreeAsync(binary_nodes, m_stream_0));
 
+  // Compute the max distances of geometry from the center of mass for the nodes
+  compute_max_distances<PointNormal>(m_bvh8_nodes, m_sorted_geometry,
+                                  bvh8_leaf_parents, bvh8_internal_parent_map,
+                                  static_cast<uint32_t>(m_count),
+                                  m_bvh8_node_count, m_stream_0);
   // populate BVH8 nodes with tailor coefficients using m2m
   // reset atomic counters to 0
   thrust::fill_n(m_stream_0_policy, atomic_counters, leaf_count - 1, 0);
   compute_internal_tailor_coefficients_m2m(
-      m_bvh8_nodes, bvh8_internal_parent_map, m_binary_aabbs + leaf_count - 1,
-      m_leaf_zero_order, bvh8_leaf_parents, m_bvh8_leaf_pointers,
-      bvh8_node_child_count, leaf_count, atomic_counters, m_stream_0);
+      m_bvh8_nodes, bvh8_internal_parent_map, m_leaf_zero_order,
+      bvh8_leaf_parents, m_bvh8_leaf_pointers, bvh8_node_child_count,
+      leaf_count, atomic_counters, m_stream_0);
 
   CUDA_CHECK(cudaFreeAsync(bvh8_node_child_count, m_stream_0));
   CUDA_CHECK(cudaFreeAsync(atomic_counters, m_stream_0));
@@ -538,7 +547,8 @@ auto WinderBackend<Geometry>::compute(const float *queries, size_t query_count,
       queries_to_internal,
       m_bvh8_nodes,
       m_bvh8_leaf_pointers,
-      m_binary_aabbs + leaf_count - 1, // the first leaf node is at m_binary_aabbs[leaf_count-1]
+      m_binary_aabbs + leaf_count -
+          1, // the first leaf node is at m_binary_aabbs[leaf_count-1]
       m_leaf_zero_order,
       m_sorted_geometry,
       (uint32_t)query_count,
@@ -723,10 +733,8 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
     result += "Leaf {\n";
 
     AABB leaf_aabb = leaf_aabbs[0];
-    Vec3 leaf_com =
-        leaf_aabb.center_of_mass;
-    float leaf_max_distance =
-        leaf_aabb.max_distance_to_center;
+    Vec3 leaf_com = leaf_aabb.center_of_mass;
+    float leaf_max_distance = leaf_aabb.max_distance_to_center;
 
     result +=
         std::format("  AABB {{min: ({}, {}, {}), max: ({}, {}, {}), com: ({}, "
@@ -762,10 +770,9 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
   CUDA_CHECK(cudaMemcpy(leaf_pointers.data(), m_bvh8_leaf_pointers,
                         node_count * sizeof(LeafPointers),
                         cudaMemcpyDeviceToHost));
-  std::vector<float> leaf_zero_order(leaf_count*3);
+  std::vector<float> leaf_zero_order(leaf_count * 3);
   CUDA_CHECK(cudaMemcpy(leaf_zero_order.data(), m_leaf_zero_order,
-                        leaf_count * sizeof(Vec3),
-                        cudaMemcpyDeviceToHost));
+                        leaf_count * sizeof(Vec3), cudaMemcpyDeviceToHost));
   std::string result;
 
   struct StackEntry {
@@ -795,8 +802,7 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
     const BVH8Node &current_node = bvh8_nodes[entry.node_id];
     AABB aabb = current_node.parent_aabb;
     Vec3 node_com = aabb.center_of_mass;
-    float max_dist =
-        aabb.max_distance_to_center;
+    float max_dist = aabb.max_distance_to_center;
 
     result +=
         indent +
@@ -816,7 +822,7 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
     // Count internal children first to handle child_offset correctly
     int internal_count = 0;
     for (int i = 0; i < 8; ++i) {
-      if (current_node.child_meta[ i ] == ChildType::INTERNAL)
+      if (current_node.child_meta[i] == ChildType::INTERNAL)
         internal_count++;
     }
     LeafPointers current_leaf_pointers = leaf_pointers[entry.node_id];
@@ -824,7 +830,7 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
     // We iterate backwards through children to maintain correct stack order
     int current_internal_offset = internal_count - 1;
     for (int child_id = 7; child_id >= 0; --child_id) {
-      ChildType type = current_node.child_meta[ child_id ];
+      ChildType type = current_node.child_meta[child_id];
 
       if (type == ChildType::INTERNAL) {
         uint32_t next_idx = child_base + current_internal_offset;
@@ -833,8 +839,7 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
       } else if (type == ChildType::LEAF) {
         uint32_t l_id = current_leaf_pointers.indices[child_id];
         AABB leaf_aabb = leaf_aabbs[l_id];
-        Vec3 leaf_com =
-            leaf_aabb.center_of_mass;
+        Vec3 leaf_com = leaf_aabb.center_of_mass;
         float leaf_max_distance = leaf_aabb.max_distance_to_center;
         result += indent + "    " +
                   std::format(

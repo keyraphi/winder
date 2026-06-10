@@ -65,23 +65,9 @@ struct AABB {
 
     result.center_of_mass = com_new;
 
-    // Calculate shift-adjusted radius
-    // this is an upper bound
-    float dist_a = (com_new - com_a).length() +
-                   a.max_distance_to_center;
-    float dist_b = (com_new - com_b).length() +
-                   b.max_distance_to_center;
-    float new_dist = fmaxf(dist_a, dist_b);
-
-    // Compute the maximum posible distance from the com in the aabb
-    float dx = fmaxf(com_new.x - result.min.x, result.max.x - com_new.x);
-    float dy = fmaxf(com_new.y - result.min.y, result.max.y - com_new.y);
-    float dz = fmaxf(com_new.z - result.min.z, result.max.z - com_new.z);
-    float max_possible_dist = sqrtf(dx * dx + dy * dy + dz * dz);
-
-    new_dist = fminf(new_dist, max_possible_dist);
-
-    result.max_distance_to_center = new_dist;
+    // Max distance can not correctly be merged
+    // must be set later manually
+    result.max_distance_to_center = 0.F;
     return result;
   }
 };
