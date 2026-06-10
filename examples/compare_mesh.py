@@ -276,6 +276,7 @@ def create_vis_mesh(
             torch.cuda.synchronize()
             end_time = time()
             duration = end_time - start_time
+            duration_per_frame = duration / len(query_list)
             metrics["compute_time_sec"] = duration
             print(f"Done. Winding Number calculation took {duration:.4f} sec.")
 
@@ -405,7 +406,7 @@ def main():
     parser.add_argument(
         "--frames_per_sequence",
         type=positive_type,
-        default=50,
+        default=200,
         help="Frames per shift sweep.",
     )
     parser.add_argument(
@@ -491,7 +492,8 @@ def main():
         )
         query_frames_np.append(base_xz @ R.T)
 
-    csv_filename = "benchmark_metrics.csv"
+    directory = os.path.dirname(args.video_prefix)
+    csv_filename = f"{directory}/benchmark_metrics.csv"
     file_exists = os.path.isfile(csv_filename)
 
     # Compute selected evaluations sequentially
@@ -515,6 +517,7 @@ def main():
         run_metrics["vertices"] = vertices_np.shape[0]
         run_metrics["triangles"] = indices_np.shape[0]
         run_metrics["resolution"] = args.resolution
+        run_metrics["frames"] = len(query_frames_np)
 
         # Append immediately to CSV so data is safe if a later mode crashes
         with open(csv_filename, mode="a", newline="") as csvfile:
@@ -524,6 +527,7 @@ def main():
                 "vertices",
                 "triangles",
                 "resolution",
+                "frames",
                 "mode",
                 "upload_time_sec",
                 "build_time_sec",

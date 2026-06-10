@@ -60,186 +60,50 @@ load_shared_cooperative(T *shared_dst, const T *global_src, uint32_t lane_id) {
 }
 
 template <IsGeometry Geometry>
-__global__ void __launch_bounds__(128)
-    compute_winding_numbers_kernel_individual(
-        const Vec3 *__restrict__ queries,
-        const uint32_t *__restrict__ sort_indirections,
-        const BVH8Node *__restrict__ bvh8_nodes,
-        const LeafPointers *__restrict__ bvh8_leaf_pointers,
-        const TailorCoefficientsBf16 *__restrict__ leaf_coefficients,
-        const SoAView<Geometry> sorted_geometry, const uint32_t query_count,
-        const uint32_t geometry_count, float *__restrict__ winding_numbers,
-        uint32_t *__restrict__ global_device_counter, const float beta_2,
-        const float inv_epsilon) {
-  __shared__ uint32_t tile_base;
-
-  while (true) {
-    if (threadIdx.x == 0) {
-      tile_base = atomicAdd(global_device_counter, blockDim.x);
-    }
-    __syncthreads();
-
-    uint32_t my_query_idx = tile_base + threadIdx.x;
-    if (my_query_idx >= query_count) {
-      break; // Entire tile or trailing threads out of bounds -> exit
-    }
-
-    // Load query data
-    uint32_t original_query_idx = sort_indirections[my_query_idx];
-    Vec3 my_query = queries[original_query_idx];
-    float my_winding_number = 0.F;
-
-    // Private thread-local stack for Deep First Search (DFS)
-    // Max depth of 64 is highly secure for a BVH8 wide tree
-    uint32_t local_stack[64];
-    int stack_ptr = 0;
-
-    // Push root node index to kick off traversal
-    local_stack[stack_ptr++] = 0;
-
-    // Independent Traversal Loop
-    while (stack_ptr > 0) {
-      uint32_t current_node_idx = local_stack[--stack_ptr];
-
-      // Direct read from global memory. Because adjacent queries are spatially
-      // close, the hardware L1 cache will broadcast this data across the warp
-      // instantly.
-      const BVH8Node current_node = bvh8_nodes[current_node_idx];
-
-      // 1. Algorithmic Early Exit Check (Inner Node Approximation)
-      if (should_inner_node_be_approximated(my_query, current_node.parent_aabb,
-                                            beta_2)) {
-        Vec3_bf16 zero_order_coeff =
-            current_node.tailor_coefficients.get_tailor_zero_order();
-        // Mat3x3_bf16 first_order_coeff =
-        //     current_node.tailor_coefficients.get_tailor_first_order();
-        // Tensor3_bf16_compressed second_order_coeff =
-        //     current_node.tailor_coefficients.get_tailor_second_order();
-
-        // float approx_contribution = compute_node_approximation(
-        //     my_query,
-        //     current_node.parent_aabb.center_of_mass.get(
-        //         current_node.parent_aabb.min,
-        //         current_node.parent_aabb.diagonal()),
-        //     zero_order_coeff, first_order_coeff, second_order_coeff);
-        float approx_contribution = compute_node_approximation(
-            my_query,
-            current_node.parent_aabb.center_of_mass.get(
-                current_node.parent_aabb.min,
-                current_node.parent_aabb.diagonal()),
-            zero_order_coeff, Mat3x3_bf16{}, Tensor3_bf16_compressed{});
-
-        my_winding_number += approx_contribution;
-        continue; // Early exit successful for this entire branch!
-      }
-
-      // 2. Open Node Children if approximation isn't valid
-      uint32_t added_inner_node_counter = 0;
-
-      for (uint32_t child_idx = 0; child_idx < 8; ++child_idx) {
-        ChildType child_type = current_node.getChildMeta(child_idx);
-        if (child_type == ChildType::EMPTY) {
-          continue;
-        }
-
-        if (child_type == ChildType::LEAF) {
-          uint32_t leaf_idx =
-              bvh8_leaf_pointers[current_node_idx].indices[child_idx];
-          AABB child_aabb = AABB::from_approximation(
-              current_node.parent_aabb,
-              current_node.child_aabb_approx[child_idx]);
-
-          // Check Leaf Level Approximation
-          if (should_leaf_node_be_approximated(my_query, child_aabb, beta_2)) {
-            const TailorCoefficientsBf16 &current_leaf_coefficients =
-                leaf_coefficients[leaf_idx];
-            const Vec3 leaf_center_of_mass =
-                current_leaf_coefficients.center_of_mass.get(
-                    child_aabb.min, child_aabb.diagonal());
-
-            float approx_contribution = compute_node_approximation(
-                my_query, leaf_center_of_mass,
-                current_leaf_coefficients.zero_order,
-                current_leaf_coefficients.first_order,
-                current_leaf_coefficients.second_order);
-
-            my_winding_number += approx_contribution;
-          } else {
-            // Detailed Evaluation: This thread independently loops over all
-            // 32 primitives tucked inside the leaf cluster.
-            for (uint32_t i = 0; i < 32; ++i) {
-              uint32_t my_geometry_idx = leaf_idx * 32 + i;
-              if (my_geometry_idx < geometry_count) {
-                Geometry my_geometry = Geometry::load(
-                    sorted_geometry, my_geometry_idx, geometry_count);
-                my_winding_number +=
-                    my_geometry.contributionToQuery(my_query, inv_epsilon);
-              }
-            }
-          }
-        } else {
-          // Child is an Inner Node -> Push to the thread's local stack
-          uint32_t child_node_idx =
-              current_node.child_base + added_inner_node_counter;
-          added_inner_node_counter++;
-
-          if (stack_ptr < 64) {
-            local_stack[stack_ptr++] = child_node_idx;
-          }
-        }
-      } // End child branch iteration
-    } // End stack traversal for this query
-
-    // Store the fully compiled winding number back out
-    winding_numbers[original_query_idx] = my_winding_number;
-  }
-}
-
-template <IsGeometry Geometry>
-__global__ void __launch_bounds__(128) compute_winding_numbers_kernel (
-        const Vec3 *__restrict__ queries,
-        const uint32_t *__restrict__ sort_indirections,
-        const BVH8Node *__restrict__ bvh8_nodes,
-        const LeafPointers *__restrict__ bvh8_leaf_pointers,
-        const TailorCoefficientsBf16 *__restrict__ leaf_coefficients,
-        const SoAView<Geometry> sorted_geometry, const uint32_t query_count,
-        const uint32_t geometry_count, float *__restrict__ winding_numbers,
-        uint32_t *__restrict__ global_device_counter, const float beta_2,
-        const float inv_epsilon) {
+__global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
+    const Vec3 *__restrict__ queries,
+    const uint32_t *__restrict__ sort_indirections,
+    const BVH8Node *__restrict__ bvh8_nodes,
+    const LeafPointers *__restrict__ bvh8_leaf_pointers,
+    const TailorCoefficientsBf16 *__restrict__ leaf_coefficients,
+    const SoAView<Geometry> sorted_geometry, const uint32_t query_count,
+    const uint32_t geometry_count, float *__restrict__ winding_numbers,
+    uint32_t *__restrict__ global_device_counter, const float beta_2,
+    const float inv_epsilon) {
 
   const uint32_t warp_id = threadIdx.x / 32;
   const uint32_t lane_id = threadIdx.x % 32;
 
-  // We split the queries into tiles of 128.
-  // Each block of 128 threads works on one tile at a time.
-  // 4 warps per 128 threads
+  // We split the queries into tiles of 32 threads.
+  // Each warp of 32 threads works on one tile at a time.
+  // 4 warps per block
   // Each warp has its own shared traversal stack.
   __shared__ uint32_t shared_stack[4][64];
   __shared__ BVH8Node current_node_cache[4];
   __shared__ LeafPointers shared_leaf_ptrs[4];
-  __shared__ uint32_t tile_base;
+  uint32_t warp_tile_base;
 
   while (true) {
     // Claim a tile
     // Dynamic work balancing. Not all blocks will need the same amount of time
     // for their queries
-    if (threadIdx.x == 0) {
-      tile_base = atomicAdd(global_device_counter, blockDim.x);
+    if (lane_id == 0) {
+      warp_tile_base = atomicAdd(global_device_counter, 32);
     }
-    __syncthreads();
+    warp_tile_base = __shfl_sync(0xFFFFFFFF, warp_tile_base, 0);
+
+    if(warp_tile_base >= query_count) {
+      // No more work for this warp
+      break;
+    }
 
     // keep track of what subtrees have been approximated for this query
     int my_required_stack_depth = std::numeric_limits<int>::max();
 
-    uint32_t my_query_idx = tile_base + threadIdx.x;
+    uint32_t my_query_idx = warp_tile_base + lane_id;
     Vec3 my_query{0.F, 0.F, 0.F};
     uint32_t original_query_idx = 0xFFFFFFFF;
     if (my_query_idx >= query_count) {
-      uint32_t query_count_warpstep = 32 * ((query_count + 32 - 1) / 32);
-      if (my_query_idx >= query_count_warpstep) {
-        // The entire warp is out of bounds and can safely return.
-        return;
-      }
       // This thread has no query, but still needs to help the others in the
       // warp with their computations
       my_required_stack_depth = -1;
@@ -336,7 +200,6 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel (
 
       // Go through all childs together
       uint32_t added_inner_node_counter = 0;
-#pragma unroll
       for (uint32_t child_idx = 0; child_idx < 8; ++child_idx) {
         ChildType child_type = current_node.getChildMeta(child_idx);
         if (child_type == ChildType::EMPTY) {
@@ -348,20 +211,8 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel (
               current_node.parent_aabb,
               current_node.child_aabb_approx[child_idx]);
           bool is_detail_eval_needed = true;
-          if (
-              // is_still_active && false) { // TODO DEBUG
+          if (is_still_active &&
               should_leaf_node_be_approximated(my_query, child_aabb, beta_2)) {
-            // NOTE: this approximation is actually used, and does not create
-            // any visible differences
-
-            // load leaf tailor
-            // coefficient from global memory 60 bytes
-            // TODO measure (time) if it is worth approximating this.
-            // Test on 4090 avg of 1000 runs:
-            // PointNormal:
-            // 0.06088708114624024 sec without approximation with 100000
-            // geometry and 512^3 queries 0.06075870871543884 sec with
-            // approximation with 100000 geometry and 512^3 queries
             const TailorCoefficientsBf16 &current_leaf_coefficients =
                 leaf_coefficients[leaf_idx];
             const Vec3 leaf_center_of_mass =

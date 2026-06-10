@@ -22,6 +22,8 @@ struct BVH8Node {
 
   // Quantized Tailor coefficients: 44 bytes
   TailorCoefficientsQuantized tailor_coefficients;
+  uint8_t _padding;
+
 
 
   // Helpers for ChildType
