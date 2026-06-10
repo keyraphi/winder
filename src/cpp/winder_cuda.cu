@@ -298,6 +298,19 @@ void WinderBackend<Triangle>::initialize_triangle_data(const float *triangles) {
   CUDA_CHECK(cudaFreeAsync(global_counter, m_stream_0));
   CUDA_CHECK(cudaFreeAsync(binary_nodes, m_stream_0));
 
+  // Compute the max distances of geometry from the center of mass for the nodes
+  uint32_t bvh8_node_count;
+  CUDA_CHECK(cudaMemcpyAsync(&bvh8_node_count, m_bvh8_node_count, sizeof(uint32_t), cudaMemcpyDeviceToHost, m_stream_0));
+  float* tmp_max_distances;
+  CUDA_CHECK(cudaMallocAsync(&tmp_max_distances, bvh8_node_count * sizeof(float), m_stream_0));
+  thrust::fill_n(m_stream_0_policy, tmp_max_distances, bvh8_node_count, 0.F);
+  compute_max_distances<Triangle>(m_bvh8_nodes, m_sorted_geometry,
+                                  bvh8_leaf_parents, bvh8_internal_parent_map,
+                                  tmp_max_distances,
+                                  static_cast<uint32_t>(m_count),
+                                  bvh8_node_count, m_stream_0);
+  CUDA_CHECK(cudaFreeAsync(tmp_max_distances, m_stream_0));
+
   // populate BVH8 nodes with tailor coefficients using m2m
   // initialize the atomic counters to 0
   thrust::fill_n(m_stream_0_policy, atomic_counters, leaf_count - 1, 0);
@@ -407,6 +420,19 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
   CUDA_CHECK(cudaFreeAsync(global_counter, m_stream_0));
   CUDA_CHECK(cudaFreeAsync(binary_nodes, m_stream_0));
 
+  // Compute the max distances of geometry from the center of mass for the nodes
+  uint32_t bvh8_node_count;
+  CUDA_CHECK(cudaMemcpyAsync(&bvh8_node_count, m_bvh8_node_count, sizeof(uint32_t), cudaMemcpyDeviceToHost, m_stream_0));
+  float* tmp_max_distances;
+  CUDA_CHECK(cudaMallocAsync(&tmp_max_distances, bvh8_node_count * sizeof(float), m_stream_0));
+  thrust::fill_n(m_stream_0_policy, tmp_max_distances, bvh8_node_count, 0.F);
+  compute_max_distances<PointNormal>(m_bvh8_nodes, m_sorted_geometry,
+                                  bvh8_leaf_parents, bvh8_internal_parent_map,
+                                  tmp_max_distances,
+                                  static_cast<uint32_t>(m_count),
+                                  bvh8_node_count, m_stream_0);
+  CUDA_CHECK(cudaFreeAsync(tmp_max_distances, m_stream_0));
+  
   // populate BVH8 nodes with tailor coefficients using m2m
   // reset atomic counters to 0
   thrust::fill_n(m_stream_0_policy, atomic_counters, leaf_count - 1, 0);

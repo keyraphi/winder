@@ -3,6 +3,7 @@
 #include "binary_node.h"
 #include "bvh8.h"
 #include "common.cuh"
+#include "geometry.h"
 #include "vec3.h"
 #include <cmath>
 #include <cooperative_groups.h>
@@ -258,3 +259,139 @@ void convert_binary_tree_to_bvh8(ConvertBinary2BVH8Params params,
                               blocks, threads, args, 0, stream);
   CUDA_CHECK(cudaGetLastError());
 }
+
+template <IsGeometry Geometry>
+__global__ void __launch_bounds__(128) compute_exact_max_distances_kernel(
+    BVH8Node *nodes, SoAView<Geometry> geometry_view,
+    const uint32_t *__restrict__ leaf_parents,
+    const uint32_t *__restrict__ internal_parent_map,
+    float *__restrict__ tmp_max_distances, const uint32_t geometry_count,
+    const uint32_t bvh8_node_count) {
+
+  // Allocate a hand full of integers for the top levels of the bvh8
+  __shared__ int shared_max_dists[128];
+
+  using WarpReduce = cub::WarpReduce<float>;
+  __shared__ typename WarpReduce::TempStorage temp_storage[4];
+
+  // Initialize shared memory slots cooperatively
+  if (threadIdx.x < 128) {
+    shared_max_dists[threadIdx.x] = 0;
+  }
+  __syncthreads();
+
+  uint32_t geo_idx = threadIdx.x + blockIdx.x * blockDim.x;
+  int lane_id = threadIdx.x % 32;
+  int warp_id = threadIdx.x / 32;
+
+  uint32_t current_node_idx = 0xFFFFFFFF;
+  Geometry my_geometry = Geometry::load(geometry_view, geo_idx, geometry_count);
+
+  if (geo_idx < geometry_count) {
+    uint32_t leaf_idx = geo_idx / 32;
+    current_node_idx = leaf_parents[leaf_idx];
+  }
+
+  // Asynchronous climbing loop (No barriers inside!)
+  while (__any_sync(0xFFFFFFFF, current_node_idx != 0xFFFFFFFF)) {
+
+    float exact_dist = 0.F;
+    if (current_node_idx != 0xFFFFFFFF) {
+      AABB aabb = nodes[current_node_idx].parent_aabb;
+      Vec3 com = aabb.center_of_mass.get(aabb.min, aabb.diagonal());
+      exact_dist = (my_geometry.centroid() - com).length();
+    }
+
+    // High-speed intra-warp reduction from cub
+    float max_dist = WarpReduce(temp_storage[warp_id]).Max(exact_dist);
+
+    // Lane 0 routes the warp's maximum to the correct memory space
+    if (lane_id == 0 && current_node_idx != 0xFFFFFFFF) {
+      int dist_as_int = __float_as_int(max_dist);
+
+      if (current_node_idx < 128) {
+        // High contention: intercept and accumulate in fast shared memory
+        atomicMax(&shared_max_dists[current_node_idx], dist_as_int);
+      } else {
+        // Low contention: fire straight to global memory
+        int *target_ptr = (int *)&tmp_max_distances[current_node_idx];
+        atomicMax(target_ptr, dist_as_int);
+      }
+    }
+
+    if (current_node_idx != 0xFFFFFFFF) {
+      current_node_idx = __ldcg(internal_parent_map + current_node_idx);
+    }
+  }
+  __syncthreads();
+
+  // Flush the aggregated block results to global memory once per block
+  if (threadIdx.x < 128 && threadIdx.x < bvh8_node_count) {
+    int block_max_int = shared_max_dists[threadIdx.x];
+    if (block_max_int > 0) {
+      // Only write if this block actually touched the node
+      int *global_target_ptr = (int *)&tmp_max_distances[threadIdx.x];
+      atomicMax(global_target_ptr, block_max_int);
+    }
+  }
+}
+
+__global__ void
+quantize_bvh8_distances_kernel(BVH8Node *nodes,
+                               const float *__restrict__ tmp_max_distances,
+                               const uint32_t bvh8_node_count) {
+
+  uint32_t node_idx = threadIdx.x + blockIdx.x * blockDim.x;
+
+  if (node_idx < bvh8_node_count) {
+    AABB &aabb = nodes[node_idx].parent_aabb;
+    aabb.center_of_mass.setMaxDistance(tmp_max_distances[node_idx],
+                                       aabb.diagonal().inv_length());
+  }
+}
+
+template <IsGeometry Geometry>
+void compute_max_distances(BVH8Node *__restrict__ nodes, const float *geometry,
+                           const uint32_t *__restrict__ leaf_parents,
+                           const uint32_t *__restrict__ internal_parent_map,
+                           float *__restrict__ tmp_max_distances,
+                           const uint32_t geometry_count,
+                           const uint32_t bvh8_node_count,
+                           const cudaStream_t &stream) {
+  if (bvh8_node_count == 0) {
+    // No nodes to process
+    return;
+  }
+  {
+    const uint32_t threads = 128;
+    const uint32_t blocks = (geometry_count + threads - 1) / threads;
+
+    compute_exact_max_distances_kernel<<<blocks, threads, 0, stream>>>(
+        nodes, SoAView<Geometry>{geometry, geometry_count}, leaf_parents,
+        internal_parent_map, tmp_max_distances, geometry_count,
+        bvh8_node_count);
+    CUDA_CHECK(cudaGetLastError());
+  }
+
+  {
+    const uint32_t threads = 256;
+    const uint32_t blocks = (bvh8_node_count + threads - 1) / threads;
+    quantize_bvh8_distances_kernel<<<blocks, threads, 0, stream>>>(
+        nodes, tmp_max_distances, bvh8_node_count);
+    CUDA_CHECK(cudaGetLastError());
+  }
+}
+
+template void compute_max_distances<PointNormal>(
+    BVH8Node *__restrict__ nodes, const float *geometry,
+    const uint32_t *__restrict__ leaf_parents,
+    const uint32_t *__restrict__ internal_parent_map,
+    float *__restrict__ tmp_max_distances, const uint32_t geometry_count,
+    const uint32_t bvh8_node_count, const cudaStream_t &stream);
+
+template void compute_max_distances<Triangle>(
+    BVH8Node *__restrict__ nodes, const float *geometry,
+    const uint32_t *__restrict__ leaf_parents,
+    const uint32_t *__restrict__ internal_parent_map,
+    float *__restrict__ tmp_max_distances, const uint32_t geometry_count,
+    const uint32_t bvh8_node_count, const cudaStream_t &stream);
