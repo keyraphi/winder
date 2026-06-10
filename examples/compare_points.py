@@ -86,9 +86,9 @@ def torch_winding_numbers(
         float32 shape [M] winding numbers at query positions.
     """
     # Reshape for broadcasting
-    q = queries.unsqueeze(1)          # [M, 1, 3]
-    p = points.unsqueeze(0)           # [1, N, 3]
-    n = scaled_normals.unsqueeze(0)   # [1, N, 3]
+    q = queries.unsqueeze(1)  # [M, 1, 3]
+    p = points.unsqueeze(0)  # [1, N, 3]
+    n = scaled_normals.unsqueeze(0)  # [1, N, 3]
 
     # Vector from queries to points
     r = p - q  # [M, N, 3]
@@ -98,7 +98,7 @@ def torch_winding_numbers(
 
     # Denominator: 4 * pi * ||r||^3
     r_norm = torch.linalg.norm(r, dim=-1)  # [M, N]
-    denom = 4.0 * torch.pi * (r_norm ** 3)  # [M, N]
+    denom = 4.0 * torch.pi * (r_norm**3)  # [M, N]
 
     # Avoid division by zero if a query lands exactly on a surfel point
     denom = torch.where(denom == 0, 1e-8, denom)
@@ -106,6 +106,7 @@ def torch_winding_numbers(
     total_winding_numbers = nom / denom  # [M, N]
 
     return total_winding_numbers.sum(dim=-1)
+
 
 def add_duration_text_to_frames(
     frames: NPT.ArrayLike, total_duration: float, duration_per_frame: float
@@ -134,7 +135,8 @@ def add_duration_text_to_frames(
 
 
 def add_geometry_text_to_frames(
-    frames: NPT.ArrayLike, point_count: int,
+    frames: NPT.ArrayLike,
+    point_count: int,
 ) -> NPT.ArrayLike:
     """Draws metrics info texts onto the frames array safely using OpenCV."""
     text_total = f"vertices: {point_count}"
@@ -165,7 +167,7 @@ def create_vis_points(
     mode: str,
     device: torch.device,
     add_duration_string: bool = True,
-) -> dict:
+) -> tuple[dict, NPT.ArrayLike]:
     duration = 0.0
     duration_per_frame = 0.0
     winding_numbers = []
@@ -195,7 +197,9 @@ def create_vis_points(
             start_build_time = time()
             # 1. Build and Initialize Octree topologies on CPU
             point_indices, child_nodes = gm.build_octree(points_torch.cpu())
-            centers, radii = gm.initialize_octree(points_torch.cpu(), areas_torch.cpu(), point_indices, child_nodes)
+            centers, radii = gm.initialize_octree(
+                points_torch.cpu(), areas_torch.cpu(), point_indices, child_nodes
+            )
 
             # Move octree properties to the execution GPU target
             child_nodes = child_nodes.to(device)
@@ -237,33 +241,52 @@ def create_vis_points(
 
             # Construct point weight configurations matching codebase hyperparameters
             beta = 2.0
-            inv_delta_w = torch.tensor(250., device=device)
+            inv_delta_w = torch.tensor(250.0, device=device)
             w_point = torch.ones((points_torch.shape[0], 1), device=device)
-            
+
             wpos_point = F.softplus(w_point, 4)
-            normalized_normals = normals_torch / (torch.norm(normals_torch, dim=-1, keepdim=True) + 1e-10)
+            normalized_normals = normals_torch / (
+                torch.norm(normals_torch, dim=-1, keepdim=True) + 1e-10
+            )
 
             # Compute tree field features
             wan_point, wan_node = gm.initialize_features_fan(
-                wpos_point, normalized_normals, areas_torch.unsqueeze(-1), 
-                self_ni_flat, self_ni_lengths, self_ni_starts, len(centers)
+                wpos_point,
+                normalized_normals,
+                areas_torch.unsqueeze(-1),
+                self_ni_flat,
+                self_ni_lengths,
+                self_ni_starts,
+                len(centers),
             )
             end_build_time = time()
-            print(f"Done. Building octree structures took {end_build_time - start_build_time:.4f} sec.")
+            print(
+                f"Done. Building octree structures took {end_build_time - start_build_time:.4f} sec."
+            )
 
             print("Computing winding numbers with FAST_DIPOLE_SUMS...")
             start_time = time()
             winding_numbers = []
-            
+
             # Execute evaluations sequentially over frames using the compiled custom module
             for q in query_list_torch:
                 w = gm.interp_forward(
-                    points_torch, q, centers, child_nodes,
-                    self_pi_flat, self_pi_lengths, self_pi_starts, radii,
-                    wan_point, wan_node, beta, inv_delta_w, 1024
+                    points_torch,
+                    q,
+                    centers,
+                    child_nodes,
+                    self_pi_flat,
+                    self_pi_lengths,
+                    self_pi_starts,
+                    radii,
+                    wan_point,
+                    wan_node,
+                    beta,
+                    inv_delta_w,
+                    1024,
                 )
                 winding_numbers.append(w.clone())
-                
+
             torch.cuda.synchronize()
             end_time = time()
             duration = end_time - start_time
@@ -294,6 +317,7 @@ def create_vis_points(
             print("Building winder engine...")
             start_build_time = time()
             engine = winder.WinderEngine(points_torch, normals_torch)
+            torch.cuda.synchronize()
             end_build_time = time()
             print(
                 f"Done. Building Engine took {end_build_time - start_build_time:.4f} sec."
@@ -334,6 +358,7 @@ def create_vis_points(
             print("Building winder engine...")
             start_build_time = time()
             engine = winder.WinderEngine(points_torch, normals_torch)
+            torch.cuda.synchronize()
             end_build_time = time()
             print(
                 f"Done. Building Engine took {end_build_time - start_build_time:.4f} sec."
@@ -341,7 +366,7 @@ def create_vis_points(
 
             print("Computing winding numbers with WINDER BRUTE FORCE...")
             start_time = time()
-            winding_numbers = [engine.brute_force(q) for q in query_list_torch]
+            winding_numbers = [engine.brute_force(q) for q in tqdm(query_list_torch)]
             end_time = time()
             duration = end_time - start_time
             duration_per_frame = duration / len(query_list)
@@ -404,12 +429,12 @@ def create_vis_points(
 
     print("Applying colormap...")
     winding_numbers = np.stack(winding_numbers)
-    winding_numbers = winding_numbers.reshape([len(query_list), resolution, resolution])
-    winding_numbers = np.clip(winding_numbers, -2, 2)
+    winding_numbers_vis = winding_numbers.reshape([len(query_list), resolution, resolution])
+    winding_numbers_vis = np.clip(winding_numbers_vis, -2, 2)
 
     norm = mcolors.TwoSlopeNorm(vmin=-2, vcenter=0, vmax=2)
     cmap = plt.get_cmap("vanimo")
-    winding_numbers_color = cmap(norm(winding_numbers))[..., :3]
+    winding_numbers_color = cmap(norm(winding_numbers_vis))[..., :3]
     winding_numbers_frames = (winding_numbers_color * 255).astype(np.uint8)
 
     if add_duration_string:
@@ -430,7 +455,7 @@ def create_vis_points(
     )
     print("Done.")
 
-    return metrics
+    return metrics, winding_numbers
 
 
 def create_open3d_diagnostic_video(
@@ -491,9 +516,7 @@ def create_open3d_diagnostic_video(
 
     if add_geometry_detail_string:
         print("Adding text overlays to frames...")
-        frames = add_geometry_text_to_frames(
-            frames, points.shape[0]
-        )
+        frames = add_geometry_text_to_frames(frames, points.shape[0])
         print("Done.")
     print(f"Writing video {video_path}")
     iio.imwrite(
@@ -526,6 +549,11 @@ def main():
         "--video_prefix", type=str, required=True, help="Filename prefix string."
     )
     parser.add_argument("--methods", nargs="+", default=["torch", "winder"])
+    parser.add_argument(
+        "--no_quantitative_comparison",
+        action="store_true",
+        help="Skip calculating quantitative error values (MSE, MAE, RMSE) against brute force.",
+    )
     args = parser.parse_args()
 
     device = torch.device(f"cuda:{args.gpu}")
@@ -546,9 +574,7 @@ def main():
 
     points, normals, areas = mesh_to_point_surfels(vertices_np, indices_np)
 
-    print(
-        f"Pointcloud contains {points.shape[0]} vertices."
-    )
+    print(f"Pointcloud contains {points.shape[0]} vertices.")
 
     # Define underlying reference tracking grids
     line = np.linspace(-1, 1, args.resolution, dtype=np.float32)
@@ -610,12 +636,20 @@ def main():
     csv_filename = f"{directory}/benchmark_metrics.csv"
     file_exists = os.path.isfile(csv_filename)
 
+    # Reorder execution list to compute brute_force first if error tracking is enabled
+    methods_to_execute = list(args.methods)
+    if not args.no_quantitative_comparison:
+        if "brute_force" in methods_to_execute:
+            methods_to_execute.remove("brute_force")
+        methods_to_execute.insert(0, "brute_force")
+
+    gt_winding_numbers = None
+
     # Compute selected evaluations sequentially
-    for method in args.methods:
+    for method in methods_to_execute:
         output_video_path = f"{args.video_prefix}_{method}.mp4"
 
-        # Create a video and catch timing metrics
-        run_metrics = create_vis_points(
+        run_metrics, raw_wn = create_vis_points(
             points,
             normals,
             areas,
@@ -626,15 +660,33 @@ def main():
             device,
         )
 
-        # Add mesh-level metadata to the metrics
         run_metrics["mesh_name"] = os.path.basename(args.obj_path)
         run_metrics["points"] = vertices_np.shape[0]
         run_metrics["resolution"] = args.resolution
         run_metrics["frames"] = len(query_frames_np)
 
+        # Handle quantitative math tracking against brute force baseline
+        if method == "brute_force":
+            gt_winding_numbers = raw_wn
+            run_metrics["mse"] = 0.0
+            run_metrics["mae"] = 0.0
+            run_metrics["rmse"] = 0.0
+        else:
+            if gt_winding_numbers is not None and not args.no_quantitative_comparison:
+                mse_val = float(np.mean((raw_wn - gt_winding_numbers) ** 2))
+                mae_val = float(np.mean(np.abs(raw_wn - gt_winding_numbers)))
+                rmse_val = float(np.sqrt(mse_val))
+
+                run_metrics["mse"] = mse_val
+                run_metrics["mae"] = mae_val
+                run_metrics["rmse"] = rmse_val
+            else:
+                run_metrics["mse"] = "N/A"
+                run_metrics["mae"] = "N/A"
+                run_metrics["rmse"] = "N/A"
+
         # Append immediately to CSV so data is safe if a later mode crashes
         with open(csv_filename, mode="a", newline="") as csvfile:
-            # Define the column order
             fieldnames = [
                 "mesh_name",
                 "points",
@@ -645,6 +697,9 @@ def main():
                 "build_time_sec",
                 "compute_time_sec",
                 "download_time_sec",
+                "mse",
+                "mae",
+                "rmse",
             ]
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
@@ -654,11 +709,9 @@ def main():
 
             writer.writerow(run_metrics)
 
-        # Force flush memory allocations before transitioning to the next benchmark
         torch.cuda.empty_cache()
         gc.collect()
 
-    # Generate additional 3D geometric diagnostic scene
     diagnostic_filename = f"{args.video_prefix}_3d_scene.mp4"
     create_open3d_diagnostic_video(
         points,

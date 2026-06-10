@@ -144,7 +144,7 @@ def create_vis_mesh(
     mode: str,
     device: torch.device,
     add_duration_string: bool = True,
-) -> dict:
+) -> tuple[dict, NPT.ArrayLike]:
     duration = 0.0
     duration_per_frame = 0.0
     winding_numbers = []
@@ -184,6 +184,7 @@ def create_vis_mesh(
             print("Building winder engine...")
             start_build_time = time()
             engine = winder.WinderEngine(vertices_torch, indices_torch)
+            torch.cuda.synchronize()
             end_build_time = time()
             print(
                 f"Done. Building Engine took {end_build_time - start_build_time:.4f} sec."
@@ -222,6 +223,7 @@ def create_vis_mesh(
             print("Building winder engine...")
             start_build_time = time()
             engine = winder.WinderEngine(vertices_torch, indices_torch)
+            torch.cuda.synchronize()
             end_build_time = time()
             print(
                 f"Done. Building Engine took {end_build_time - start_build_time:.4f} sec."
@@ -229,7 +231,7 @@ def create_vis_mesh(
 
             print("Computing winding numbers with WINDER BRUTE FORCE...")
             start_time = time()
-            winding_numbers = [engine.brute_force(q) for q in query_list_torch]
+            winding_numbers = [engine.brute_force(q) for q in tqdm(query_list_torch)]
             end_time = time()
             duration = end_time - start_time
             duration_per_frame = duration / len(query_list)
@@ -291,12 +293,12 @@ def create_vis_mesh(
 
     print("Applying colormap...")
     winding_numbers = np.stack(winding_numbers)
-    winding_numbers = winding_numbers.reshape([len(query_list), resolution, resolution])
-    winding_numbers = np.clip(winding_numbers, -2, 2)
+    winding_numbers_vis = winding_numbers.reshape([len(query_list), resolution, resolution])
+    winding_numbers_vis = np.clip(winding_numbers_vis, -2, 2)
 
     norm = mcolors.TwoSlopeNorm(vmin=-2, vcenter=0, vmax=2)
     cmap = plt.get_cmap("vanimo")
-    winding_numbers_color = cmap(norm(winding_numbers))[..., :3]
+    winding_numbers_color = cmap(norm(winding_numbers_vis))[..., :3]
     winding_numbers_frames = (winding_numbers_color * 255).astype(np.uint8)
 
     if add_duration_string:
@@ -317,7 +319,7 @@ def create_vis_mesh(
     )
     print("Done.")
 
-    return metrics
+    return metrics, winding_numbers
 
 
 def create_open3d_diagnostic_video(
@@ -413,6 +415,11 @@ def main():
         "--video_prefix", type=str, required=True, help="Filename prefix string."
     )
     parser.add_argument("--methods", nargs="+", default=["igl", "winder"])
+    parser.add_argument(
+        "--no_quantitative_comparison",
+        action="store_true",
+        help="Skip calculating quantitative error values (MSE, MAE, RMSE) against brute force.",
+    )
     args = parser.parse_args()
 
     device = torch.device(f"cuda:{args.gpu}")
@@ -496,12 +503,19 @@ def main():
     csv_filename = f"{directory}/benchmark_metrics.csv"
     file_exists = os.path.isfile(csv_filename)
 
+    methods_to_execute = list(args.methods)
+    if not args.no_quantitative_comparison:
+        if "brute_force" in methods_to_execute:
+            methods_to_execute.remove("brute_force")
+        methods_to_execute.insert(0, "brute_force")
+
+    gt_winding_numbers = None
+
     # Compute selected evaluations sequentially
-    for method in args.methods:
+    for method in methods_to_execute:
         output_video_path = f"{args.video_prefix}_{method}.mp4"
 
-        # Create a video and catch timing metrics
-        run_metrics = create_vis_mesh(
+        run_metrics, raw_wn = create_vis_mesh(
             vertices_np,
             indices_np,
             query_frames_np,
@@ -509,19 +523,36 @@ def main():
             output_video_path,
             method,
             device,
-            add_duration_string=True,
         )
 
-        # Add mesh-level metadata to the metrics
         run_metrics["mesh_name"] = os.path.basename(args.obj_path)
         run_metrics["vertices"] = vertices_np.shape[0]
         run_metrics["triangles"] = indices_np.shape[0]
         run_metrics["resolution"] = args.resolution
         run_metrics["frames"] = len(query_frames_np)
 
+        # Handle quantitative math tracking against brute force baseline
+        if method == "brute_force":
+            gt_winding_numbers = raw_wn
+            run_metrics["mse"] = 0.0
+            run_metrics["mae"] = 0.0
+            run_metrics["rmse"] = 0.0
+        else:
+            if gt_winding_numbers is not None and not args.no_quantitative_comparison:
+                mse_val = float(np.mean((raw_wn - gt_winding_numbers) ** 2))
+                mae_val = float(np.mean(np.abs(raw_wn - gt_winding_numbers)))
+                rmse_val = float(np.sqrt(mse_val))
+
+                run_metrics["mse"] = mse_val
+                run_metrics["mae"] = mae_val
+                run_metrics["rmse"] = rmse_val
+            else:
+                run_metrics["mse"] = "N/A"
+                run_metrics["mae"] = "N/A"
+                run_metrics["rmse"] = "N/A"
+
         # Append immediately to CSV so data is safe if a later mode crashes
         with open(csv_filename, mode="a", newline="") as csvfile:
-            # Define the column order
             fieldnames = [
                 "mesh_name",
                 "vertices",
@@ -533,6 +564,9 @@ def main():
                 "build_time_sec",
                 "compute_time_sec",
                 "download_time_sec",
+                "mse",
+                "mae",
+                "rmse",
             ]
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
@@ -542,11 +576,9 @@ def main():
 
             writer.writerow(run_metrics)
 
-        # Force flush memory allocations before transitioning to the next benchmark
         torch.cuda.empty_cache()
         gc.collect()
 
-    # Generate additional 3D geometric diagnostic scene
     diagnostic_filename = f"{args.video_prefix}_3d_scene.mp4"
     create_open3d_diagnostic_video(
         vertices_np,
