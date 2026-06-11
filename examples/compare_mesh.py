@@ -16,15 +16,75 @@ import winder
 import csv
 import os
 
-# Optional: Import winder depending on environment setup
-# import winder
-
 
 def positive_type(arg: str) -> int:
     x: int = int(arg)
     if x < 1:
         raise argparse.ArgumentTypeError("Minimum value is 1")
     return x
+
+def apply_colormap_gpu(
+    winding_numbers, resolution: int, cmap_name: str = "vanimo"
+) -> NPT.ArrayLike:
+    """Colorizes winding number frames entirely on the GPU using a Look-Up
+
+    Table.
+    """
+    device = (
+        winding_numbers[0].device
+        if isinstance(winding_numbers, list) and torch.is_tensor(winding_numbers[0])
+        else "cuda"
+    )
+
+    # Generate the Colormap Look-Up Table (LUT) once on CPU, then send to GPU
+    cmap = plt.get_cmap(cmap_name)
+    lut_np = cmap(np.linspace(0, 1, 256))[..., :3]  # Extract RGB [256, 3]
+    lut = torch.tensor(lut_np, dtype=torch.float32, device=device)
+
+    if isinstance(winding_numbers, list):
+        if torch.is_tensor(winding_numbers[0]):
+            wn_tensor = torch.stack(winding_numbers)
+        else:
+            wn_tensor = torch.tensor(np.array(winding_numbers), device=device)
+    elif isinstance(winding_numbers, np.ndarray):
+        wn_tensor = torch.from_numpy(winding_numbers).to(device)
+    else:
+        wn_tensor = winding_numbers.to(device)
+
+    wn_tensor = wn_tensor.view(-1, resolution, resolution)
+
+    # Maps [vmin, vcenter] -> [0, 0.5] and [vcenter, vmax] -> [0.5, 1.0]
+    vmin, vcenter, vmax = -2.0, 0.0, 2.0
+    wn_clip = torch.clamp(wn_tensor, vmin, vmax)
+
+    # Piecewise linear normalization matching Matplotlib's TwoSlopeNorm behavior
+    normed = torch.where(
+        wn_clip < vcenter,
+        0.5 * (wn_clip - vmin) / (vcenter - vmin),
+        0.5 + 0.5 * (wn_clip - vcenter) / (vmax - vcenter),
+    )
+
+    indices = (normed * 255).long()
+
+    color_tensor = lut[indices]  # Shape: [Frames, Res, Res, 3]
+
+    return (color_tensor * 255).to(torch.uint8).cpu().numpy()
+
+def write_video(
+    video_path: str, frames_numpy_array: NPT.ArrayLike, fps=25, is_lossless: bool = True
+):
+    with iio.imopen(video_path, "w", plugin="pyav") as file:
+        file.init_video_stream("libx264rgb", fps=fps, pixel_format="rgb24")
+
+        if is_lossless:
+            # lossless, best compression
+            file._video_stream.options = {"crf": "0", "preset": "slow"}
+        else:
+            file._video_stream.options = {"crf": "18", "preset": "slow"}
+
+        for frame in tqdm(frames_numpy_array, desc="writing video"):
+            file.write_frame(frame)
+
 
 
 @torch.no_grad()
@@ -143,7 +203,7 @@ def create_vis_mesh(
     video_path: str,
     mode: str,
     device: torch.device,
-    add_duration_string: bool = True,
+    add_duration_string: bool = False,
 ) -> tuple[dict, NPT.ArrayLike]:
     duration = 0.0
     duration_per_frame = 0.0
@@ -161,11 +221,10 @@ def create_vis_mesh(
 
     match mode:
         case "igl":
+            query_list_block = np.concatenate(query_list, axis = 0)
             print("Computing winding numbers with IGL...")
             start_time = time()
-            winding_numbers = [
-                igl.fast_winding_number(vertices, indices, q) for q in tqdm(query_list)
-            ]
+            winding_numbers = igl.fast_winding_number(vertices, indices, query_list_block)
             end_time = time()
             duration = end_time - start_time
             duration_per_frame = duration / len(query_list)
@@ -173,11 +232,12 @@ def create_vis_mesh(
             metrics["compute_time_sec"] = duration
 
         case "winder":
+            query_list_block = np.concatenate(query_list, axis = 0)
             print("Uploading vertices, indices and query_list...")
             start_upload_time = time()
             vertices_torch = torch.from_numpy(vertices).to(device)
             indices_torch = torch.from_numpy(indices).to(device)
-            query_list_torch = [torch.from_numpy(q).to(device) for q in query_list]
+            query_list_block_torch = torch.from_numpy(query_list_block).to(device)
             end_upload_time = time()
             print(f"Done. Upload took {end_upload_time - start_upload_time:.4f} sec.")
 
@@ -189,10 +249,10 @@ def create_vis_mesh(
             print(
                 f"Done. Building Engine took {end_build_time - start_build_time:.4f} sec."
             )
-
             print("Computing winding numbers with WINDER...")
             start_time = time()
-            winding_numbers = [engine.compute(q) for q in tqdm(query_list_torch)]
+            winding_numbers = engine.compute(query_list_block_torch)
+            torch.cuda.synchronize()
             end_time = time()
             duration = end_time - start_time
             duration_per_frame = duration / len(query_list)
@@ -200,9 +260,7 @@ def create_vis_mesh(
 
             print("Downloading winding Numbers...")
             start_download = time()
-            winding_numbers = [
-                torch.from_dlpack(w).cpu().numpy() for w in winding_numbers
-            ]
+            winding_numbers = torch.from_dlpack(winding_numbers).cpu().numpy()
             end_download = time()
             print("Done.")
 
@@ -212,11 +270,12 @@ def create_vis_mesh(
             metrics["download_time_sec"] = end_download - start_download
 
         case "brute_force":
+            query_list_block = np.concatenate(query_list, axis = 0)
             print("Uploading vertices, indices, and query_list...")
             start_upload_time = time()
             vertices_torch = torch.from_numpy(vertices).to(device)
             indices_torch = torch.from_numpy(indices).to(device)
-            query_list_torch = [torch.from_numpy(q).to(device) for q in query_list]
+            query_list_block_torch = torch.from_numpy(query_list_block).to(device)
             end_upload_time = time()
             print(f"Done. Upload took {end_upload_time - start_upload_time:.4f} sec.")
 
@@ -231,7 +290,8 @@ def create_vis_mesh(
 
             print("Computing winding numbers with WINDER BRUTE FORCE...")
             start_time = time()
-            winding_numbers = [engine.brute_force(q) for q in tqdm(query_list_torch)]
+            winding_numbers = engine.brute_force(query_list_block_torch)
+            torch.cuda.synchronize()
             end_time = time()
             duration = end_time - start_time
             duration_per_frame = duration / len(query_list)
@@ -239,9 +299,7 @@ def create_vis_mesh(
 
             print("Downloading winding Numbers...")
             start_download = time()
-            winding_numbers = [
-                torch.from_dlpack(w).cpu().numpy() for w in winding_numbers
-            ]
+            winding_numbers = torch.from_dlpack(winding_numbers).cpu().numpy()
             end_download = time()
             print("Done.")
 
@@ -261,8 +319,7 @@ def create_vis_mesh(
             metrics["build_time_sec"] = (
                 0.0  # Torch doesn't have a distinct build step here
             )
-
-            print("Computing winding numbers using torch implementation...")
+            print("Computing winding numbers using TORCH implementation...")
             triangles = vertices_torch[indices_torch.long()]
             # compile torch function first
             print("Compiling...")
@@ -286,20 +343,17 @@ def create_vis_mesh(
             start_download = time()
             winding_numbers = [w.cpu().numpy() for w in winding_numbers]
             metrics["download_time_sec"] = time() - start_download
+            winding_numbers = np.stack(winding_numbers)
             print("Done.")
 
         case _:
             raise ValueError("Unsupported mode.")
 
     print("Applying colormap...")
-    winding_numbers = np.stack(winding_numbers)
-    winding_numbers_vis = winding_numbers.reshape([len(query_list), resolution, resolution])
-    winding_numbers_vis = np.clip(winding_numbers_vis, -2, 2)
-
-    norm = mcolors.TwoSlopeNorm(vmin=-2, vcenter=0, vmax=2)
-    cmap = plt.get_cmap("vanimo")
-    winding_numbers_color = cmap(norm(winding_numbers_vis))[..., :3]
-    winding_numbers_frames = (winding_numbers_color * 255).astype(np.uint8)
+    winding_numbers = winding_numbers.reshape(
+        [len(query_list), resolution, resolution]
+    )
+    winding_numbers_frames = apply_colormap_gpu(winding_numbers, resolution)
 
     if add_duration_string:
         print("Adding text overlays to frames...")
@@ -309,14 +363,12 @@ def create_vis_mesh(
         print("Done.")
 
     print(f"Writing video to {video_path}")
-    iio.imwrite(
+    write_video(
         video_path,
         winding_numbers_frames,
-        extension=".mp4",
         fps=25,
-        codec="libx264",
-        is_batch=True,
     )
+
     print("Done.")
 
     return metrics, winding_numbers
@@ -328,7 +380,7 @@ def create_open3d_diagnostic_video(
     query_frames: list[NPT.ArrayLike],
     resolution: int,
     video_path: str,
-    add_geometry_detail_string: bool = True,
+    add_geometry_detail_string: bool = False,
 ) -> None:
     """Generates a 3D diagnostic video using Open3D's native OffscreenRenderer."""
     print("Generating Open3D diagnostic tracking scene video natively headless...")
@@ -385,13 +437,11 @@ def create_open3d_diagnostic_video(
         )
         print("Done.")
     print(f"Writing video {video_path}")
-    iio.imwrite(
+    write_video(
         video_path,
         np.stack(frames),
-        extension=".mp4",
         fps=25,
-        codec="libx264",
-        is_batch=True,
+        is_lossless=False,
     )
     print("Done.")
 
@@ -524,6 +574,9 @@ def main():
             method,
             device,
         )
+        # save tensor
+        tensor_path = f"{args.video_prefix}_{method}_winding_numbers.npy"
+        np.save(tensor_path, raw_wn)
 
         run_metrics["mesh_name"] = os.path.basename(args.obj_path)
         run_metrics["vertices"] = vertices_np.shape[0]
@@ -533,14 +586,14 @@ def main():
 
         # Handle quantitative math tracking against brute force baseline
         if method == "brute_force":
-            gt_winding_numbers = raw_wn
+            gt_winding_numbers = raw_wn.squeeze()
             run_metrics["mse"] = 0.0
             run_metrics["mae"] = 0.0
             run_metrics["rmse"] = 0.0
         else:
             if gt_winding_numbers is not None and not args.no_quantitative_comparison:
-                mse_val = float(np.mean((raw_wn - gt_winding_numbers) ** 2))
-                mae_val = float(np.mean(np.abs(raw_wn - gt_winding_numbers)))
+                mse_val = float(np.mean((raw_wn.squeeze() - gt_winding_numbers) ** 2))
+                mae_val = float(np.mean(np.abs(raw_wn.squeeze() - gt_winding_numbers)))
                 rmse_val = float(np.sqrt(mse_val))
 
                 run_metrics["mse"] = mse_val
