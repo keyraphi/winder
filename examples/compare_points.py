@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import gc
+from torch._dynamo.cache_size import exceeds_recompile_limit
 from tqdm.auto import tqdm
 from time import time
 import argparse
@@ -140,7 +141,7 @@ def torch_winding_numbers(
     points: torch.Tensor,
     scaled_normals: torch.Tensor,
     queries: torch.Tensor,
-    epsilon: float = 0.01,
+    epsilon: float = 0.00390625,
     chunk_size: int = 1024,  # Controls memory footprint safely
 ) -> torch.Tensor:
     """High-performance regularized winding numbers.
@@ -735,45 +736,56 @@ def main():
     for method in methods_to_execute:
         output_video_path = f"{args.video_prefix}_{method}.mp4"
 
-        run_metrics, raw_wn = create_vis_points(
-            points,
-            normals,
-            areas,
-            query_frames_np,
-            args.resolution,
-            output_video_path,
-            method,
-            device,
-        )
+        metrics = {}
+        metrics["mesh_name"] = os.path.basename(args.obj_path)
+        metrics["points"] = vertices_np.shape[0]
+        metrics["resolution"] = args.resolution
+        metrics["frames"] = len(query_frames_np)
 
-        # save tensor
-        tensor_path = f"{args.video_prefix}_{method}_winding_numbers.npy"
-        np.save(tensor_path, raw_wn)
-
-        run_metrics["mesh_name"] = os.path.basename(args.obj_path)
-        run_metrics["points"] = vertices_np.shape[0]
-        run_metrics["resolution"] = args.resolution
-        run_metrics["frames"] = len(query_frames_np)
-
-        # Handle quantitative math tracking against brute force baseline
-        if method == "brute_force":
-            gt_winding_numbers = raw_wn.squeeze()
-            run_metrics["mse"] = 0.0
-            run_metrics["mae"] = 0.0
-            run_metrics["rmse"] = 0.0
-        else:
-            if gt_winding_numbers is not None and not args.no_quantitative_comparison:
-                mse_val = float(np.mean((raw_wn.squeeze() - gt_winding_numbers) ** 2))
-                mae_val = float(np.mean(np.abs(raw_wn.squeeze() - gt_winding_numbers)))
-                rmse_val = float(np.sqrt(mse_val))
-
-                run_metrics["mse"] = mse_val
-                run_metrics["mae"] = mae_val
-                run_metrics["rmse"] = rmse_val
+        try:
+            run_metrics, raw_wn = create_vis_points(
+                points,
+                normals,
+                areas,
+                query_frames_np,
+                args.resolution,
+                output_video_path,
+                method,
+                device,
+            )
+            # save tensor
+            tensor_path = f"{args.video_prefix}_{method}_winding_numbers.npy"
+            np.save(tensor_path, raw_wn)
+            # Handle quantitative math tracking against brute force baseline
+            if method == "brute_force":
+                gt_winding_numbers = raw_wn.squeeze()
+                run_metrics["mse"] = 0.0
+                run_metrics["mae"] = 0.0
+                run_metrics["rmse"] = 0.0
             else:
-                run_metrics["mse"] = "N/A"
-                run_metrics["mae"] = "N/A"
-                run_metrics["rmse"] = "N/A"
+                if gt_winding_numbers is not None and not args.no_quantitative_comparison:
+                    mse_val = float(np.mean((raw_wn.squeeze() - gt_winding_numbers) ** 2))
+                    mae_val = float(np.mean(np.abs(raw_wn.squeeze() - gt_winding_numbers)))
+                    rmse_val = float(np.sqrt(mse_val))
+
+                    run_metrics["mse"] = mse_val
+                    run_metrics["mae"] = mae_val
+                    run_metrics["rmse"] = rmse_val
+                else:
+                    run_metrics["mse"] = "N/A"
+                    run_metrics["mae"] = "N/A"
+                    run_metrics["rmse"] = "N/A"
+            metrics.update(run_metrics)
+        except:
+            metrics["mse"] = "N/A"
+            metrics["mae"] = "N/A"
+            metrics["rmse"] = "N/A"
+            metrics["mode"] = method
+            metrics["upload_time_sec"] = "N/A"
+            metrics["build_time_sec"] = "crash"
+            metrics["compute_time_sec"] = "N/A"
+            metrics["download_time_sec"] = "N/A"
+
 
         # Append immediately to CSV so data is safe if a later mode crashes
         with open(csv_filename, mode="a", newline="") as csvfile:
@@ -797,7 +809,7 @@ def main():
                 writer.writeheader()
                 file_exists = True
 
-            writer.writerow(run_metrics)
+            writer.writerow(metrics)
 
         torch.cuda.empty_cache()
         gc.collect()
