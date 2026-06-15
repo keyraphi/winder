@@ -401,42 +401,54 @@
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              <a target="_blank" href="https://github.com/keyraphi/winder/blob/db3a58d56cadde1e68aa933e545d79f92fa7656f/src/cpp/winder_cuda.cu#L224-L260">
                 <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
                     <div class="text-cyan-400 text-lg mb-2 font-mono">⚡ Morton-Encoded LBVH</div>
                     <p class="text-sm text-slate-300 leading-relaxed">
                         Constructs linear binary bounding hierarchies via 64-bit Morton codes using an ultra-fast radix tree structure mapped entirely on GPU blocks, bypassing traditional CPU-side tree generation bottlenecks.
                     </p>
                 </div>
+              </a>
+              <a target="_blank" href="https://github.com/keyraphi/winder/blob/db3a58d56cadde1e68aa933e545d79f92fa7656f/src/cpp/kernels/binary2bvh8.cu#L26-L231">
                 <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
                     <div class="text-cyan-400 text-lg mb-2 font-mono">🌿 Wide BVH8 Generation</div>
                     <p class="text-sm text-slate-300 leading-relaxed">
                         Collapses sparse binary trees into high-occupancy 8-way multi-bounding box layouts. This flat structure increases streaming vector performance and compresses depth traversal passes during execution.
                     </p>
                 </div>
+              </a>
+              <a target="_blank" href="https://github.com/keyraphi/winder/blob/db3a58d56cadde1e68aa933e545d79f92fa7656f/src/cpp/kernels/bvh8_m2m.cu#L22-L185">
                 <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
                     <div class="text-cyan-400 text-lg mb-2 font-mono">🌲 Bottom-Up M2M Layers</div>
                     <p class="text-sm text-slate-300 leading-relaxed">
                         Executes parallelized upward CUDA passes across tree layers to propagate and cascade high-order Taylor series coefficients from individual leaf elements up to the root node.
                     </p>
                 </div>
+              </a>
+              <a target="_blank" href="https://github.com/keyraphi/winder/blob/db3a58d56cadde1e68aa933e545d79f92fa7656f/src/cpp/tailor_coefficients.h">
                 <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
                     <div class="text-cyan-400 text-lg mb-2 font-mono">📦 128-Byte Quantized Nodes</div>
                     <p class="text-sm text-slate-300 leading-relaxed">
                         Compresses BVH8 layout entries into compact 128-byte cache footprints using custom PTX assembly byte-quantization to maximize memory bandwidth.
                     </p>
                 </div>
+              </a>
+              <a target="_blank" href="https://github.com/keyraphi/winder/blob/db3a58d56cadde1e68aa933e545d79f92fa7656f/src/cpp/kernels/node_approx.cuh">
                 <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
                     <div class="text-cyan-400 text-lg mb-2 font-mono">🔢 Dual-Precision Tracks</div>
                     <p class="text-sm text-slate-300 leading-relaxed">
                         Alternates dynamically between high-speed <code>bfloat16</code> math operations for distant far-field approximations and robust <code>float32</code> compute tracks for high-precision near-field intersections.
                     </p>
                 </div>
+              </a>
+              <a target="_blank" href="https://github.com/keyraphi/winder/blob/db3a58d56cadde1e68aa933e545d79f92fa7656f/src/cpp/kernels/traversal.cu#L62-L288">
                 <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
                     <div class="text-cyan-400 text-lg mb-2 font-mono">🤝 Cooperative Kernels</div>
                     <p class="text-sm text-slate-300 leading-relaxed">
                         Distributes work evenly across active threads using synchronized shared-memory tracking queues, minimizing warp divergence during hierarchical tree steps.
                     </p>
                 </div>
+              </a>
             </div>
         </section>
 
