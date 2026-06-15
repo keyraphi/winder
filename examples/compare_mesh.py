@@ -470,12 +470,16 @@ def main():
         action="store_true",
         help="Skip calculating quantitative error values (MSE, MAE, RMSE) against brute force.",
     )
-    # NEW: Argument to specify precomputed ground truth prefix path
     parser.add_argument(
         "--gt_prefix",
         type=str,
         default=None,
         help="Prefix path of precomputed ground truth winding numbers to skip brute force recalculation.",
+    )
+    parser.add_argument(
+        "--create_3d_scene_video",
+        action="store_true",
+        help="Create a video showing the 3d object and the moving query plane.",
     )
     args = parser.parse_args()
 
@@ -653,14 +657,15 @@ def main():
         torch.cuda.empty_cache()
         gc.collect()
 
-    diagnostic_filename = f"{args.video_prefix}_3d_scene.mp4"
-    create_open3d_diagnostic_video(
-        vertices_np,
-        indices_np,
-        query_frames_np,
-        args.resolution,
-        diagnostic_filename,
-    )
+    if args.create_3d_scene_video:
+        diagnostic_filename = f"{args.video_prefix}_3d_scene.mp4"
+        create_open3d_diagnostic_video(
+            vertices_np,
+            indices_np,
+            query_frames_np,
+            args.resolution,
+            diagnostic_filename,
+        )
 
 if __name__ == "__main__":
     main()
