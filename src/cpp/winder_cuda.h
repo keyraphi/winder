@@ -105,7 +105,7 @@ private:
   WinderBackend(size_t size, int device_id);
 
 public: // TODO DEBUG  make private!
-  size_t m_count;
+  const size_t m_count;
 
 
   // --- Geometric Data & Permutation Maps ---

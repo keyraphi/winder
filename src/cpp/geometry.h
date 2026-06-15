@@ -80,11 +80,11 @@ struct Triangle {
   contributionToQuery(const Vec3 &query, float inf_epsilon) const -> float;
 
   [[nodiscard]] auto dump() const -> std::string {
-    std::string result = std::format(
-        "Triangle {{v0: ({}, {}, {}), v1: ({}, {}, {}), v2: ({}, {}, {})}}\n",
+    // Returns a compact, single-line representation safe for HTML labels
+    return std::format(
+        "v0:({:.2f}, {:.2f}, {:.2f}) | v1:({:.2f}, {:.2f}, {:.2f}) | v2:({:.2f}, {:.2f}, {:.2f})",
         v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
-    return result;
-  }
+}
 };
 
 struct PointNormal {
@@ -107,11 +107,12 @@ struct PointNormal {
   contributionToQuery(const Vec3 &query, float inv_epsilon) const -> float;
 
   [[nodiscard]] auto dump() const -> std::string {
-    std::string result = std::format(
-        "PointNormal {{point: ({}, {}, {}), normal: ({}, {}, {})}}\n", p.x, p.y,
-        p.z, n.x, n.y, n.z);
-    return result;
-  }
+    // Returns a compact, single-line representation safe for HTML labels
+    return std::format(
+        "Pos:({:.2f}, {:.2f}, {:.2f}) | Norm:({:.2f}, {:.2f}, {:.2f})", 
+        p.x, p.y, p.z, n.x, n.y, n.z);
+}
+
 };
 
 __host__ __device__ __forceinline__ auto

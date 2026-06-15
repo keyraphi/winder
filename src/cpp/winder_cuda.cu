@@ -300,15 +300,17 @@ void WinderBackend<Triangle>::initialize_triangle_data(const float *triangles) {
 
   // Compute the max distances of geometry from the center of mass for the nodes
   uint32_t bvh8_node_count;
-  CUDA_CHECK(cudaMemcpyAsync(&bvh8_node_count, m_bvh8_node_count, sizeof(uint32_t), cudaMemcpyDeviceToHost, m_stream_0));
-  float* tmp_max_distances;
-  CUDA_CHECK(cudaMallocAsync(&tmp_max_distances, bvh8_node_count * sizeof(float), m_stream_0));
+  CUDA_CHECK(cudaMemcpyAsync(&bvh8_node_count, m_bvh8_node_count,
+                             sizeof(uint32_t), cudaMemcpyDeviceToHost,
+                             m_stream_0));
+  float *tmp_max_distances;
+  CUDA_CHECK(cudaMallocAsync(&tmp_max_distances,
+                             bvh8_node_count * sizeof(float), m_stream_0));
   thrust::fill_n(m_stream_0_policy, tmp_max_distances, bvh8_node_count, 0.F);
-  compute_max_distances<Triangle>(m_bvh8_nodes, m_sorted_geometry,
-                                  bvh8_leaf_parents, bvh8_internal_parent_map,
-                                  tmp_max_distances,
-                                  static_cast<uint32_t>(m_count),
-                                  bvh8_node_count, m_stream_0);
+  compute_max_distances<Triangle>(
+      m_bvh8_nodes, m_sorted_geometry, bvh8_leaf_parents,
+      bvh8_internal_parent_map, tmp_max_distances,
+      static_cast<uint32_t>(m_count), bvh8_node_count, m_stream_0);
   CUDA_CHECK(cudaFreeAsync(tmp_max_distances, m_stream_0));
 
   // populate BVH8 nodes with tailor coefficients using m2m
@@ -422,17 +424,19 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
 
   // Compute the max distances of geometry from the center of mass for the nodes
   uint32_t bvh8_node_count;
-  CUDA_CHECK(cudaMemcpyAsync(&bvh8_node_count, m_bvh8_node_count, sizeof(uint32_t), cudaMemcpyDeviceToHost, m_stream_0));
-  float* tmp_max_distances;
-  CUDA_CHECK(cudaMallocAsync(&tmp_max_distances, bvh8_node_count * sizeof(float), m_stream_0));
+  CUDA_CHECK(cudaMemcpyAsync(&bvh8_node_count, m_bvh8_node_count,
+                             sizeof(uint32_t), cudaMemcpyDeviceToHost,
+                             m_stream_0));
+  float *tmp_max_distances;
+  CUDA_CHECK(cudaMallocAsync(&tmp_max_distances,
+                             bvh8_node_count * sizeof(float), m_stream_0));
   thrust::fill_n(m_stream_0_policy, tmp_max_distances, bvh8_node_count, 0.F);
-  compute_max_distances<PointNormal>(m_bvh8_nodes, m_sorted_geometry,
-                                  bvh8_leaf_parents, bvh8_internal_parent_map,
-                                  tmp_max_distances,
-                                  static_cast<uint32_t>(m_count),
-                                  bvh8_node_count, m_stream_0);
+  compute_max_distances<PointNormal>(
+      m_bvh8_nodes, m_sorted_geometry, bvh8_leaf_parents,
+      bvh8_internal_parent_map, tmp_max_distances,
+      static_cast<uint32_t>(m_count), bvh8_node_count, m_stream_0);
   CUDA_CHECK(cudaFreeAsync(tmp_max_distances, m_stream_0));
-  
+
   // populate BVH8 nodes with tailor coefficients using m2m
   // reset atomic counters to 0
   thrust::fill_n(m_stream_0_policy, atomic_counters, leaf_count - 1, 0);
@@ -723,18 +727,32 @@ void WinderBackend<Triangle>::solve_for_normals(
   throw std::runtime_error("solve_for_normals not implemented yet!");
 }
 
+__global__ void getTailorCoefficientsKernel(const BVH8Node *nodes,
+                                             TailorCoefficientsBf16 *result,
+                                             uint32_t node_count) {
+  uint32_t tid = threadIdx.x + blockIdx.x * blockDim.x;
+  if (tid < node_count) {
+    const BVH8Node &node = nodes[tid];
+    result[tid].zero_order = node.tailor_coefficients.get_tailor_zero_order();
+    result[tid].first_order = node.tailor_coefficients.get_tailor_first_order();
+    result[tid].second_order =
+        node.tailor_coefficients.get_tailor_second_order();
+  }
+}
+
 template <IsGeometry Geometry>
 auto WinderBackend<Geometry>::dump() const -> std::string {
-  // Edge Case: No geometry at all
+  // Edge Case 1: No geometry at all
   if (m_count == 0) {
-    return "";
+    return "digraph BVH8 {\n}\n";
   }
 
-  // Edge Case: Only a single leaf exists (no BVH8 nodes to traverse)
-  if (m_count <= LEAF_SIZE) {
-    std::string result;
+  std::string result = "digraph BVH8 {\n";
+  result += "  node [fontname=\"Arial\", fontsize=10];\n";
+  result += "  rankdir=TB;\n\n";
 
-    // Copy only the single leaf's AABB and its geometry
+  // Edge Case 2: Only a single leaf exists (No internal nodes)
+  if (m_count <= LEAF_SIZE) {
     std::vector<AABB> leaf_aabbs(1);
     CUDA_CHECK(cudaMemcpy(leaf_aabbs.data(), m_binary_aabbs, sizeof(AABB),
                           cudaMemcpyDeviceToHost));
@@ -745,162 +763,270 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
     SoAView<Geometry> geometry_view{reinterpret_cast<float *>(geometry.data()),
                                     m_count};
 
-    result += "Leaf {\n";
-
     AABB leaf_aabb = leaf_aabbs[0];
     Vec3 leaf_com =
         leaf_aabb.center_of_mass.get(leaf_aabb.min, leaf_aabb.diagonal());
-    float leaf_max_distance =
-        leaf_aabb.center_of_mass.getMaxDistance(leaf_aabb.diagonal().length());
 
+    result += "  L0 [shape=none, label=<\n";
+    result += "    <TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\" "
+              "CELLPADDING=\"4\" BGCOLOR=\"#eaffea\">\n";
+    result += "      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#4CAF50\"><B><FONT "
+              "COLOR=\"white\">LEAF 0 (Root Leaf)</FONT></B></TD></TR>\n";
     result +=
-        std::format("  AABB {{min: ({}, {}, {}), max: ({}, {}, {}), com: ({}, "
-                    "{}, {}) max_distance: {}}}\n",
+        std::format("      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#c8e6c9\"><I>CoM: "
+                    "({:.4f}, {:.4f}, {:.4f})</I></TD></TR>\n",
+                    leaf_com.x, leaf_com.y, leaf_com.z);
+    result +=
+        std::format("      <TR><TD COLSPAN=\"4\"><FONT POINT-SIZE=\"9\">AABB "
+                    "Min: ({:.3f}, {:.3f}, {:.3f})<BR/>AABB Max: ({:.3f}, "
+                    "{:.3f}, {:.3f})</FONT></TD></TR>\n",
                     leaf_aabb.min.x, leaf_aabb.min.y, leaf_aabb.min.z,
-                    leaf_aabb.max.x, leaf_aabb.max.y, leaf_aabb.max.z,
-                    leaf_com.x, leaf_com.y, leaf_com.z, leaf_max_distance);
+                    leaf_aabb.max.x, leaf_aabb.max.y, leaf_aabb.max.z);
 
+    // Append child geometry primitives using SoA view
     for (size_t g_id = 0; g_id < m_count; g_id++) {
       const Geometry &g = Geometry::load(geometry_view, g_id, m_count);
-      result += "  " + g.dump();
+      result += std::format(
+          "      <TR><TD>P{}</TD><TD COLSPAN=\"3\" ALIGN=\"LEFT\"><FONT "
+          "POINT-SIZE=\"9\">{}</FONT></TD></TR>\n",
+          g_id, g.dump());
     }
-
-    result += "}\n";
+    result += "    </TABLE>>];\n}\n";
     return result;
   }
+
+  // --- Standard BVH8 Multi-Node Multi-Leaf Gathering ---
   uint32_t node_count = 0;
   CUDA_CHECK(cudaMemcpy(&node_count, m_bvh8_node_count, sizeof(uint32_t),
                         cudaMemcpyDeviceToHost));
+
   std::vector<BVH8Node> bvh8_nodes(node_count);
   CUDA_CHECK(cudaMemcpy(bvh8_nodes.data(), m_bvh8_nodes,
                         sizeof(BVH8Node) * node_count, cudaMemcpyDeviceToHost));
+
   uint32_t leaf_count = (m_count + LEAF_SIZE - 1) / LEAF_SIZE;
   std::vector<AABB> leaf_aabbs(leaf_count);
   CUDA_CHECK(cudaMemcpy(leaf_aabbs.data(), m_binary_aabbs + leaf_count - 1,
                         sizeof(AABB) * leaf_count, cudaMemcpyDeviceToHost));
+
   std::vector<Geometry> geometry(m_count);
   CUDA_CHECK(cudaMemcpy(geometry.data(), m_sorted_geometry,
                         m_count * sizeof(Geometry), cudaMemcpyDeviceToHost));
   SoAView<Geometry> geometry_view{reinterpret_cast<float *>(geometry.data()),
                                   m_count};
+
   std::vector<LeafPointers> leaf_pointers(node_count);
   CUDA_CHECK(cudaMemcpy(leaf_pointers.data(), m_bvh8_leaf_pointers,
                         node_count * sizeof(LeafPointers),
                         cudaMemcpyDeviceToHost));
+
   std::vector<TailorCoefficientsBf16> leaf_coefficients(leaf_count);
   CUDA_CHECK(cudaMemcpy(leaf_coefficients.data(), m_leaf_coefficients,
                         leaf_count * sizeof(TailorCoefficientsBf16),
                         cudaMemcpyDeviceToHost));
-  std::string result;
 
-  struct StackEntry {
-    uint32_t node_id;
-    bool is_closing;
-    int depth;
-  };
+  TailorCoefficientsBf16 *d_node_coefficients = nullptr;
+  CUDA_CHECK(cudaMalloc(&d_node_coefficients,
+                        sizeof(TailorCoefficientsBf16) * node_count));
 
-  std::vector<StackEntry> stack;
-  stack.push_back({0, false, 0}); // Start with root
+  // Calculate execution configuration and launch on the device
+  uint32_t block = 128;
+  uint32_t grid = (node_count + block - 1) / block;
+  getTailorCoefficientsKernel<<<grid, block>>>(
+      m_bvh8_nodes, d_node_coefficients, node_count);
 
-  auto get_indent = [](size_t depth) -> std::string {
-    return std::string(depth * 2, ' ');
-  };
+  // Catch launch anomalies and wait for execution boundary
+  CUDA_CHECK(cudaGetLastError());
+  CUDA_CHECK(cudaDeviceSynchronize());
 
-  while (!stack.empty()) {
-    StackEntry entry = stack.back();
-    stack.pop_back();
+  // Pull unpacked values into your local host stack tracking vector
+  std::vector<TailorCoefficientsBf16> node_coefficients(node_count);
+  CUDA_CHECK(cudaMemcpy(node_coefficients.data(), d_node_coefficients,
+                        sizeof(TailorCoefficientsBf16) * node_count,
+                        cudaMemcpyDeviceToHost));
 
-    std::string indent = get_indent(entry.depth);
+  // Free the temporary GPU allocation
+  CUDA_CHECK(cudaFree(d_node_coefficients));
 
-    if (entry.is_closing) {
-      result += indent + "}\n";
-      continue;
-    }
+  // Breadth-First Search (BFS) matching your visualization layout
+  std::queue<uint32_t> queue;
+  queue.push(0); // Start at Root Internal Node
+  int empty_counter = 0;
 
-    const BVH8Node &current_node = bvh8_nodes[entry.node_id];
+  while (!queue.empty()) {
+    uint32_t current_id = queue.front();
+    queue.pop();
+
+    const BVH8Node &current_node = bvh8_nodes[current_id];
+    TailorCoefficients node_coeff =
+        TailorCoefficients::from_bf16(node_coefficients[current_id]);
     AABB aabb = current_node.parent_aabb;
     Vec3 node_com = aabb.center_of_mass.get(aabb.min, aabb.diagonal());
-    float max_dist =
-        aabb.center_of_mass.getMaxDistance(aabb.diagonal().length());
 
+    // 1. Render Internal Node Layout Block
+    result += std::format("  N{} [shape=none, label=<\n", current_id);
+    result += "    <TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\" "
+              "CELLPADDING=\"4\" BGCOLOR=\"#f0faff\">\n";
     result +=
-        indent +
-        std::format("BVH8Node {{ id: {}, com: ({:.4f}, {:.4f}, "
-                    "{:.4f}), max_dist: {:.4f}, AABB: {{min: ({:.4f}, {:.4f}, "
-                    "{:.4f}), max: ({:.4f}, {:.4f}, {:.4f})}}\n",
-                    entry.node_id, node_com.x, node_com.y, node_com.z, max_dist,
-                    aabb.min.x, aabb.min.y, aabb.min.z, aabb.max.x, aabb.max.y,
-                    aabb.max.z);
+        std::format("      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#2196F3\"><B><FONT "
+                    "COLOR=\"white\">NODE {}</FONT></B></TD></TR>\n",
+                    current_id);
+    result +=
+        std::format("      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#bbdefb\"><I>CoM: "
+                    "({:.4f}, {:.4f}, {:.4f})</I></TD></TR>\n",
+                    node_com.x, node_com.y, node_com.z);
+    result += std::format(
+        "      <TR><TD COLSPAN=\"4\"><FONT POINT-SIZE=\"9\">AABB Min: ({:.3f}, "
+        "{:.3f}, {:.3f})<BR/>AABB Max: ({:.3f}, {:.3f}, "
+        "{:.3f})</FONT></TD></TR>\n",
+        aabb.min.x, aabb.min.y, aabb.min.z, aabb.max.x, aabb.max.y, aabb.max.z);
 
-    // Push the closing marker for THIS node
-    stack.push_back({entry.node_id, true, entry.depth});
+    // Render Internal Node Taylor Expansion Blocks
+    result += std::format(
+        "      <TR><TD BGCOLOR=\"#bbdefb\"><B>Zero "
+        "Order</B></TD><TD>{:.4f}</TD><TD>{:.4f}</TD><TD>{:.4f}</TD></TR>\n",
+        node_coeff.zero_order.x, node_coeff.zero_order.y,
+        node_coeff.zero_order.z);
 
-    //  Prepare children
-    uint32_t child_base = current_node.child_base;
-
-    // Count internal children first to handle child_offset correctly
-    int internal_count = 0;
-    for (int i = 0; i < 8; ++i) {
-      if (current_node.getChildMeta(i) == ChildType::INTERNAL)
-        internal_count++;
+    result += "      <TR><TD ROWSPAN=\"3\" BGCOLOR=\"#bbdefb\"><B>1st "
+              "Order</B></TD>\n";
+    for (int r = 0; r < 3; ++r) {
+      if (r > 0)
+        result += "      <TR>\n";
+      result += std::format(
+          "        <TD>{:.4f}</TD><TD>{:.4f}</TD><TD>{:.4f}</TD></TR>\n",
+          node_coeff.first_order.data[r * 3 + 0],
+          node_coeff.first_order.data[r * 3 + 1],
+          node_coeff.first_order.data[r * 3 + 2]);
     }
-    LeafPointers current_leaf_pointers = leaf_pointers[entry.node_id];
 
-    // We iterate backwards through children to maintain correct stack order
-    int current_internal_offset = internal_count - 1;
-    for (int child_id = 7; child_id >= 0; --child_id) {
-      ChildType type = current_node.getChildMeta(child_id);
+    const Tensor3 node_second_order = node_coeff.second_order.uncompress();
+    result += "      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#bbdefb\"><B>2nd "
+              "Order</B></TD></TR>\n";
+    for (int s = 0; s < 3; ++s) {
+      result += std::format("      <TR><TD ROWSPAN=\"3\">Slice {}</TD>\n", s);
+      for (int r = 0; r < 3; ++r) {
+        if (r > 0)
+          result += "      <TR>\n";
+        int b = (s * 9) + (r * 3);
+        result += std::format(
+            "        <TD>{:.4f}</TD><TD>{:.4f}</TD><TD>{:.4f}</TD></TR>\n",
+            node_second_order.data[b + 0], node_second_order.data[b + 1],
+            node_second_order.data[b + 2]);
+      }
+    }
+    result += "    </TABLE>>];\n";
 
-      if (type == ChildType::INTERNAL) {
-        uint32_t next_idx = child_base + current_internal_offset;
-        stack.push_back({next_idx, false, entry.depth + 1});
-        current_internal_offset--;
-      } else if (type == ChildType::LEAF) {
+    // 2. Parse Child Pointers Sequentially
+    uint32_t child_base = current_node.child_base;
+    uint32_t child_offset = 0;
+    LeafPointers current_leaf_pointers = leaf_pointers[current_id];
+
+    for (size_t child_id = 0; child_id < 8; child_id++) {
+      ChildType child_type = current_node.getChildMeta(child_id);
+      switch (child_type) {
+      case ChildType::INTERNAL: {
+        uint32_t next_idx = child_offset++ + child_base;
+        queue.push(next_idx);
+        result += std::format("  N{} -> N{} [label=\"{}\", weight=3];\n",
+                              current_id, next_idx, child_id);
+        break;
+      }
+      case ChildType::LEAF: {
+        uint32_t l_id = current_leaf_pointers.indices[child_id];
         AABB leaf_aabb_approx = AABB::from_approximation(
             aabb, current_node.child_aabb_approx[child_id]);
-        uint32_t l_id = current_leaf_pointers.indices[child_id];
-        const TailorCoefficientsBf16 &coeffs_bf16 = leaf_coefficients[l_id];
-        Vec3 leaf_com_approx = coeffs_bf16.center_of_mass.get(
-            leaf_aabb_approx.min, leaf_aabb_approx.diagonal());
-        float leaf_max_distance_approx =
-            leaf_aabb_approx.center_of_mass.getMaxDistance(
-                leaf_aabb_approx.diagonal().length());
-        result += indent + "  Leaf {\n";
-        result +=
-            indent + "    " +
-            std::format(
-                "AABB_Approx {{min: ({}, {}, {}), max: ({}, {}, {}), com: ({}, "
-                "{}, {}) max_distance: {}}}\n",
-                leaf_aabb_approx.min.x, leaf_aabb_approx.min.y,
-                leaf_aabb_approx.min.z, leaf_aabb_approx.max.x,
-                leaf_aabb_approx.max.y, leaf_aabb_approx.max.z,
-                leaf_com_approx.x, leaf_com_approx.y, leaf_com_approx.z,
-                leaf_max_distance_approx);
         AABB leaf_aabb = leaf_aabbs[l_id];
-        Vec3 leaf_com =
-            leaf_aabb.center_of_mass.get(leaf_aabb.min, leaf_aabb.diagonal());
-        float leaf_max_distance = leaf_aabb.center_of_mass.getMaxDistance(
-            leaf_aabb.diagonal().length());
-        result += indent + "    " +
-                  std::format(
-                      "AABB {{min: ({}, {}, {}), max: ({}, {}, {}), com: ({}, "
-                      "{}, {}) max_distance: {}}}\n",
-                      leaf_aabb.min.x, leaf_aabb.min.y, leaf_aabb.min.z,
-                      leaf_aabb.max.x, leaf_aabb.max.y, leaf_aabb.max.z,
-                      leaf_com.x, leaf_com.y, leaf_com.z, leaf_max_distance);
+
+        TailorCoefficients coeff =
+            TailorCoefficients::from_bf16(leaf_coefficients[l_id]);
+        Vec3 leaf_com = leaf_coefficients[l_id].center_of_mass.get(
+            leaf_aabb.min, leaf_aabb.diagonal());
+
+        // Render Leaf Block
+        result += std::format("  L{} [shape=none, label=<\n", l_id);
+        result += "    <TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\" "
+                  "CELLPADDING=\"4\" BGCOLOR=\"#eaffea\">\n";
+        result += std::format(
+            "      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#4CAF50\"><B><FONT "
+            "COLOR=\"white\">LEAF {}</FONT></B></TD></TR>\n",
+            l_id);
+        result += std::format(
+            "      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#c8e6c9\"><I>CoM: ({:.4f}, "
+            "{:.4f}, {:.4f})</I></TD></TR>\n",
+            leaf_com.x, leaf_com.y, leaf_com.z);
+
+        // Box Dimension Comparison (Reconstructed Compression vs True Bounds)
+        result += std::format(
+            "      <TR><TD COLSPAN=\"4\"><FONT POINT-SIZE=\"9\" "
+            "COLOR=\"#333333\">"
+            "Approx Min: ({:.2f}, {:.2f}, {:.2f}) Max: ({:.2f}, {:.2f}, "
+            "{:.2f})<BR/>"
+            "True Min: ({:.2f}, {:.2f}, {:.2f}) Max: ({:.2f}, {:.2f}, {:.2f})"
+            "</FONT></TD></TR>\n",
+            leaf_aabb_approx.min.x, leaf_aabb_approx.min.y,
+            leaf_aabb_approx.min.z, leaf_aabb_approx.max.x,
+            leaf_aabb_approx.max.y, leaf_aabb_approx.max.z, leaf_aabb.min.x,
+            leaf_aabb.min.y, leaf_aabb.min.z, leaf_aabb.max.x, leaf_aabb.max.y,
+            leaf_aabb.max.z);
+
+        // Taylor Expansion Matrix
+        result += std::format("      <TR><TD BGCOLOR=\"#c8e6c9\"><B>Zero "
+                              "Order</B></TD><TD>{:.4f}</TD><TD>{:.4f}</"
+                              "TD><TD>{:.4f}</TD></TR>\n",
+                              coeff.zero_order.x, coeff.zero_order.y,
+                              coeff.zero_order.z);
+        result += "      <TR><TD ROWSPAN=\"3\" BGCOLOR=\"#c8e6c9\"><B>1st "
+                  "Order</B></TD>\n";
+        for (int r = 0; r < 3; ++r) {
+          if (r > 0)
+            result += "      <TR>\n";
+          result += std::format(
+              "        <TD>{:.4f}</TD><TD>{:.4f}</TD><TD>{:.4f}</TD></TR>\n",
+              coeff.first_order.data[r * 3 + 0],
+              coeff.first_order.data[r * 3 + 1],
+              coeff.first_order.data[r * 3 + 2]);
+        }
+
+        // Extract and render local SoA points bounded by the leaf
+        result += std::format(
+            "      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#c8e6c9\"><I>Geometry (Max "
+            "{} Packets)</I></TD></TR>\n",
+            LEAF_SIZE);
         size_t g_off = l_id * LEAF_SIZE;
         for (size_t g_id = 0; g_id < LEAF_SIZE; g_id++) {
-          const Geometry &g =
-              Geometry::load(geometry_view, g_off + g_id, m_count);
-          result += indent + "    " + g.dump();
-          if (g_off + g_id >= m_count) {
+          size_t global_idx = g_off + g_id;
+          if (global_idx >= m_count)
             break;
-          }
+
+          const Geometry &g =
+              Geometry::load(geometry_view, global_idx, m_count);
+          result += std::format(
+              "      <TR><TD>P{}</TD><TD COLSPAN=\"3\" ALIGN=\"LEFT\"><FONT "
+              "POINT-SIZE=\"8\">{}</FONT></TD></TR>\n",
+              g_id, g.dump());
         }
-        result += indent + "  }\n";
+
+        result += "    </TABLE>>];\n";
+        result += std::format(
+            "  N{} -> L{} [label=\"{}\", color=\"#4CAF50\", penwidth=2];\n",
+            current_id, l_id, child_id);
+        break;
+      }
+      case ChildType::EMPTY: {
+        int e_id = empty_counter++;
+        result +=
+            std::format("  E{} [label=\"\", shape=point, color=gray];\n", e_id);
+        result += std::format(
+            "  N{} -> E{} [style=dotted, color=gray, arrowhead=none];\n",
+            current_id, e_id);
+        break;
+      }
       }
     }
   }
+
+  result += "}\n";
   return result;
 }
 
