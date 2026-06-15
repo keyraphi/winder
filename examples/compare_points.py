@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 import gc
+from torch._dynamo.cache_size import exceeds_recompile_limit
 from tqdm.auto import tqdm
 from time import time
 import argparse
+import math
 import imageio.v3 as iio
 import cv2
 import igl
@@ -18,15 +20,79 @@ import interp_geometry_cuda as gm
 import csv
 import os
 
-# Optional: Import winder depending on environment setup
-# import winder
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
 
+
+def apply_colormap_gpu(
+    winding_numbers, resolution: int, cmap_name: str = "vanimo"
+) -> NPT.ArrayLike:
+    """Colorizes winding number frames entirely on the GPU using a Look-Up
+
+    Table.
+    """
+    device = (
+        winding_numbers[0].device
+        if isinstance(winding_numbers, list) and torch.is_tensor(winding_numbers[0])
+        else "cuda"
+    )
+
+    # Generate the Colormap Look-Up Table (LUT) once on CPU, then send to GPU
+    cmap = plt.get_cmap(cmap_name)
+    lut_np = cmap(np.linspace(0, 1, 256))[..., :3]  # Extract RGB [256, 3]
+    lut = torch.tensor(lut_np, dtype=torch.float32, device=device)
+
+    if isinstance(winding_numbers, list):
+        if torch.is_tensor(winding_numbers[0]):
+            wn_tensor = torch.stack(winding_numbers)
+        else:
+            wn_tensor = torch.tensor(np.array(winding_numbers), device=device)
+    elif isinstance(winding_numbers, np.ndarray):
+        wn_tensor = torch.from_numpy(winding_numbers).to(device)
+    else:
+        wn_tensor = winding_numbers.to(device)
+
+    wn_tensor = wn_tensor.view(-1, resolution, resolution)
+
+    # Maps [vmin, vcenter] -> [0, 0.5] and [vcenter, vmax] -> [0.5, 1.0]
+    vmin, vcenter, vmax = -2.0, 0.0, 2.0
+    wn_clip = torch.clamp(wn_tensor, vmin, vmax)
+
+    # Piecewise linear normalization matching Matplotlib's TwoSlopeNorm behavior
+    normed = torch.where(
+        wn_clip < vcenter,
+        0.5 * (wn_clip - vmin) / (vcenter - vmin),
+        0.5 + 0.5 * (wn_clip - vcenter) / (vmax - vcenter),
+    )
+
+    indices = (normed * 255).long()
+
+    color_tensor = lut[indices]  # Shape: [Frames, Res, Res, 3]
+
+    return (color_tensor * 255).to(torch.uint8).cpu().numpy()
 
 def positive_type(arg: str) -> int:
     x: int = int(arg)
     if x < 1:
         raise argparse.ArgumentTypeError("Minimum value is 1")
     return x
+
+
+def write_video(
+    video_path: str, frames_numpy_array: NPT.ArrayLike, fps=25, is_lossless: bool = True
+):
+    with iio.imopen(video_path, "w", plugin="pyav") as file:
+        file.init_video_stream("libx264rgb", fps=fps, pixel_format="rgb24")
+
+        if is_lossless:
+            # lossless, best compression
+            file._video_stream.options = {"crf": "0", "preset": "slow"}
+        else:
+            file._video_stream.options = {"crf": "18", "preset": "slow"}
+
+        for frame in tqdm(frames_numpy_array, desc="writing video"):
+            file.write_frame(frame)
 
 
 def mesh_to_point_surfels(
@@ -69,43 +135,75 @@ def mesh_to_point_surfels(
         areas.astype(np.float32),
     )
 
-
 @torch.no_grad()
 @torch.compile(mode="reduce-overhead")
 def torch_winding_numbers(
-    points: torch.Tensor, scaled_normals: torch.Tensor, queries: torch.Tensor
+    points: torch.Tensor,
+    scaled_normals: torch.Tensor,
+    queries: torch.Tensor,
+    epsilon: float = 0.00390625,
+    chunk_size: int = 1024,  # Controls memory footprint safely
 ) -> torch.Tensor:
-    """Computes winding numbers using PyTorch from dipoles (point-normal-area).
+    """High-performance regularized winding numbers.
 
-    Args:
-        points: float32 shape [N, 3] on CUDA
-        scaled_normals: float32 shape [N, 3] on CUDA (normal * area)
-        queries: float32 shape [M, 3] on CUDA
-
-    Returns:
-        float32 shape [M] winding numbers at query positions.
+    Optimized for torch.compile with nested torch.where and isolated FP64
+    summation.
     """
-    # Reshape for broadcasting
-    q = queries.unsqueeze(1)          # [M, 1, 3]
-    p = points.unsqueeze(0)           # [1, N, 3]
-    n = scaled_normals.unsqueeze(0)   # [1, N, 3]
+    M = queries.shape[0]
 
-    # Vector from queries to points
-    r = p - q  # [M, N, 3]
+    # Pre-compute constants on host side
+    inv_epsilon = 1.0 / epsilon
+    four_over_3sqrt_pi = 4.0 / (3.0 * math.sqrt(math.pi))
+    two_over_sqrt_pi = 2.0 / math.sqrt(math.pi)
+    inv_four_pi = 1.0 / (4.0 * math.pi)
 
-    # Numerator: Dot product of r and scaled_normals -> dot(r, n)
-    nom = (r * n).sum(dim=-1)  # [M, N]
+    # Base geometries kept in float32
+    p = points.unsqueeze(0)  # [1, N, 3]
+    n = scaled_normals.unsqueeze(0)  # [1, N, 3]
 
-    # Denominator: 4 * pi * ||r||^3
-    r_norm = torch.linalg.norm(r, dim=-1)  # [M, N]
-    denom = 4.0 * torch.pi * (r_norm ** 3)  # [M, N]
+    out = torch.zeros(M, dtype=queries.dtype, device=queries.device)
 
-    # Avoid division by zero if a query lands exactly on a surfel point
-    denom = torch.where(denom == 0, 1e-8, denom)
+    # Chunk queries to keep memory consumption low and fit within VRAM cache
+    for i in range(0, M, chunk_size):
+        q_chunk = queries[i : i + chunk_size].unsqueeze(1)  # [B, 1, 3]
 
-    total_winding_numbers = nom / denom  # [M, N]
+        # 1. Compute distances
+        d = p - q_chunk  # [B, N, 3] -> Safe maximum size: [1024, 225154, 3]
+        dist2 = (d * d).sum(dim=-1)  # [B, N]
 
-    return total_winding_numbers.sum(dim=-1)
+        invalid_mask = dist2 < 1e-18
+        distance = torch.sqrt(torch.clamp(dist2, min=1e-18))
+        t = distance * inv_epsilon
+
+        # 2. Compute regularized terms using smooth torch.where logic
+        # For mid range (0.1 <= t < 2): evaluate standard formula
+        s_reg = torch.erf(t) - (two_over_sqrt_pi * t) * torch.exp(-t * t)
+        s_over_dist3_mid = s_reg / (dist2 * distance)
+
+        # For large range (t >= 2): standard Poisson kernel
+        s_over_dist3_large = 1.0 / (dist2 * distance)
+
+        # For small range (t < 0.1): analytical Taylor limit constant
+        s_over_dist3_small = four_over_3sqrt_pi * (inv_epsilon**3)
+
+        # Nest conditions functionally (No advanced indexing allocations)
+        s_over_dist3 = torch.where(
+            t < 2.0,
+            torch.where(t < 0.1, s_over_dist3_small, s_over_dist3_mid),
+            s_over_dist3_large,
+        )
+
+        # 3. Aggregate results
+        result = (n * d).sum(dim=-1) * inv_four_pi * s_over_dist3
+        result = torch.where(invalid_mask, 0.0, result)
+
+        # 4. Final summation using isolated float64 to completely eliminate drift
+        out[i : i + chunk_size] = result.sum(dim=-1, dtype=torch.float64).to(
+            queries.dtype
+        )
+
+    return out
+
 
 def add_duration_text_to_frames(
     frames: NPT.ArrayLike, total_duration: float, duration_per_frame: float
@@ -134,7 +232,8 @@ def add_duration_text_to_frames(
 
 
 def add_geometry_text_to_frames(
-    frames: NPT.ArrayLike, point_count: int,
+    frames: NPT.ArrayLike,
+    point_count: int,
 ) -> NPT.ArrayLike:
     """Draws metrics info texts onto the frames array safely using OpenCV."""
     text_total = f"vertices: {point_count}"
@@ -164,8 +263,8 @@ def create_vis_points(
     video_path: str,
     mode: str,
     device: torch.device,
-    add_duration_string: bool = True,
-) -> dict:
+    add_duration_string: bool = False,
+) -> tuple[dict, NPT.ArrayLike]:
     duration = 0.0
     duration_per_frame = 0.0
     winding_numbers = []
@@ -182,12 +281,13 @@ def create_vis_points(
 
     match mode:
         case "fast_dipole_sums":
+            query_list_block = np.concatenate(query_list, axis=0)
             print("Uploading points, normals and query_list...")
             start_upload_time = time()
             points_torch = torch.from_numpy(points).to(device)
             normals_torch = torch.from_numpy(normals).to(device)
             areas_torch = torch.from_numpy(areas).to(device)
-            query_list_torch = [torch.from_numpy(q).to(device) for q in query_list]
+            query_list_block_toch = torch.from_numpy(query_list_block).to(device)
             end_upload_time = time()
             print(f"Done. Upload took {end_upload_time - start_upload_time:.4f} sec.")
 
@@ -195,7 +295,9 @@ def create_vis_points(
             start_build_time = time()
             # 1. Build and Initialize Octree topologies on CPU
             point_indices, child_nodes = gm.build_octree(points_torch.cpu())
-            centers, radii = gm.initialize_octree(points_torch.cpu(), areas_torch.cpu(), point_indices, child_nodes)
+            centers, radii = gm.initialize_octree(
+                points_torch.cpu(), areas_torch.cpu(), point_indices, child_nodes
+            )
 
             # Move octree properties to the execution GPU target
             child_nodes = child_nodes.to(device)
@@ -237,33 +339,49 @@ def create_vis_points(
 
             # Construct point weight configurations matching codebase hyperparameters
             beta = 2.0
-            inv_delta_w = torch.tensor(250., device=device)
+            inv_delta_w = torch.tensor(250.0, device=device)
             w_point = torch.ones((points_torch.shape[0], 1), device=device)
-            
+
             wpos_point = F.softplus(w_point, 4)
-            normalized_normals = normals_torch / (torch.norm(normals_torch, dim=-1, keepdim=True) + 1e-10)
+            normalized_normals = normals_torch / (
+                torch.norm(normals_torch, dim=-1, keepdim=True) + 1e-10
+            )
 
             # Compute tree field features
             wan_point, wan_node = gm.initialize_features_fan(
-                wpos_point, normalized_normals, areas_torch.unsqueeze(-1), 
-                self_ni_flat, self_ni_lengths, self_ni_starts, len(centers)
+                wpos_point,
+                normalized_normals,
+                areas_torch.unsqueeze(-1),
+                self_ni_flat,
+                self_ni_lengths,
+                self_ni_starts,
+                len(centers),
             )
             end_build_time = time()
-            print(f"Done. Building octree structures took {end_build_time - start_build_time:.4f} sec.")
+            print(
+                f"Done. Building octree structures took {end_build_time - start_build_time:.4f} sec."
+            )
 
+            torch.cuda.synchronize()
             print("Computing winding numbers with FAST_DIPOLE_SUMS...")
             start_time = time()
-            winding_numbers = []
-            
+
             # Execute evaluations sequentially over frames using the compiled custom module
-            for q in query_list_torch:
-                w = gm.interp_forward(
-                    points_torch, q, centers, child_nodes,
-                    self_pi_flat, self_pi_lengths, self_pi_starts, radii,
-                    wan_point, wan_node, beta, inv_delta_w, 1024
-                )
-                winding_numbers.append(w.clone())
-                
+            winding_numbers = gm.interp_forward(
+                points_torch,
+                query_list_block_toch,
+                centers,
+                child_nodes,
+                self_pi_flat,
+                self_pi_lengths,
+                self_pi_starts,
+                radii,
+                wan_point,
+                wan_node,
+                beta,
+                inv_delta_w,
+                1024,
+            )
             torch.cuda.synchronize()
             end_time = time()
             duration = end_time - start_time
@@ -272,7 +390,7 @@ def create_vis_points(
 
             print("Downloading winding Numbers...")
             start_download = time()
-            winding_numbers = [w.cpu().numpy() for w in winding_numbers]
+            winding_numbers = winding_numbers.cpu().numpy()
             end_download = time()
             print("Done.")
 
@@ -281,19 +399,21 @@ def create_vis_points(
             metrics["compute_time_sec"] = duration
             metrics["download_time_sec"] = end_download - start_download
         case "winder":
+            query_list_block = np.concatenate(query_list, axis=0)
             print("Uploading points, normals and query_list...")
             start_upload_time = time()
             points_torch = torch.from_numpy(points).to(device)
             normals_torch = torch.from_numpy(normals).to(device)
             areas_torch = torch.from_numpy(areas).to(device)
             normals_torch = normals_torch * areas_torch[..., None]
-            query_list_torch = [torch.from_numpy(q).to(device) for q in query_list]
+            query_list_block_torch = torch.from_numpy(query_list_block).to(device)
             end_upload_time = time()
             print(f"Done. Upload took {end_upload_time - start_upload_time:.4f} sec.")
 
             print("Building winder engine...")
             start_build_time = time()
             engine = winder.WinderEngine(points_torch, normals_torch)
+            torch.cuda.synchronize()
             end_build_time = time()
             print(
                 f"Done. Building Engine took {end_build_time - start_build_time:.4f} sec."
@@ -301,7 +421,8 @@ def create_vis_points(
 
             print("Computing winding numbers with WINDER...")
             start_time = time()
-            winding_numbers = [engine.compute(q) for q in query_list_torch]
+            winding_numbers = engine.compute(query_list_block_torch)
+            torch.cuda.synchronize()
             end_time = time()
             duration = end_time - start_time
             duration_per_frame = duration / len(query_list)
@@ -309,9 +430,7 @@ def create_vis_points(
 
             print("Downloading winding Numbers...")
             start_download = time()
-            winding_numbers = [
-                torch.from_dlpack(w).cpu().numpy() for w in winding_numbers
-            ]
+            winding_numbers = torch.from_dlpack(winding_numbers).cpu().numpy()
             end_download = time()
             print("Done.")
 
@@ -321,19 +440,21 @@ def create_vis_points(
             metrics["download_time_sec"] = end_download - start_download
 
         case "brute_force":
+            query_list_block = np.concatenate(query_list, axis=0)
             print("Uploading points, normals and query_list...")
             start_upload_time = time()
             points_torch = torch.from_numpy(points).to(device)
             normals_torch = torch.from_numpy(normals).to(device)
             areas_torch = torch.from_numpy(areas).to(device)
             normals_torch = normals_torch * areas_torch[..., None]
-            query_list_torch = [torch.from_numpy(q).to(device) for q in query_list]
+            query_list_block_torch = torch.from_numpy(query_list_block).to(device)
             end_upload_time = time()
             print(f"Done. Upload took {end_upload_time - start_upload_time:.4f} sec.")
 
             print("Building winder engine...")
             start_build_time = time()
             engine = winder.WinderEngine(points_torch, normals_torch)
+            torch.cuda.synchronize()
             end_build_time = time()
             print(
                 f"Done. Building Engine took {end_build_time - start_build_time:.4f} sec."
@@ -341,7 +462,8 @@ def create_vis_points(
 
             print("Computing winding numbers with WINDER BRUTE FORCE...")
             start_time = time()
-            winding_numbers = [engine.brute_force(q) for q in query_list_torch]
+            winding_numbers = engine.brute_force(query_list_block_torch)
+            torch.cuda.synchronize()
             end_time = time()
             duration = end_time - start_time
             duration_per_frame = duration / len(query_list)
@@ -349,9 +471,7 @@ def create_vis_points(
 
             print("Downloading winding Numbers...")
             start_download = time()
-            winding_numbers = [
-                torch.from_dlpack(w).cpu().numpy() for w in winding_numbers
-            ]
+            winding_numbers = torch.from_dlpack(winding_numbers).cpu().numpy() 
             end_download = time()
             print("Done.")
 
@@ -374,15 +494,20 @@ def create_vis_points(
             metrics["build_time_sec"] = (
                 0.0  # Torch doesn't have a distinct build step here
             )
-            print("Computing winding numbers using torch implementation...")
+            print("Computing winding numbers using TORCH implementation...")
             # compile torch function first
             print("Compiling...")
-            _ = torch_winding_numbers(points_torch, normals_torch, query_list_torch[0])
+            _ = torch_winding_numbers(
+                points_torch,
+                normals_torch,
+                query_list_torch[0],
+            )
             print("Computing...")
+            torch.cuda.synchronize()
             start_time = time()
             winding_numbers = []
 
-            for q in tqdm(query_list_torch, desc="torch"):
+            for q in tqdm(query_list_torch):
                 wn = torch_winding_numbers(points_torch, normals_torch, q)
                 winding_numbers.append(wn.clone())
 
@@ -397,20 +522,17 @@ def create_vis_points(
             start_download = time()
             winding_numbers = [w.cpu().numpy() for w in winding_numbers]
             metrics["download_time_sec"] = time() - start_download
+            winding_numbers = np.stack(winding_numbers)
             print("Done.")
 
         case _:
             raise ValueError("Unsupported mode.")
 
     print("Applying colormap...")
-    winding_numbers = np.stack(winding_numbers)
-    winding_numbers = winding_numbers.reshape([len(query_list), resolution, resolution])
-    winding_numbers = np.clip(winding_numbers, -2, 2)
-
-    norm = mcolors.TwoSlopeNorm(vmin=-2, vcenter=0, vmax=2)
-    cmap = plt.get_cmap("vanimo")
-    winding_numbers_color = cmap(norm(winding_numbers))[..., :3]
-    winding_numbers_frames = (winding_numbers_color * 255).astype(np.uint8)
+    winding_numbers = winding_numbers.reshape(
+        [len(query_list), resolution, resolution]
+    )
+    winding_numbers_frames = apply_colormap_gpu(winding_numbers, resolution)
 
     if add_duration_string:
         print("Adding text overlays to frames...")
@@ -420,17 +542,14 @@ def create_vis_points(
         print("Done.")
 
     print(f"Writing video to {video_path}")
-    iio.imwrite(
+    write_video(
         video_path,
         winding_numbers_frames,
-        extension=".mp4",
         fps=25,
-        codec="libx264",
-        is_batch=True,
     )
     print("Done.")
 
-    return metrics
+    return metrics, winding_numbers
 
 
 def create_open3d_diagnostic_video(
@@ -439,7 +558,7 @@ def create_open3d_diagnostic_video(
     query_frames: list[NPT.ArrayLike],
     resolution: int,
     video_path: str,
-    add_geometry_detail_string: bool = True,
+    add_geometry_detail_string: bool = False,
 ) -> None:
     """Generates a 3D diagnostic video using Open3D's native OffscreenRenderer."""
     print("Generating Open3D diagnostic tracking scene video natively headless...")
@@ -491,19 +610,10 @@ def create_open3d_diagnostic_video(
 
     if add_geometry_detail_string:
         print("Adding text overlays to frames...")
-        frames = add_geometry_text_to_frames(
-            frames, points.shape[0]
-        )
+        frames = add_geometry_text_to_frames(frames, points.shape[0])
         print("Done.")
     print(f"Writing video {video_path}")
-    iio.imwrite(
-        video_path,
-        np.stack(frames),
-        extension=".mp4",
-        fps=25,
-        codec="libx264",
-        is_batch=True,
-    )
+    write_video(video_path, np.stack(frames), fps=25, is_lossless=False)
     print("Done.")
 
 
@@ -526,6 +636,18 @@ def main():
         "--video_prefix", type=str, required=True, help="Filename prefix string."
     )
     parser.add_argument("--methods", nargs="+", default=["torch", "winder"])
+    parser.add_argument(
+        "--no_quantitative_comparison",
+        action="store_true",
+        help="Skip calculating quantitative error values (MSE, MAE, RMSE) against brute force.",
+    )
+    # NEW: Argument to specify precomputed ground truth prefix path for points
+    parser.add_argument(
+        "--gt_prefix",
+        type=str,
+        default=None,
+        help="Prefix path of precomputed ground truth winding numbers to skip brute force recalculation.",
+    )
     args = parser.parse_args()
 
     device = torch.device(f"cuda:{args.gpu}")
@@ -546,9 +668,7 @@ def main():
 
     points, normals, areas = mesh_to_point_surfels(vertices_np, indices_np)
 
-    print(
-        f"Pointcloud contains {points.shape[0]} vertices."
-    )
+    print(f"Pointcloud contains {points.shape[0]} vertices.")
 
     # Define underlying reference tracking grids
     line = np.linspace(-1, 1, args.resolution, dtype=np.float32)
@@ -610,31 +730,85 @@ def main():
     csv_filename = f"{directory}/benchmark_metrics.csv"
     file_exists = os.path.isfile(csv_filename)
 
+    methods_to_execute = list(args.methods)
+    gt_winding_numbers = None
+
+    # MODIFIED: Smart ground truth point tensor caching and ingestion tracking
+    if not args.no_quantitative_comparison:
+        if args.gt_prefix:
+            gt_path = f"{args.gt_prefix}_brute_force_winding_numbers.npy"
+            if os.path.isfile(gt_path):
+                print(f"--> Found cached ground truth point tensor at: {gt_path}. Loading...")
+                gt_winding_numbers = np.load(gt_path).squeeze()
+                
+                # Strip out active calculation step
+                if "brute_force" in methods_to_execute:
+                    methods_to_execute.remove("brute_force")
+            else:
+                print(f"--> [Warning] --gt_prefix provided but '{gt_path}' was not found. Reverting to active brute force calculation.")
+                if "brute_force" not in methods_to_execute:
+                    methods_to_execute.insert(0, "brute_force")
+        else:
+            if "brute_force" not in methods_to_execute:
+                methods_to_execute.insert(0, "brute_force")
+
     # Compute selected evaluations sequentially
-    for method in args.methods:
+    for method in methods_to_execute:
         output_video_path = f"{args.video_prefix}_{method}.mp4"
 
-        # Create a video and catch timing metrics
-        run_metrics = create_vis_points(
-            points,
-            normals,
-            areas,
-            query_frames_np,
-            args.resolution,
-            output_video_path,
-            method,
-            device,
-        )
+        metrics = {}
+        metrics["mesh_name"] = os.path.basename(args.obj_path)
+        metrics["points"] = vertices_np.shape[0]
+        metrics["resolution"] = args.resolution
+        metrics["frames"] = len(query_frames_np)
 
-        # Add mesh-level metadata to the metrics
-        run_metrics["mesh_name"] = os.path.basename(args.obj_path)
-        run_metrics["points"] = vertices_np.shape[0]
-        run_metrics["resolution"] = args.resolution
-        run_metrics["frames"] = len(query_frames_np)
+        try:
+            run_metrics, raw_wn = create_vis_points(
+                points,
+                normals,
+                areas,
+                query_frames_np,
+                args.resolution,
+                output_video_path,
+                method,
+                device,
+            )
+            # save tensor
+            tensor_path = f"{args.video_prefix}_{method}_winding_numbers.npy"
+            np.save(tensor_path, raw_wn)
+            
+            # Handle quantitative math tracking against brute force baseline
+            if method == "brute_force":
+                gt_winding_numbers = raw_wn.squeeze()
+                run_metrics["mse"] = 0.0
+                run_metrics["mae"] = 0.0
+                run_metrics["rmse"] = 0.0
+            else:
+                if gt_winding_numbers is not None and not args.no_quantitative_comparison:
+                    mse_val = float(np.mean((raw_wn.squeeze() - gt_winding_numbers) ** 2))
+                    mae_val = float(np.mean(np.abs(raw_wn.squeeze() - gt_winding_numbers)))
+                    rmse_val = float(np.sqrt(mse_val))
+
+                    run_metrics["mse"] = mse_val
+                    run_metrics["mae"] = mae_val
+                    run_metrics["rmse"] = rmse_val
+                else:
+                    run_metrics["mse"] = "N/A"
+                    run_metrics["mae"] = "N/A"
+                    run_metrics["rmse"] = "N/A"
+            metrics.update(run_metrics)
+        except:
+            metrics["mse"] = "N/A"
+            metrics["mae"] = "N/A"
+            metrics["rmse"] = "N/A"
+            metrics["mode"] = method
+            metrics["upload_time_sec"] = "N/A"
+            metrics["build_time_sec"] = "crash"
+            metrics["compute_time_sec"] = "N/A"
+            metrics["download_time_sec"] = "N/A"
 
         # Append immediately to CSV so data is safe if a later mode crashes
         with open(csv_filename, mode="a", newline="") as csvfile:
-            # Define the column order
             fieldnames = [
                 "mesh_name",
                 "points",
@@ -645,6 +819,9 @@ def main():
                 "build_time_sec",
                 "compute_time_sec",
                 "download_time_sec",
+                "mse",
+                "mae",
+                "rmse",
             ]
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
@@ -652,13 +829,11 @@ def main():
                 writer.writeheader()
                 file_exists = True
 
-            writer.writerow(run_metrics)
+            writer.writerow(metrics)
 
-        # Force flush memory allocations before transitioning to the next benchmark
         torch.cuda.empty_cache()
         gc.collect()
 
-    # Generate additional 3D geometric diagnostic scene
     diagnostic_filename = f"{args.video_prefix}_3d_scene.mp4"
     create_open3d_diagnostic_video(
         points,
