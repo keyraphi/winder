@@ -72,6 +72,7 @@ def apply_colormap_gpu(
 
     return (color_tensor * 255).to(torch.uint8).cpu().numpy()
 
+
 def positive_type(arg: str) -> int:
     x: int = int(arg)
     if x < 1:
@@ -134,6 +135,7 @@ def mesh_to_point_surfels(
         normals.astype(np.float32),
         areas.astype(np.float32),
     )
+
 
 @torch.no_grad()
 @torch.compile(mode="reduce-overhead")
@@ -471,7 +473,7 @@ def create_vis_points(
 
             print("Downloading winding Numbers...")
             start_download = time()
-            winding_numbers = torch.from_dlpack(winding_numbers).cpu().numpy() 
+            winding_numbers = torch.from_dlpack(winding_numbers).cpu().numpy()
             end_download = time()
             print("Done.")
 
@@ -529,9 +531,7 @@ def create_vis_points(
             raise ValueError("Unsupported mode.")
 
     print("Applying colormap...")
-    winding_numbers = winding_numbers.reshape(
-        [len(query_list), resolution, resolution]
-    )
+    winding_numbers = winding_numbers.reshape([len(query_list), resolution, resolution])
     winding_numbers_frames = apply_colormap_gpu(winding_numbers, resolution)
 
     if add_duration_string:
@@ -641,12 +641,16 @@ def main():
         action="store_true",
         help="Skip calculating quantitative error values (MSE, MAE, RMSE) against brute force.",
     )
-    # NEW: Argument to specify precomputed ground truth prefix path for points
     parser.add_argument(
         "--gt_prefix",
         type=str,
         default=None,
         help="Prefix path of precomputed ground truth winding numbers to skip brute force recalculation.",
+    )
+    parser.add_argument(
+        "--create_3d_scene_video",
+        action="store_true",
+        help="Create a video showing the 3d object and the moving query plane.",
     )
     args = parser.parse_args()
 
@@ -738,14 +742,18 @@ def main():
         if args.gt_prefix:
             gt_path = f"{args.gt_prefix}_brute_force_winding_numbers.npy"
             if os.path.isfile(gt_path):
-                print(f"--> Found cached ground truth point tensor at: {gt_path}. Loading...")
+                print(
+                    f"--> Found cached ground truth point tensor at: {gt_path}. Loading..."
+                )
                 gt_winding_numbers = np.load(gt_path).squeeze()
-                
+
                 # Strip out active calculation step
                 if "brute_force" in methods_to_execute:
                     methods_to_execute.remove("brute_force")
             else:
-                print(f"--> [Warning] --gt_prefix provided but '{gt_path}' was not found. Reverting to active brute force calculation.")
+                print(
+                    f"--> [Warning] --gt_prefix provided but '{gt_path}' was not found. Reverting to active brute force calculation."
+                )
                 if "brute_force" not in methods_to_execute:
                     methods_to_execute.insert(0, "brute_force")
         else:
@@ -776,7 +784,7 @@ def main():
             # save tensor
             tensor_path = f"{args.video_prefix}_{method}_winding_numbers.npy"
             np.save(tensor_path, raw_wn)
-            
+
             # Handle quantitative math tracking against brute force baseline
             if method == "brute_force":
                 gt_winding_numbers = raw_wn.squeeze()
@@ -784,9 +792,16 @@ def main():
                 run_metrics["mae"] = 0.0
                 run_metrics["rmse"] = 0.0
             else:
-                if gt_winding_numbers is not None and not args.no_quantitative_comparison:
-                    mse_val = float(np.mean((raw_wn.squeeze() - gt_winding_numbers) ** 2))
-                    mae_val = float(np.mean(np.abs(raw_wn.squeeze() - gt_winding_numbers)))
+                if (
+                    gt_winding_numbers is not None
+                    and not args.no_quantitative_comparison
+                ):
+                    mse_val = float(
+                        np.mean((raw_wn.squeeze() - gt_winding_numbers) ** 2)
+                    )
+                    mae_val = float(
+                        np.mean(np.abs(raw_wn.squeeze() - gt_winding_numbers))
+                    )
                     rmse_val = float(np.sqrt(mse_val))
 
                     run_metrics["mse"] = mse_val
@@ -834,14 +849,15 @@ def main():
         torch.cuda.empty_cache()
         gc.collect()
 
-    diagnostic_filename = f"{args.video_prefix}_3d_scene.mp4"
-    create_open3d_diagnostic_video(
-        points,
-        normals,
-        query_frames_np,
-        args.resolution,
-        diagnostic_filename,
-    )
+    if args.create_3d_scene_video:
+        diagnostic_filename = f"{args.video_prefix}_3d_scene.mp4"
+        create_open3d_diagnostic_video(
+            points,
+            normals,
+            query_frames_np,
+            args.resolution,
+            diagnostic_filename,
+        )
 
 
 if __name__ == "__main__":
