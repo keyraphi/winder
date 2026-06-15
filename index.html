@@ -784,7 +784,7 @@
               const chosenModel = document.getElementById("modelSelector").value;
               const selectedMetric = document.getElementById("timeMetricSelector").value;
 
-              document.getElementById("mediaTrackLabel").textContent = modeType === "mesh" ? "Mesh Hierarchy Layout" : "Point Modality Layout";
+              document.getElementById("mediaTrackLabel").textContent = modeType === "mesh" ? "Mesh Mode" : "Point Cloud Mode";
 
               const modelData = benchmarkDataset[modeType][chosenModel];
               const datasetMetrics = modelData.metrics;
@@ -845,11 +845,11 @@
                   ];
               }
 
-              let yAxisTitle = 'Compute Speed (Seconds) - Log Scale';
+              let yAxisTitle = 'Compute Time (Seconds) - Log Scale';
               if (selectedMetric === 'build') {
                   yAxisTitle = 'Build Initialization Time (Seconds) - Log Scale';
               } else if (selectedMetric === 'compute') {
-                  yAxisTitle = 'Pure Execution Speed (Seconds) - Log Scale';
+                  yAxisTitle = 'Pure Execution Time (Seconds) - Log Scale';
               }
 
               // Render Bar Chart
