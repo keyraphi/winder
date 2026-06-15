@@ -470,6 +470,13 @@ def main():
         action="store_true",
         help="Skip calculating quantitative error values (MSE, MAE, RMSE) against brute force.",
     )
+    # NEW: Argument to specify precomputed ground truth prefix path
+    parser.add_argument(
+        "--gt_prefix",
+        type=str,
+        default=None,
+        help="Prefix path of precomputed ground truth winding numbers to skip brute force recalculation.",
+    )
     args = parser.parse_args()
 
     device = torch.device(f"cuda:{args.gpu}")
@@ -554,12 +561,26 @@ def main():
     file_exists = os.path.isfile(csv_filename)
 
     methods_to_execute = list(args.methods)
-    if not args.no_quantitative_comparison:
-        if "brute_force" in methods_to_execute:
-            methods_to_execute.remove("brute_force")
-        methods_to_execute.insert(0, "brute_force")
-
     gt_winding_numbers = None
+
+    # ground truth caching
+    if not args.no_quantitative_comparison:
+        if args.gt_prefix:
+            gt_path = f"{args.gt_prefix}_brute_force_winding_numbers.npy"
+            if os.path.isfile(gt_path):
+                print(f"--> Found cached ground truth tensor at: {gt_path}. Loading...")
+                gt_winding_numbers = np.load(gt_path).squeeze()
+                
+                # Make sure we don't evaluate brute_force again
+                if "brute_force" in methods_to_execute:
+                    methods_to_execute.remove("brute_force")
+            else:
+                print(f"--> [Warning] --gt_prefix provided but '{gt_path}' was not found. Reverting to active brute force calculation.")
+                if "brute_force" not in methods_to_execute:
+                    methods_to_execute.insert(0, "brute_force")
+        else:
+            if "brute_force" not in methods_to_execute:
+                methods_to_execute.insert(0, "brute_force")
 
     # Compute selected evaluations sequentially
     for method in methods_to_execute:
@@ -640,7 +661,6 @@ def main():
         args.resolution,
         diagnostic_filename,
     )
-
 
 if __name__ == "__main__":
     main()
