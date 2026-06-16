@@ -292,8 +292,8 @@ Triangle::contributionToQuery(const Vec3 &query,
 
   // Handle the singularity: atan2(0, 0) is undefined.
   // If div is 0, we are on the boundary.
-  if (fabsf(div) < 1e-12f) {
-    return 0.5f;
+  if (fabsf(div) < 1e-12F) {
+    return 0.5F;
   }
   return atan2f(det, div) * INV_TWO_PI;
 }
