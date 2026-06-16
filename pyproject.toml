@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "winder"
-version = "0.1.0b1"
+version = "0.1.0b2"
 description = "Fast Differentiable Winding Numbers on GPU"
 authors = [
     { name = "Raphael Braun", email = "keyraphi@gmail.com" }
