@@ -293,7 +293,7 @@
                     (often taking hundreds of seconds) that completely breaks viability for deep learning optimization loops or real-time
                     dynamic geometry. 
                     <span class="text-xs text-slate-500 block mt-2 italic">
-                        Note: This extreme latency is largely an artifact of an unparallelized, single-threaded reference implementation rather
+                        Note: This extreme build time is largely an artifact of an unparallelized, single-threaded reference implementation rather
                         than an inherent topological limitation of Octrees. Indeed, the original Fast Winding Numbers framework demonstrates a
                         significantly more performant tree-building routine. However, it underscores a systemic architectural risk: prioritizing
                         downstream traversal density at the cost of sequential upstream construction bottlenecks.
@@ -1060,7 +1060,7 @@
                 ];
             }
 
-            let yAxisTitle = 'Compute Latency (Seconds) - Log Scale';
+            let yAxisTitle = 'Compute Time (Seconds) - Log Scale';
             if (selectedMetric === 'build') {
                 yAxisTitle = 'Structure Build Time (Seconds) - Log Scale';
             } else if (selectedMetric === 'compute') {
@@ -1083,7 +1083,7 @@
                 tooltip: { shared: true },
                 legend: { borderWidth: 0 },
                 series: [{
-                    name: 'Compute Latency',
+                    name: 'Compute Time',
                     data: timeSeriesData,
                     color: '#0ea5e9',
                     tooltip: { valueSuffix: ' s' }
