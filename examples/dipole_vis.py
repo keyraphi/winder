@@ -120,7 +120,7 @@ def main():
         engine = winder.WinderEngine(points, normals)
     else:
         triangles = torch.tensor(
-            [[[-0.1, -0.1, 0], [0.1, -0.1, 0], [0, 0.1, 0]]],
+            [[[-0.7, -0.7, 0], [0.7, -0.7, 0], [0, 0.7, 0]]],
             dtype=torch.float32,
             device="cuda:0",
         ).reshape([1, 3, 3])
