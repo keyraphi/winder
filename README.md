@@ -25,7 +25,7 @@ Because `winder` is currently in beta, releases are published to PyPI as pre-rel
 
 ```bash
 pip install winder --pre
-'''
+```
 
 ## System Requirements
 
