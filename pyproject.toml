@@ -13,7 +13,8 @@ readme = "README.md"
 requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Operating System :: Linux",
+    "Operating System :: POSIX :: Linux",
+    "Environment :: GPU :: NVIDIA CUDA"
 ]
 license = "MIT"
 
@@ -41,14 +42,14 @@ manylinux-x86_64-image = "manylinux_2_28"
 before-all = """
 yum install -y yum-utils gcc-toolset-13-gcc gcc-toolset-13-gcc-c++ && \
 yum-config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo && \
-yum install -y cuda-nvcc-12-4 cuda-cudart-devel-12-4 cuda-libraries-devel-12-4
+yum install -y cuda-nvcc-13-3 cuda-cudart-devel-13-3 cuda-libraries-devel-13-3
 """
 
 
 [tool.cibuildwheel.environment]
-PATH = "$PATH:/usr/local/cuda-12.4/bin"
-LD_LIBRARY_PATH = "$LD_LIBRARY_PATH:/usr/local/cuda-12.4/lib64"
-CUDA_PATH = "/usr/local/cuda-12.4"
+PATH = "$PATH:/usr/local/cuda-13.3/bin"
+LD_LIBRARY_PATH = "$LD_LIBRARY_PATH:/usr/local/cuda-13.3/lib64"
+CUDA_PATH = "/usr/local/cuda-13.3"
 CC = "/opt/rh/gcc-toolset-13/root/usr/bin/gcc"
 CXX = "/opt/rh/gcc-toolset-13/root/usr/bin/g++"
 CMAKE_ARGS = "-DCMAKE_CUDA_HOST_COMPILER=/opt/rh/gcc-toolset-13/root/usr/bin/gcc"

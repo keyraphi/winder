@@ -25,11 +25,9 @@ done
 # Repair the wheels using auditwheel
 echo "Repairing wheels to make them manylinux compliant..."
 for whl in /io/dist/*.whl; do
-    # Exclude libcuda.so.1 so it links to the host system's NVIDIA driver
     auditwheel repair "$whl" \
         --plat manylinux_2_28_x86_64 \
-        -w /io/wheelhouse/ \
-        -e libcuda.so.1
+        -w /io/wheelhouse/
 done
 
 echo "Successfully built and repaired wheels in 'wheelhouse/'!"

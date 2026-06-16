@@ -31,7 +31,7 @@ pip install winder --pre
 
 * OS: Linux (ManyLinux 2.28+ compliant distributions)
 * Compute: NVIDIA GPU
-* Driver: NVIDIA Driver supporting CUDA 13.0 or newer (the wheel bundles its own CUDA 13 runtime components, but relies on your host system driver).
+* Driver: NVIDIA Driver supporting CUDA 13.3 or newer (the wheel bundles its own CUDA 13 runtime components, but relies on your host system driver).
 
 ## 🛠️ Quick Start & Usage
 
