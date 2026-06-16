@@ -18,7 +18,7 @@ def positive_type(arg: str) -> int:
 
 
 def apply_colormap_gpu(
-    winding_numbers, resolution: int, cmap_name: str = "vanimo"
+    winding_numbers, resolution: int, cmap_name: str = "vanimo", vmin=-2.0, vmax=2.0
 ) -> NPT.ArrayLike:
     """Colorizes winding number frames entirely on the GPU using a Look-Up Table."""
     device = (
@@ -45,7 +45,7 @@ def apply_colormap_gpu(
     wn_tensor = wn_tensor.view(-1, resolution, resolution)
 
     # Maps [vmin, vcenter] -> [0, 0.5] and [vcenter, vmax] -> [0.5, 1.0]
-    vmin, vcenter, vmax = -2.0, 0.0, 2.0
+    vcenter = 0
     wn_clip = torch.clamp(wn_tensor, vmin, vmax)
 
     # Piecewise linear normalization matching Matplotlib's TwoSlopeNorm behavior
@@ -137,7 +137,11 @@ def main():
     # Generate the sweeping video slices along the X-axis
     video_path = f"{args.prefix}_slices.mp4"
     print(f"Colorizing and saving video slices to {video_path}...")
-    winding_number_color = apply_colormap_gpu(winding_number_field, args.resolution)
+    if args.type == "dipole":
+        winding_number_color = apply_colormap_gpu(winding_number_field, args.resolution, vmin=-2.0, vmax=2.0)
+    else:
+        winding_number_color = apply_colormap_gpu(winding_number_field, args.resolution, vmin=-0.5, vmax=0.5)
+
     write_video(video_path, winding_number_color, is_lossless=False)
 
     # Export the raw 3D volume as OpenVDB for Blender
