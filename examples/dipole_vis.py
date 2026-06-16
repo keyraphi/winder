@@ -79,16 +79,17 @@ def write_video(
 
 
 def export_to_vdb(field: torch.Tensor, filename: str):
-    # Move to CPU and cast to float64 for OpenVDB compatibility
     winding_number_data = field.detach().cpu().numpy().astype(np.float64)
 
     wind_ct = openvdb.FloatGrid()
     wind_ct.copyFromArray(winding_number_data)
-    wind_ct.name = "density"
+    wind_ct.name = "winding_field"
+    resolution = winding_number_data.shape[0]
+    voxel_size = 2.0 / resolution  # Spans 2.0 total units (-1 to 1)
+    wind_ct.transform = openvdb.createLinearTransform(voxelSize=voxel_size)
 
     openvdb.write(filename, [wind_ct])
-    print(f"Exported VDB: {filename}")
-
+    print(f"Exported scaled VDB: {filename}")
 
 def main():
     parser = argparse.ArgumentParser()
