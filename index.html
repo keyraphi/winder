@@ -141,9 +141,9 @@
                       </svg>
                       Winding Number Field Representations (Single Triangle)
                   </span>
-                  
+
                   <div class="flex flex-col md:flex-row gap-4">
-                      
+
                       <div class="flex-1">
                           <span class="block text-xs font-medium text-slate-500 mb-1.5 px-1">2D Sweeping Planar Slices</span>
                           <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
@@ -153,7 +153,7 @@
                               </video>
                           </div>
                       </div>
-                      
+
                       <div class="flex-1">
                           <span class="block text-xs font-medium text-slate-500 mb-1.5 px-1">3D Volumetric Orbital Render</span>
                           <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
@@ -165,7 +165,7 @@
                       </div>
 
                   </div>
-                  
+
                   <span class="block text-xs text-slate-500 mt-2.5 italic leading-relaxed">
                       Figure 2.1: Visualization of the winding number field of a single triangle.
                       Left: Progressive cross-sectional scans. Right: Path-traced 3D volumetric field.
@@ -192,9 +192,9 @@
                       </svg>
                       Winding Number Field Representations (Single Dipole)
                   </span>
-                  
+
                   <div class="flex flex-col md:flex-row gap-4">
-                      
+
                       <div class="flex-1">
                           <span class="block text-xs font-medium text-slate-500 mb-1.5 px-1">2D Sweeping Planar Slices</span>
                           <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
@@ -204,7 +204,7 @@
                               </video>
                           </div>
                       </div>
-                      
+
                       <div class="flex-1">
                           <span class="block text-xs font-medium text-slate-500 mb-1.5 px-1">3D Volumetric Orbital Render</span>
                           <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
@@ -215,7 +215,7 @@
                           </div>
                       </div>
                   </div>
-                  
+
                   <span class="block text-xs text-slate-500 mt-2.5 italic leading-relaxed">
                       Figure 2.1: Visualization of the winding number field of a single dipole.
                       Left: Progressive cross-sectional scans. Right: Path-traced 3D volumetric field.
@@ -356,7 +356,7 @@
                 <span class="text-cyan-600">04.</span> Winder: Core Vision, Architectural Philosophy &amp; Hardware Co-Design
             </h2>
             <div class="prose prose-slate max-w-none text-slate-600 leading-relaxed space-y-6">
-                
+
                 <h3 class="text-lg font-semibold text-slate-800 mt-2 mb-1">1. The Construction-First Paradigm</h3>
                 <p>
                     Existing compute pipelines treating fast winding numbers rely on offline-computed
@@ -364,7 +364,7 @@
                     class="text-cyan-600 font-medium hover:underline">Dipole Sums</a> implementation establishes an incredibly
                     tight, deeply optimized Octree layout. While this minimizes traversal steps, it incurs a crippling generation bottleneck
                     (often taking hundreds of seconds) that completely breaks viability for deep learning optimization loops or real-time
-                    dynamic geometry. 
+                    dynamic geometry.
                     <span class="text-xs text-slate-500 block mt-2 italic">
                         Note: This extreme build time is largely an artifact of an unparallelized, single-threaded reference implementation rather
                         than an inherent topological limitation of Octrees. Indeed, the original Fast Winding Numbers framework demonstrates a
@@ -430,13 +430,13 @@
                       library's downstream quantization keeps its absolute precision below the pure <code>float32</code> second-order
                       baseline of original <em>Fast Winding Numbers</em>, it provides a tighter mathematical fidelity profile
                       than zero-order dipole frameworks.</li>
-                    
-                    <li><strong>bfloat16 Far-Field Math:</strong> All calculations in the far-field are done in the 
+
+                    <li><strong>bfloat16 Far-Field Math:</strong> All calculations in the far-field are done in the
                       <code>bfloat16</code> floating-point format, leading to high ALU computing throughput.</li>
-                    
-                    <li><strong>Bit-Packed Mantissas &amp; 128-Byte Cache Alignment:</strong> Tree node coefficients are aggressively bit-packed 
-                      down to a custom 11-bit mantissa format with shared exponents, while spatial metadata—such as the cluster center of mass and localized 
-                      bounding radii—are compressed to an 8-bit format. This strictly constrains the entire BVH8 node payload to exactly <strong>128 bytes</strong>, 
+
+                    <li><strong>Bit-Packed Mantissas &amp; 128-Byte Cache Alignment:</strong> Tree node coefficients are aggressively bit-packed
+                      down to a custom 11-bit mantissa format with shared exponents, while spatial metadata—such as the cluster center of mass and localized
+                      bounding radii—are compressed to an 8-bit format. This strictly constrains the entire BVH8 node payload to exactly <strong>128 bytes</strong>,
                       perfectly matching the native L2 cache line transaction size of modern NVIDIA GPUs to guarantee maximum memory bandwidth utilization.</li>
                 </ul>
 
@@ -499,7 +499,7 @@
               </p>
 
               <h4 class="text-sm font-bold uppercase tracking-wider text-slate-700 mt-6 mb-2">Truncated Taylor Expansions for Primitive Derivatives</h4>
-              
+
               <div class="my-4 p-4 border border-slate-100 rounded-lg bg-slate-50/50">
                   <span class="text-xs font-bold text-cyan-700 block uppercase tracking-wide mb-2">Case 1: Scaled Normals (Dipole Moments $m_i$)</span>
                   <p class="text-sm text-slate-600 mb-2">
@@ -524,7 +524,7 @@
                       <strong>Note:</strong> The target gradient field output is a vector in $\mathbb{R}^3$. Inside the expansion, the first
                       term scales a vector ($\mathbb{R}^3$) by a scalar; the second multiplies a matrix ($\mathbb{R}^{3 \times 3}$) by a
                       vector; the third double-contracts ($:$) a 3rd-order tensor ($\mathbb{R}^{3 \times 3 \times 3}$) against a second-order
-                      outer-product matrix ($\mathbb{R}^{3 \times 3}$). 
+                      outer-product matrix ($\mathbb{R}^{3 \times 3}$).
                   </p>
               </div>
               <div class="my-4 p-4 border border-slate-100 rounded-lg bg-slate-50/50">
@@ -623,7 +623,7 @@
                     <h3 class="text-base font-bold text-slate-900 mb-4 flex items-center gap-2">
                         Engine Architecture Status &amp; Implementation Matrix
                     </h3>
-                    
+
                     <div class="space-y-4">
                         <div class="border border-slate-200 rounded-lg overflow-hidden">
                             <div class="bg-slate-50 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between">
@@ -683,60 +683,80 @@
                     Compare performance metrics between different data modalities and execution backends using the interactive charts and options below.
                 </p>
             </div>
-
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 p-5 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-600">
-                <div class="lg:col-span-2 space-y-2.5">
-                    <h4 class="text-sm font-bold text-slate-800 uppercase tracking-wider">Engine Backends &amp; Baselines</h4>
-                    <ul class="space-y-2 list-none pl-0">
-                        <li>
-                            <strong class="text-slate-900">Brute Force (GPU):</strong> Winder’s custom GPU-optimized brute force code path. Serves
-                            as the exact ground-truth numerical reference across all modality workflows.
-                        </li>
-                        <li>
-                            <strong class="text-slate-900">Winder (Production):</strong> Our production pipeline, evaluating highly optimized
-                            accelerated tracking steps across an 8-way bounding volume hierarchy.
-                        </li>
-                        <li>
-                            <strong class="text-slate-900">Winder (Zero-Order):</strong> An isolated architectural variant branch running
-                            exclusively with <code class="font-mono bg-slate-200/60 px-1 rounded">bfloat16</code> zero-order coefficients. This
-                            variant uses our custom Morton-coded BVH8 layout with 32-leaf primitive clustering to isolate the precise cost of
-                            second-order calculations versus structural spatial transformations against standard offline octrees.
-                        </li>
-                        <li>
-                            <strong class="text-slate-900">PyTorch (Native):</strong> A raw reference implementation utilizing optimized
-                            calculations via compiled execution loops (<code class="font-mono bg-slate-200/60 px-1 rounded">torch.compile</code>).
-                        </li>
-                        <li>
-                          <strong class="text-slate-900">LibIGL (CPU):</strong> The python bindings of the original standard implementation from <a
-                            href="https://dl.acm.org/doi/10.1145/3197517.3201337" target="_blank"
-                            class="text-cyan-600 font-medium hover:underline">Fast Winding Numbers for Soups and Meshes (Barill et al., ACM TOG
-                            2018)</a>. Note: The current python bindings only expose the mesh variant. Build time and compute time could not be untangled.
-                        </li>
-                        <li>
-                            <strong class="text-slate-900">Fast Dipole Sums:</strong> The original reference code implementation for <a
-                            href="https://dl.acm.org/doi/10.1145/3687914" target="_blank"
-                            class="text-cyan-600 font-medium hover:underline">Fast Dipole Sums for Point Clouds (Sharp et al., ACM TOG 2024)</a>. 
-                          <span class="text-amber-700 font-medium block mt-0.5">⚠️ Note: Fast Dipole Sums encountered a memory access error during
-                            execution on code <class="font-mono bg-slate-200/60 px-1 rounded">jaws_attack_benchy.obj</code> and is omitted from
-                              its execution track.</span>
-                        </li>
-                    </ul>
+    <div class="lg:col-span-2 space-y-2.5">
+        <h4 class="text-sm font-bold text-slate-800 uppercase tracking-wider">Engine Backends &amp; Baselines</h4>
+        <ul class="space-y-2 list-none pl-0">
+            <li>
+                <strong class="text-slate-900">Brute Force (GPU):</strong> Winder’s custom GPU-optimized brute force code path. Serves
+                as the exact ground-truth numerical reference across all modality workflows.
+            </li>
+            <li>
+                <strong class="text-slate-900">Winder (Production):</strong> Our production pipeline, evaluating highly optimized
+                accelerated tracking steps across an 8-way bounding volume hierarchy.
+            </li>
+            <li>
+                <strong class="text-slate-900">Winder (Zero-Order):</strong> An isolated architectural variant branch running
+                exclusively with <code class="font-mono bg-slate-200/60 px-1 rounded">bfloat16</code> zero-order coefficients. This
+                variant uses our custom Morton-coded BVH8 layout with 32-leaf primitive clustering to isolate the precise cost of
+                second-order calculations versus structural spatial transformations against standard offline octrees.
+            </li>
+            <li>
+                <strong class="text-slate-900">PyTorch (Native):</strong> A raw reference implementation utilizing optimized
+                calculations via compiled execution loops (<code class="font-mono bg-slate-200/60 px-1 rounded">torch.compile</code>).
+            </li>
+            <li>
+              <strong class="text-slate-900">LibIGL (CPU):</strong> The python bindings of the original standard implementation from <a
+                href="https://dl.acm.org/doi/10.1145/3197517.3201337" target="_blank"
+                class="text-cyan-600 font-medium hover:underline">Fast Winding Numbers for Soups and Meshes (Barill et al., ACM TOG
+                2018)</a>. Note: The current python bindings only expose the mesh variant. Build time and compute time could not be untangled.
+            </li>
+            <li>
+                <strong class="text-slate-900">Fast Dipole Sums:</strong> The original reference code implementation for <a
+                href="https://dl.acm.org/doi/10.1145/3687914" target="_blank"
+                class="text-cyan-600 font-medium hover:underline">Fast Dipole Sums for Point Clouds (Sharp et al., ACM TOG 2024)</a>.
+              <span class="text-amber-700 font-medium block mt-0.5">⚠️ Note: Fast Dipole Sums encountered a memory access error during
+                execution on code <code class="font-mono bg-slate-200/60 px-1 rounded">jaws_attack_benchy.obj</code> and is omitted from
+                  its execution track.</span>
+            </li>
+        </ul>
+    </div>
+
+    <div class="space-y-4 border-t lg:border-t-0 lg:border-l border-slate-200 pt-4 lg:pt-0 lg:pl-6">
+        <div>
+            <h4 class="text-sm font-bold text-slate-800 uppercase tracking-wider mb-2.5">Evaluation Workload</h4>
+            <div class="space-y-3">
+                <div>
+                    <span class="font-semibold text-slate-900 block">Query Dimensionality</span>
+                    Performance profiles capture continuous operations mapped across 1,200 temporal frames running over a fixed $256^2$ spatial grid.
                 </div>
-                <div class="space-y-2.5 border-t lg:border-t-0 lg:border-l border-slate-200 pt-4 lg:pt-0 lg:pl-6">
-                    <h4 class="text-sm font-bold text-slate-800 uppercase tracking-wider">Evaluation Workload</h4>
-                    <div class="space-y-3">
-                        <div>
-                            <span class="font-semibold text-slate-900 block">Query Dimensionality</span>
-                            Performance profiles capture continuous operations mapped across 1,200 temporal frames running over a fixed $256^2$ spatial grid.
-                        </div>
-                        <div>
-                            <span class="font-semibold text-slate-900 block">Execution Mode</span>
-                            All evaluation schemes except for "torch" pass the entire allocation layout of $256^2 \times 1,200$ evaluation targets
-                            simultaneously within a single contiguous array kernel invocation to maximize hardware concurrency.
-                        </div>
-                    </div>
+                <div>
+                    <span class="font-semibold text-slate-900 block">Execution Mode</span>
+                    All evaluation schemes except for "torch" pass the entire allocation layout of $256^2 \times 1,200$ evaluation targets
+                    simultaneously within a single contiguous array kernel invocation to maximize hardware concurrency.
                 </div>
             </div>
+        </div>
+
+        <div class="border-t border-slate-200 pt-4">
+            <h4 class="text-sm font-bold text-slate-800 uppercase tracking-wider mb-2.5">Hardware Environment</h4>
+            <div class="space-y-2">
+                <div>
+                    <span class="font-semibold text-slate-900 block">GPU</span>
+                    <span class="font-mono text-[11px] bg-slate-200/70 px-1.5 py-0.5 rounded text-slate-800 inline-block mt-0.5">
+                        NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition
+                    </span>
+                </div>
+                <div>
+                    <span class="font-semibold text-slate-900 block">CPU</span>
+                    <span class="font-mono text-[11px] bg-slate-200/70 px-1.5 py-0.5 rounded text-slate-800 inline-block mt-0.5">
+                        AMD Ryzen Threadripper PRO 5955WX 16-Cores
+                    </span>
+                </div>
+            </div>
+        </div>
+      </div>
+    </div>
 
             <div class="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-wrap gap-6 items-center justify-between">
                 <div class="flex flex-wrap items-center gap-6">
@@ -792,107 +812,107 @@
     <script>
         // Parsed Benchmark Data Matrix from your CSV logs
         const benchmarkDataset = {
-            mesh: {
-                "benchy.obj": {
-                    elements: "225,154 triangles",
-                    metrics: {
-                        brute_force: { build_time: 0.01317, compute_time: 52.33323, rmse: 0.0 },
-                        winder_fwn: { build_time: 0.00141, compute_time: 0.94016, rmse: 0.01237 },
-                        winder_zero: { build_time: 0.01165, compute_time: 0.34188, rmse: 0.02178 },
-                        libigl: { build_time: 0.0, compute_time: 124.67419, rmse: 0.00231 },
-                        pytorch_ref: { build_time: 0.0, compute_time: 73.25829, rmse: 0.00028 }
-                    }
-                },
-                "cheeky_monkey.obj": {
-                    elements: "910,154 triangles",
-                    metrics: {
-                        brute_force: { build_time: 0.01378, compute_time: 218.80974, rmse: 0.0 },
-                        winder_fwn: { build_time: 0.00176, compute_time: 0.97843, rmse: 0.02075 },
-                        winder_zero: { build_time: 0.01169, compute_time: 0.41505, rmse: 0.01678 },
-                        libigl: { build_time: 0.0, compute_time: 10.14851, rmse: 0.01186 },
-                        pytorch_ref: { build_time: 0.0, compute_time: 314.27667, rmse: 0.00043 }
-                    }
-                },
-                "diaggihl_the_master.obj": {
-                    elements: "5,145,676 triangles",
-                    metrics: {
-                        brute_force: { build_time: 0.01591, compute_time: 1244.33250, rmse: 0.0 },
-                        winder_fwn: { build_time: 0.00478, compute_time: 0.61600, rmse: 0.00653 },
-                        winder_zero: { build_time: 0.01406, compute_time: 0.25374, rmse: 0.00938 },
-                        libigl: { build_time: 0.0, compute_time: 8.48112, rmse: 0.00114 },
-                        pytorch_ref: { build_time: 0.0, compute_time: 1823.14424, rmse: 0.00105 }
-                    }
-                },
-                "ghost_benchy.obj": {
-                    elements: "233,870 triangles",
-                    metrics: {
-                        brute_force: { build_time: 0.01358, compute_time: 55.37902, rmse: 0.0 },
-                        winder_fwn: { build_time: 0.00138, compute_time: 1.04183, rmse: 0.00902 },
-                        winder_zero: { build_time: 0.01142, compute_time: 0.43587, rmse: 0.02010 },
-                        libigl: { build_time: 0.0, compute_time: 7.02044, rmse: 0.00087 },
-                        pytorch_ref: { build_time: 0.0, compute_time: 79.82552, rmse: 0.00016 }
-                    }
-                },
-                "jaws_attack_benchy.obj": {
-                    elements: "538,660 triangles",
-                    metrics: {
-                        brute_force: { build_time: 0.01315, compute_time: 128.61686, rmse: 0.0 },
-                        winder_fwn: { build_time: 0.00169, compute_time: 0.83385, rmse: 0.03027 },
-                        winder_zero: { build_time: 0.01117, compute_time: 0.31444, rmse: 0.02961 },
-                        libigl: { build_time: 0.0, compute_time: 79.12992, rmse: 0.00058 },
-                        pytorch_ref: { build_time: 0.0, compute_time: 181.23715, rmse: 0.00032 }
-                    }
-                },
-                "mack_rhukta.obj": {
-                    elements: "2,754,400 triangles",
-                    metrics: {
-                        brute_force: { build_time: 0.01460, compute_time: 665.39219, rmse: 0.0 },
-                        winder_fwn: { build_time: 0.00304, compute_time: 1.07431, rmse: 0.01729 },
-                        winder_zero: { build_time: 0.01314, compute_time: 0.45273, rmse: 0.00900 },
-                        libigl: { build_time: 0.0, compute_time: 9.31280, rmse: 0.00093 },
-                        pytorch_ref: { build_time: 0.0, compute_time: 954.35753, rmse: 0.00065 }
-                    }
-                },
-                "orc_chief_nakhbruh.obj": {
-                    elements: "2,118,386 triangles",
-                    metrics: {
-                        brute_force: { build_time: 0.01388, compute_time: 510.77662, rmse: 0.0 },
-                        winder_fwn: { build_time: 0.00255, compute_time: 1.00896, rmse: 0.01654 },
-                        winder_zero: { build_time: 0.01286, compute_time: 0.43918, rmse: 0.00978 },
-                        libigl: { build_time: 0.0, compute_time: 6.87530, rmse: 0.00094 },
-                        pytorch_ref: { build_time: 0.0, compute_time: 733.57617, rmse: 0.00061 }
-                    }
-                },
-                "salty_mc_creedy.obj": {
-                    elements: "1,990,670 triangles",
-                    metrics: {
-                        brute_force: { build_time: 0.01432, compute_time: 481.09027, rmse: 0.0 },
-                        winder_fwn: { build_time: 0.00252, compute_time: 0.99506, rmse: 0.01650 },
-                        winder_zero: { build_time: 0.01225, compute_time: 0.43707, rmse: 0.01220 },
-                        libigl: { build_time: 0.0, compute_time: 16.58708, rmse: 0.00084 },
-                        pytorch_ref: { build_time: 0.0, compute_time: 688.75389, rmse: 0.00054 }
-                    }
-                },
-                "snakeman.obj": {
-                    elements: "5,000,608 triangles",
-                    metrics: {
-                        brute_force: { build_time: 0.01600, compute_time: 1210.46181, rmse: 0.0 },
-                        winder_fwn: { build_time: 0.00517, compute_time: 0.50111, rmse: 0.00878 },
-                        winder_zero: { build_time: 0.01472, compute_time: 0.20507, rmse: 0.00866 },
-                        libigl: { build_time: 0.0, compute_time: 7.42541, rmse: 0.00120 },
-                        pytorch_ref: { build_time: 0.0, compute_time: 1806.74488, rmse: 0.00111 }
-                    }
-                },
-                "su_laegildah.obj": {
-                    elements: "3,356,812 triangles",
-                    metrics: {
-                        brute_force: { build_time: 0.01530, compute_time: 812.21414, rmse: 0.0 },
-                        winder_fwn: { build_time: 0.00369, compute_time: 1.09915, rmse: 0.01548 },
-                        winder_zero: { build_time: 0.01311, compute_time: 0.47889, rmse: 0.00984 },
-                        libigl: { build_time: 0.0, compute_time: 9.52302, rmse: 0.00088 },
-                        pytorch_ref: { build_time: 0.0, compute_time: 1165.54672, rmse: 0.00063 }
-                    }
-                }
+          mesh: {
+              "benchy.obj": {
+                  elements: "225,154 triangles",
+                  metrics: {
+                      brute_force: { build_time: 0.01317, compute_time: 52.33323, rmse: 0.0 },
+                      winder_fwn: { build_time: 0.00141, compute_time: 0.94016, rmse: 0.00864 },
+                      winder_zero: { build_time: 0.01165, compute_time: 0.34188, rmse: 0.02178 },
+                      libigl: { build_time: 0.0, compute_time: 124.67419, rmse: 0.00231 },
+                      pytorch_ref: { build_time: 0.0, compute_time: 73.25829, rmse: 0.00028 }
+                  }
+              },
+              "cheeky_monkey.obj": {
+                  elements: "910,154 triangles",
+                  metrics: {
+                      brute_force: { build_time: 0.01378, compute_time: 218.80974, rmse: 0.0 },
+                      winder_fwn: { build_time: 0.00176, compute_time: 0.97843, rmse: 0.01520 },
+                      winder_zero: { build_time: 0.01169, compute_time: 0.41505, rmse: 0.01678 },
+                      libigl: { build_time: 0.0, compute_time: 10.14851, rmse: 0.01186 },
+                      pytorch_ref: { build_time: 0.0, compute_time: 314.27667, rmse: 0.00043 }
+                  }
+              },
+              "diaggihl_the_master.obj": {
+                  elements: "5,145,676 triangles",
+                  metrics: {
+                      brute_force: { build_time: 0.01591, compute_time: 1244.33250, rmse: 0.0 },
+                      winder_fwn: { build_time: 0.00478, compute_time: 0.61600, rmse: 0.00537 },
+                      winder_zero: { build_time: 0.01406, compute_time: 0.25374, rmse: 0.00938 },
+                      libigl: { build_time: 0.0, compute_time: 8.48112, rmse: 0.00114 },
+                      pytorch_ref: { build_time: 0.0, compute_time: 1823.14424, rmse: 0.00105 }
+                  }
+              },
+              "ghost_benchy.obj": {
+                  elements: "233,870 triangles",
+                  metrics: {
+                      brute_force: { build_time: 0.01358, compute_time: 55.37902, rmse: 0.0 },
+                      winder_fwn: { build_time: 0.00138, compute_time: 1.04183, rmse: 0.00743 },
+                      winder_zero: { build_time: 0.01142, compute_time: 0.43587, rmse: 0.02010 },
+                      libigl: { build_time: 0.0, compute_time: 7.02044, rmse: 0.00087 },
+                      pytorch_ref: { build_time: 0.0, compute_time: 79.82552, rmse: 0.00016 }
+                  }
+              },
+              "jaws_attack_benchy.obj": {
+                  elements: "538,660 triangles",
+                  metrics: {
+                      brute_force: { build_time: 0.01315, compute_time: 128.61686, rmse: 0.0 },
+                      winder_fwn: { build_time: 0.00169, compute_time: 0.83385, rmse: 0.01700 },
+                      winder_zero: { build_time: 0.01117, compute_time: 0.31444, rmse: 0.02961 },
+                      libigl: { build_time: 0.0, compute_time: 79.12992, rmse: 0.00058 },
+                      pytorch_ref: { build_time: 0.0, compute_time: 181.23715, rmse: 0.00032 }
+                  }
+              },
+              "mack_rhukta.obj": {
+                  elements: "2,754,400 triangles",
+                  metrics: {
+                      brute_force: { build_time: 0.01460, compute_time: 665.39219, rmse: 0.0 },
+                      winder_fwn: { build_time: 0.00304, compute_time: 1.07431, rmse: 0.01368 },
+                      winder_zero: { build_time: 0.01314, compute_time: 0.45273, rmse: 0.00900 },
+                      libigl: { build_time: 0.0, compute_time: 9.31280, rmse: 0.00093 },
+                      pytorch_ref: { build_time: 0.0, compute_time: 954.35753, rmse: 0.00065 }
+                  }
+              },
+              "orc_chief_nakhbruh.obj": {
+                  elements: "2,118,386 triangles",
+                  metrics: {
+                      brute_force: { build_time: 0.01388, compute_time: 510.77662, rmse: 0.0 },
+                      winder_fwn: { build_time: 0.00255, compute_time: 1.00896, rmse: 0.01470 },
+                      winder_zero: { build_time: 0.01286, compute_time: 0.43918, rmse: 0.00978 },
+                      libigl: { build_time: 0.0, compute_time: 6.87530, rmse: 0.00094 },
+                      pytorch_ref: { build_time: 0.0, compute_time: 733.57617, rmse: 0.00061 }
+                  }
+              },
+              "salty_mc_creedy.obj": {
+                  elements: "1,990,670 triangles",
+                  metrics: {
+                      brute_force: { build_time: 0.01432, compute_time: 481.09027, rmse: 0.0 },
+                      winder_fwn: { build_time: 0.00252, compute_time: 0.99506, rmse: 0.01379 },
+                      winder_zero: { build_time: 0.01225, compute_time: 0.43707, rmse: 0.01220 },
+                      libigl: { build_time: 0.0, compute_time: 16.58708, rmse: 0.00084 },
+                      pytorch_ref: { build_time: 0.0, compute_time: 688.75389, rmse: 0.00054 }
+                  }
+              },
+              "snakeman.obj": {
+                  elements: "5,000,608 triangles",
+                  metrics: {
+                      brute_force: { build_time: 0.01600, compute_time: 1210.46181, rmse: 0.0 },
+                      winder_fwn: { build_time: 0.00517, compute_time: 0.50111, rmse: 0.00718 },
+                      winder_zero: { build_time: 0.01472, compute_time: 0.20507, rmse: 0.00866 },
+                      libigl: { build_time: 0.0, compute_time: 7.42541, rmse: 0.00120 },
+                      pytorch_ref: { build_time: 0.0, compute_time: 1806.74488, rmse: 0.00111 }
+                  }
+              },
+              "su_laegildah.obj": {
+                  elements: "3,356,812 triangles",
+                  metrics: {
+                      brute_force: { build_time: 0.01530, compute_time: 812.21414, rmse: 0.0 },
+                      winder_fwn: { build_time: 0.00369, compute_time: 1.09915, rmse: 0.01429 },
+                      winder_zero: { build_time: 0.01311, compute_time: 0.47889, rmse: 0.00984 },
+                      libigl: { build_time: 0.0, compute_time: 9.52302, rmse: 0.00088 },
+                      pytorch_ref: { build_time: 0.0, compute_time: 1165.54672, rmse: 0.00063 }
+                  }
+              }
             },
             points: {
                 "benchy.obj": {
@@ -1065,7 +1085,7 @@
                 opt.textContent = modelKey;
                 modelSelector.appendChild(opt);
             });
-            
+
             initPlayButtonControl();
             updateInteractiveSuite();
         }
@@ -1083,7 +1103,7 @@
             function resolveTimeValue(metricsBlock, targetEngine) {
                 const data = metricsBlock[targetEngine];
                 if (!data || (targetEngine !== 'fast_dipole' && data.compute_time === 0)) return null;
-                if (targetEngine === 'fast_dipole' && data.build_time === 0 && data.compute_time === 0) return null; 
+                if (targetEngine === 'fast_dipole' && data.build_time === 0 && data.compute_time === 0) return null;
 
                 if (selectedMetric === "total") {
                     return data.compute_time + data.build_time;
@@ -1297,14 +1317,14 @@
         function syncVideos() {
             // Select all video elements on the page (or use a specific class like '.compare-video')
             const videos = document.querySelectorAll('video');
-            
+
             // First, pause all videos and rewind them to the start
             videos.forEach(video => {
                 video.pause();
                 video.currentTime = 0;
             });
 
-            // Play them all simultaneously 
+            // Play them all simultaneously
             videos.forEach(video => {
                 // .play() returns a promise, it's good practice to catch browser autoplay blocks
                 video.play().catch(error => {
