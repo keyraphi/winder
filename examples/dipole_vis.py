@@ -138,9 +138,9 @@ def main():
     video_path = f"{args.prefix}_slices.mp4"
     print(f"Colorizing and saving video slices to {video_path}...")
     if args.type == "dipole":
-        winding_number_color = apply_colormap_gpu(winding_number_field, args.resolution, vmin=-2.0, vmax=2.0)
+        winding_number_color = apply_colormap_gpu(winding_number_field.permute(0,2,1), args.resolution, vmin=-2.0, vmax=2.0)
     else:
-        winding_number_color = apply_colormap_gpu(winding_number_field, args.resolution, vmin=-0.5, vmax=0.5)
+        winding_number_color = apply_colormap_gpu(winding_number_field.permute(0,2,1), args.resolution, vmin=-0.5, vmax=0.5)
 
     write_video(video_path, winding_number_color, is_lossless=False)
 
