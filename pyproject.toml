@@ -4,18 +4,26 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "winder"
-version = "0.1.0"
+version = "0.1.0b1"
 description = "Fast Differentiable Winding Numbers on GPU"
+readme = "README.md"
 authors = [
     { name = "Raphael Braun", email = "keyraphi@gmail.com" }
 ]
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: Linux",
+]
+license = ["MIT"]
+
+[project.urls]
+Homepage = "https://keyraphi.github.io/winder/"
+Issues = "https://github.com/keyraphi/winder/issues"
 
 [project.optional-dependencies]
 dev = [
-    "black",
-    "isort",
     "numpy"
 ]
 
