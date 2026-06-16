@@ -233,6 +233,44 @@
                     $\tilde{p}$. They are independent of the query position $q$, meaning they can be precomputed once during tree
                     construction and cached inside each non-empty node.
                 </p>
+              <div class="my-8">
+                  <span class="block text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
+                      <svg class="w-4 h-4 text-cyan-600 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                      </svg>
+                      Winding Number Field Representations (Single Dipole)
+                  </span>
+                  
+                  <div class="flex flex-col md:flex-row gap-4">
+                      
+                      <div class="flex-1">
+                          <span class="block text-xs font-medium text-slate-500 mb-1.5 px-1">2D Sweeping Planar Slices</span>
+                          <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
+                              <video class="w-full h-full object-cover" autoplay loop muted playsinline>
+                                  <source src="media/single_dipole_slices.mp4" type="video/mp4">
+                                  Your browser does not support HTML5 video loops.
+                              </video>
+                          </div>
+                      </div>
+                      
+                      <div class="flex-1">
+                          <span class="block text-xs font-medium text-slate-500 mb-1.5 px-1">3D Volumetric Orbital Render</span>
+                          <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
+                              <video class="w-full h-full object-cover" autoplay loop muted playsinline>
+                                  <source src="media/single_dipole.mp4" type="video/mp4">
+                                  Your browser does not support HTML5 video loops.
+                              </video>
+                          </div>
+                      </div>
+
+                  </div>
+                  
+                  <span class="block text-xs text-slate-500 mt-2.5 italic leading-relaxed">
+                      Figure 2.1: Visualization of the winding number field of a single dipole.
+                      Left: Progressive cross-sectional scans. Right: Path-traced 3D volumetric field.
+                      Note: The field quickly diminishes with distance to the dipole in the center.
+                  </span>
+              </div>
 
                 <h4 class="text-sm font-bold text-slate-700 tracking-wide uppercase mt-6">Triangle Soup Expansion Formulation</h4>
                 <p>
@@ -275,6 +313,45 @@
                 speeds when evaluating massive meshes, unoriented point clouds, and raw geometric soups containing millions of
                 elements.
                 </p>
+
+              <div class="my-8">
+                  <span class="block text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
+                      <svg class="w-4 h-4 text-cyan-600 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                      </svg>
+                      Winding Number Field Representations (Single Triangle)
+                  </span>
+                  
+                  <div class="flex flex-col md:flex-row gap-4">
+                      
+                      <div class="flex-1">
+                          <span class="block text-xs font-medium text-slate-500 mb-1.5 px-1">2D Sweeping Planar Slices</span>
+                          <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
+                              <video class="w-full h-full object-cover" autoplay loop muted playsinline>
+                                  <source src="media/single_triangle_slices.mp4" type="video/mp4">
+                                  Your browser does not support HTML5 video loops.
+                              </video>
+                          </div>
+                      </div>
+                      
+                      <div class="flex-1">
+                          <span class="block text-xs font-medium text-slate-500 mb-1.5 px-1">3D Volumetric Orbital Render</span>
+                          <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
+                              <video class="w-full h-full object-cover" autoplay loop muted playsinline>
+                                  <source src="media/single_triangle.mp4" type="video/mp4">
+                                  Your browser does not support HTML5 video loops.
+                              </video>
+                          </div>
+                      </div>
+
+                  </div>
+                  
+                  <span class="block text-xs text-slate-500 mt-2.5 italic leading-relaxed">
+                      Figure 2.1: Visualization of the winding number field of a single triangle.
+                      Left: Progressive cross-sectional scans. Right: Path-traced 3D volumetric field.
+                      Note: The field quickly diminishes with distance to the triangle.
+                  </span>
+              </div>
             </div>
         </section>
 
@@ -376,12 +453,12 @@
                     </span>
                     <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
                         <video class="w-full h-full object-cover" autoplay loop muted playsinline>
-                            <source src="media/promotion_video_endless.mkv" type="video/x-matroska">
+                            <source src="media/promotion_video_endless.mp4" type="video/x-matroska">
                             Your browser does not support HTML5 video loops.
                         </video>
                     </div>
                     <span class="block text-xs text-slate-500 mt-1.5 italic">
-                        Figure 4.1: Continuous diagnostics visualizing the wide 8-ary branching factor, depth compression layers, and structural alignment fields across spatial evaluation boundaries.
+                        Figure 4.1: Visualization of the the wide 8-ary BVH8 (purple), and the leafs (green) we get from the morton order.
                     </span>
                 </div>
 
