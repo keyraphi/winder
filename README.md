@@ -11,7 +11,7 @@ Building massively parallel, GPU-accelerated C++/CUDA spatial structures to eval
 
 `winder` is designed to compute 3D geometric winding numbers across massive query grids entirely on the GPU. By leveraging highly optimized spatial data structures (such as specialized 8-ary Bounding Volume Hierarchies), the library collapses the typical $\mathcal{O}(N \times M)$ brute-force complexity of mesh evaluation down to high-speed logarithmic bounds. 
 
-Whether you are evaluating solid angles of open sheets, identifying inside/outside boundaries of complex closed manifolds, or computing continuous volumetric fields for graphics and physical simulations, `winder` handles millions of primitives and queries seamlessly via native PyTorch integration.
+Whether you are evaluating solid angles of open sheets, identifying inside/outside boundaries of complex closed manifolds, or computing continuous volumetric fields for graphics and physical simulations, `winder` handles millions of primitives and queries seamlessly. Integration to torch, tensorflow, jax, etc works via DLPack-capsules.
 
 For an in-depth dive into the underlying mathematical principles, spatial layout partitioning, and performance benchmarks, read our formal write-up:
 
@@ -25,6 +25,7 @@ Because `winder` is currently in beta, releases are published to PyPI as pre-rel
 
 ```bash
 pip install winder --pre
+'''
 
 ## System Requirements
 
@@ -85,7 +86,7 @@ winding_brute = engine.brute_force(queries)
 # Method B: Calculate using the optimized accelerated tree structure
 winding_fast = engine.compute(queries)
 
-# Load into torch tensors
+# Load DLPack-capsules into torch tensors
 winding_brute = torch.from_dlpack(winding_brute)
 winding_fast = torch.from_dlpack(winding_fast)
 
