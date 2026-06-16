@@ -81,10 +81,10 @@ struct Triangle {
 
   [[nodiscard]] auto dump() const -> std::string {
     // Returns a compact, single-line representation safe for HTML labels
-    return std::format(
-        "v0:({:.2f}, {:.2f}, {:.2f}) | v1:({:.2f}, {:.2f}, {:.2f}) | v2:({:.2f}, {:.2f}, {:.2f})",
-        v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
-}
+    return std::format("v0:({:.2f}, {:.2f}, {:.2f}) | v1:({:.2f}, {:.2f}, "
+                       "{:.2f}) | v2:({:.2f}, {:.2f}, {:.2f})",
+                       v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
+  }
 };
 
 struct PointNormal {
@@ -109,10 +109,9 @@ struct PointNormal {
   [[nodiscard]] auto dump() const -> std::string {
     // Returns a compact, single-line representation safe for HTML labels
     return std::format(
-        "Pos:({:.2f}, {:.2f}, {:.2f}) | Norm:({:.2f}, {:.2f}, {:.2f})", 
-        p.x, p.y, p.z, n.x, n.y, n.z);
-}
-
+        "Pos:({:.2f}, {:.2f}, {:.2f}) | Norm:({:.2f}, {:.2f}, {:.2f})", p.x,
+        p.y, p.z, n.x, n.y, n.z);
+  }
 };
 
 __host__ __device__ __forceinline__ auto
@@ -191,24 +190,24 @@ Triangle::get_tailor_terms(const Vec3 &p_center, bool is_active,
     zero_order = n;
     first_order = d.outer_product(n);
 
-    second_order.data[0] = Ct.data[0] * n.x;
-    second_order.data[1] = Ct.data[0] * n.y;
-    second_order.data[2] = Ct.data[0] * n.z;
-    second_order.data[3] = Ct.data[1] * n.x;
-    second_order.data[4] = Ct.data[1] * n.y;
-    second_order.data[5] = Ct.data[1] * n.z;
-    second_order.data[6] = Ct.data[2] * n.x;
-    second_order.data[7] = Ct.data[2] * n.y;
-    second_order.data[8] = Ct.data[2] * n.z;
-    second_order.data[9] = Ct.data[3] * n.x;
-    second_order.data[10] = Ct.data[3] * n.y;
-    second_order.data[11] = Ct.data[3] * n.z;
-    second_order.data[12] = Ct.data[4] * n.x;
-    second_order.data[13] = Ct.data[4] * n.y;
-    second_order.data[14] = Ct.data[4] * n.z;
-    second_order.data[15] = Ct.data[5] * n.x;
-    second_order.data[16] = Ct.data[5] * n.y;
-    second_order.data[17] = Ct.data[5] * n.z;
+    second_order.data[0] = 0.5F * Ct.data[0] * n.x;
+    second_order.data[1] = 0.5F * Ct.data[0] * n.y;
+    second_order.data[2] = 0.5F * Ct.data[0] * n.z;
+    second_order.data[3] = 0.5F * Ct.data[1] * n.x;
+    second_order.data[4] = 0.5F * Ct.data[1] * n.y;
+    second_order.data[5] = 0.5F * Ct.data[1] * n.z;
+    second_order.data[6] = 0.5F * Ct.data[2] * n.x;
+    second_order.data[7] = 0.5F * Ct.data[2] * n.y;
+    second_order.data[8] = 0.5F * Ct.data[2] * n.z;
+    second_order.data[9] = 0.5F * Ct.data[3] * n.x;
+    second_order.data[10] = 0.5F * Ct.data[3] * n.y;
+    second_order.data[11] = 0.5F * Ct.data[3] * n.z;
+    second_order.data[12] = 0.5F * Ct.data[4] * n.x;
+    second_order.data[13] = 0.5F * Ct.data[4] * n.y;
+    second_order.data[14] = 0.5F * Ct.data[4] * n.z;
+    second_order.data[15] = 0.5F * Ct.data[5] * n.x;
+    second_order.data[16] = 0.5F * Ct.data[5] * n.y;
+    second_order.data[17] = 0.5F * Ct.data[5] * n.z;
   } else {
     // for inactive threads neutral element wrt. +
     zero_order = Vec3{0.F, 0.F, 0.F};

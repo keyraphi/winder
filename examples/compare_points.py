@@ -84,7 +84,7 @@ def write_video(
     video_path: str, frames_numpy_array: NPT.ArrayLike, fps=25, is_lossless: bool = True
 ):
     with iio.imopen(video_path, "w", plugin="pyav") as file:
-        file.init_video_stream("libx264rgb", fps=fps, pixel_format="yuv420p")
+        file.init_video_stream("libx264rgb", fps=fps, pixel_format="rgb24")
 
         if is_lossless:
             # lossless, best compression
