@@ -112,7 +112,7 @@
                   the surface primitives relative to the evaluation site $x \in \mathbb{R}^3$. For any continuous, closed manifold surface
                   $\mathcal{M}$, the continuous winding field evaluator calculates precisely $1$ inside the core container and $0$ outside:
                 </p>
-                <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center">
+                <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
                     $$\mathcal{W}(x) = \frac{1}{4\pi} \iint_{\mathcal{M}} \frac{(p - x) \cdot n(p)}{\|p - x\|^3} \, dA(p)$$
                 </div>
                 <p>
@@ -126,7 +126,7 @@
                     evaluated as the sum of signed solid angles $\Omega_t$ subtended by each individual triangle $t$ within the collection
                     $\mathcal{T}$:
                 </p>
-                <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center">
+                <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
                     $$\mathcal{W}_{\text{mesh}}(x) = \frac{1}{4\pi} \sum_{t \in \mathcal{T}} \Omega_t(x)$$
                 </div>
                 <p>
@@ -137,20 +137,99 @@
                     positions defined relative to the query point as $a = v_1 - x$, $b = v_2 - x$, and $c = v_3 - x$, the solid angle is
                     computed via:
                 </p>
-                <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center">
+                <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
                     $$\tan\left(\frac{\Omega_t(x)}{2}\right) = \frac{a \cdot (b \times c)}{\|a\|\|b\|\|c\| + (a \cdot b)\|c\| + (b \cdot c)\|a\| + (c \cdot a)\|b\|}$$
                 </div>
+
+              <div class="my-8">
+                  <span class="block text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
+                      <svg class="w-4 h-4 text-cyan-600 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                      </svg>
+                      Winding Number Field Representations (Single Triangle)
+                  </span>
+                  
+                  <div class="flex flex-col md:flex-row gap-4">
+                      
+                      <div class="flex-1">
+                          <span class="block text-xs font-medium text-slate-500 mb-1.5 px-1">2D Sweeping Planar Slices</span>
+                          <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
+                              <video class="w-full h-full object-cover" autoplay loop muted playsinline>
+                                  <source src="media/single_triangle_slices.mp4" type="video/mp4">
+                                  Your browser does not support HTML5 video loops.
+                              </video>
+                          </div>
+                      </div>
+                      
+                      <div class="flex-1">
+                          <span class="block text-xs font-medium text-slate-500 mb-1.5 px-1">3D Volumetric Orbital Render</span>
+                          <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
+                              <video class="w-full h-full object-cover" autoplay loop muted playsinline>
+                                  <source src="media/single_triangle.mp4" type="video/mp4">
+                                  Your browser does not support HTML5 video loops.
+                              </video>
+                          </div>
+                      </div>
+
+                  </div>
+                  
+                  <span class="block text-xs text-slate-500 mt-2.5 italic leading-relaxed">
+                      Figure 2.1: Visualization of the winding number field of a single triangle.
+                      Left: Progressive cross-sectional scans. Right: Path-traced 3D volumetric field.
+                      Note: The field quickly diminishes with distance to the triangle.
+                  </span>
+              </div>
+
                 <p>
                     For raw <strong>Point Clouds</strong> lacking explicit connectivity, the surface is treated as a distribution of point
                     dipoles. The continuous integration reduces to a discrete sum over point samples $i$:
                 </p>
-                <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center">
+                <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
                     $$\mathcal{W}_{\text{points}}(x) = \frac{1}{4\pi} \sum_{i} \frac{(p_i - x) \cdot n_i}{\|p_i - x\|^3} a_i$$
                 </div>
                 <p>
                     Where $p_i$ represents the 3D spatial position of point sample $i$, $n_i$ represents its oriented unit normal vector,
                     and $a_i$ denotes the localized surface area weight associated with that sample.
                 </p>
+
+              <div class="my-8">
+                  <span class="block text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
+                      <svg class="w-4 h-4 text-cyan-600 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                      </svg>
+                      Winding Number Field Representations (Single Dipole)
+                  </span>
+                  
+                  <div class="flex flex-col md:flex-row gap-4">
+                      
+                      <div class="flex-1">
+                          <span class="block text-xs font-medium text-slate-500 mb-1.5 px-1">2D Sweeping Planar Slices</span>
+                          <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
+                              <video class="w-full h-full object-cover" autoplay loop muted playsinline>
+                                  <source src="media/single_dipole_slices.mp4" type="video/mp4">
+                                  Your browser does not support HTML5 video loops.
+                              </video>
+                          </div>
+                      </div>
+                      
+                      <div class="flex-1">
+                          <span class="block text-xs font-medium text-slate-500 mb-1.5 px-1">3D Volumetric Orbital Render</span>
+                          <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
+                              <video class="w-full h-full object-cover" autoplay loop muted playsinline>
+                                  <source src="media/single_dipole.mp4" type="video/mp4">
+                                  Your browser does not support HTML5 video loops.
+                              </video>
+                          </div>
+                      </div>
+                  </div>
+                  
+                  <span class="block text-xs text-slate-500 mt-2.5 italic leading-relaxed">
+                      Figure 2.1: Visualization of the winding number field of a single dipole.
+                      Left: Progressive cross-sectional scans. Right: Path-traced 3D volumetric field.
+                      Note: The field quickly diminishes with distance to the dipole in the center.
+                  </span>
+              </div>
+
                 <p>
                     By framing inside-outside segmentation through continuous integration, this formulation is highly resilient to
                     topological defects, self-intersections, and structural holes. This mathematical foundation allows researchers to
@@ -215,7 +294,7 @@
                     For a node containing a cluster of $K$ area-weighted point dipoles, Barill et al. approximate the collective winding
                     number $\tilde{w}$ at an evaluation query coordinate $q$ via the following expansion:
                 </p>
-                <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center">
+                <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
                   $$\begin{align*}\tilde{w}(q) \approx & \left( \sum_{i=1}^{K} a_i \hat{n}_i \right) \cdot \nabla G(q, \tilde{p}) + \\
                   & \left( \sum_{i=1}^{K} a_i (p_i - \tilde{p}) \otimes \hat{n}_i \right) \cdot \nabla^2 G(q, \tilde{p}) +\\
                   & \frac{1}{2} \left( \sum_{i=1}^{K} a_i (p_i - \tilde{p}) \otimes (p_i - \tilde{p}) \otimes \hat{n}_i \right) \cdot \nabla^3 G(q, \tilde{p})\end{align*}$$
@@ -233,44 +312,6 @@
                     $\tilde{p}$. They are independent of the query position $q$, meaning they can be precomputed once during tree
                     construction and cached inside each non-empty node.
                 </p>
-              <div class="my-8">
-                  <span class="block text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
-                      <svg class="w-4 h-4 text-cyan-600 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
-                      </svg>
-                      Winding Number Field Representations (Single Dipole)
-                  </span>
-                  
-                  <div class="flex flex-col md:flex-row gap-4">
-                      
-                      <div class="flex-1">
-                          <span class="block text-xs font-medium text-slate-500 mb-1.5 px-1">2D Sweeping Planar Slices</span>
-                          <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
-                              <video class="w-full h-full object-cover" autoplay loop muted playsinline>
-                                  <source src="media/single_dipole_slices.mp4" type="video/mp4">
-                                  Your browser does not support HTML5 video loops.
-                              </video>
-                          </div>
-                      </div>
-                      
-                      <div class="flex-1">
-                          <span class="block text-xs font-medium text-slate-500 mb-1.5 px-1">3D Volumetric Orbital Render</span>
-                          <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
-                              <video class="w-full h-full object-cover" autoplay loop muted playsinline>
-                                  <source src="media/single_dipole.mp4" type="video/mp4">
-                                  Your browser does not support HTML5 video loops.
-                              </video>
-                          </div>
-                      </div>
-
-                  </div>
-                  
-                  <span class="block text-xs text-slate-500 mt-2.5 italic leading-relaxed">
-                      Figure 2.1: Visualization of the winding number field of a single dipole.
-                      Left: Progressive cross-sectional scans. Right: Path-traced 3D volumetric field.
-                      Note: The field quickly diminishes with distance to the dipole in the center.
-                  </span>
-              </div>
 
                 <h4 class="text-sm font-bold text-slate-700 tracking-wide uppercase mt-6">Triangle Soup Expansion Formulation</h4>
                 <p>
@@ -279,7 +320,7 @@
                     coefficients with continuous surface integrals evaluated across the flat area elements of each triangle $t$ inside the
                     node:
                 </p>
-                <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center">
+                <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
                   $$\begin{align*}\tilde{w}(q) \approx & \left( \sum_{t=1}^{K} \int_{t} \hat{n}_t \, dA \right) \cdot \nabla G(q, \tilde{p}) +\\
                   & \left( \sum_{t=1}^{K} \int_{t} (x - \tilde{p}) \otimes \hat{n}_t \, dA \right) \cdot \nabla^2 G(q, \tilde{p}) +\\
                   & \frac{1}{2} \left( \sum_{t=1}^{K} \int_{t} (x - \tilde{p}) \otimes (x - \tilde{p}) \otimes \hat{n}_t \, dA \right) \cdot \nabla^3 G(q, \tilde{p})\end{align*}$$
@@ -305,7 +346,7 @@
                     the structural precomputations and far-field evaluations across $n$ queries on a dataset of $m$ geometric primitives
                     drops to:
                 </p>
-                <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center">
+                <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
                     $$\mathcal{O}(3^p N \log N + 3^p M \log N)$$
                 </div>
                 <p>
@@ -314,44 +355,6 @@
                 elements.
                 </p>
 
-              <div class="my-8">
-                  <span class="block text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
-                      <svg class="w-4 h-4 text-cyan-600 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
-                      </svg>
-                      Winding Number Field Representations (Single Triangle)
-                  </span>
-                  
-                  <div class="flex flex-col md:flex-row gap-4">
-                      
-                      <div class="flex-1">
-                          <span class="block text-xs font-medium text-slate-500 mb-1.5 px-1">2D Sweeping Planar Slices</span>
-                          <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
-                              <video class="w-full h-full object-cover" autoplay loop muted playsinline>
-                                  <source src="media/single_triangle_slices.mp4" type="video/mp4">
-                                  Your browser does not support HTML5 video loops.
-                              </video>
-                          </div>
-                      </div>
-                      
-                      <div class="flex-1">
-                          <span class="block text-xs font-medium text-slate-500 mb-1.5 px-1">3D Volumetric Orbital Render</span>
-                          <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
-                              <video class="w-full h-full object-cover" autoplay loop muted playsinline>
-                                  <source src="media/single_triangle.mp4" type="video/mp4">
-                                  Your browser does not support HTML5 video loops.
-                              </video>
-                          </div>
-                      </div>
-
-                  </div>
-                  
-                  <span class="block text-xs text-slate-500 mt-2.5 italic leading-relaxed">
-                      Figure 2.1: Visualization of the winding number field of a single triangle.
-                      Left: Progressive cross-sectional scans. Right: Path-traced 3D volumetric field.
-                      Note: The field quickly diminishes with distance to the triangle.
-                  </span>
-              </div>
             </div>
         </section>
 
@@ -473,7 +476,7 @@
               <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200">
                   <div class="space-y-4">
                       <div>
-                          <span class="text-xs font-mono text-slate-500 block">1. Gradient w.r.t. Scaled Normals (Dipole Moments $m_i = a_i \cdot n_i \in \mathbb{R}^3$):</span>
+                          <span class="text-xs font-mono text-slate-500 block ">1. Gradient w.r.t. Scaled Normals (Dipole Moments $m_i = a_i \cdot n_i \in \mathbb{R}^3$):</span>
                           $$\frac{\partial \mathcal{L}}{\partial m_i} = \sum_{j=1}^{M} g_j \nabla G(x_j - p_i)$$
                       </div>
                       <hr class="border-slate-200" />
@@ -510,7 +513,7 @@
                       Expanding the vector dipole gradient field $\nabla G(x_j - p_i)$ for a single source point $p_i$ relative to the distant
                       query cluster centroid $\tilde{q}$ yields the multi-order tensor series:
                   </p>
-                  <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center">
+                  <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
                       $$\begin{align*}\nabla G(x_j - p_i) \approx & \nabla G(\tilde{q} - p_i) +\\
                       & \mathbf{H}_G(\tilde{q} - p_i)(x_j - \tilde{q}) + \\
                       & \frac{1}{2} \nabla^3 G(\tilde{q} - p_i) : \left[ (x_j - \tilde{q}) \otimes (x_j - \tilde{q}) \right]\end{align*}$$
@@ -519,7 +522,7 @@
                       Distributing the summation over the query indices $j$ isolates the geometry-independent parameters inside the
                       parentheses:
                   </p>
-                  <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center">
+                  <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
                       $$\begin{align*}\frac{\partial \mathcal{L}}{\partial m_i} \approx & \nabla G(\tilde{q} - p_i) \left( \sum_j g_j \right) + \\
                       & \mathbf{H}_G(\tilde{q} - p_i) \left( \sum_j g_j (x_j - \tilde{q}) \right) +\\
                       & \frac{1}{2} \nabla^3 G(\tilde{q} - p_i) : \left( \sum_j g_j (x_j - \tilde{q}) \otimes (x_j - \tilde{q}) \right)\end{align*}$$
@@ -537,7 +540,7 @@
                         Because the position gradient natively evaluates through the matrix-valued potential Hessian $\mathbf{H}_G(x_j - p_i)$,
                         we construct the Taylor series of this second-order tensor field around the cluster centroid $\tilde{q}$:
                     </p>
-                    <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center">
+                    <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
                         $$\begin{align*}\mathbf{H}_G(x_j - p_i) \approx & \mathbf{H}_G(\tilde{q} - p_i) +\\
                         & \nabla^3 G(\tilde{q} - p_i) \cdot (x_j - \tilde{q}) + \\
                         & \frac{1}{2} \nabla^4 G(\tilde{q} - p_i) : \left[ (x_j - \tilde{q}) \otimes (x_j - \tilde{q}) \right]\end{align*}$$
@@ -546,7 +549,7 @@
                         Factoring out the invariant source parameters and the dipole vector $m_i$, distributing the scalar loss adjoint $g_j$
                         isolates our unified query moments inside the contractions:
                     </p>
-                    <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center">
+                    <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
                         $$\begin{align*}\frac{\partial \mathcal{L}}{\partial p_i} \approx - \Biggl[ & \mathbf{H}_G(\tilde{q} - p_i) \left( \sum_j g_j \right) + \\
                         & \nabla^3 G(\tilde{q} - p_i) \cdot \left( \sum_j g_j (x_j - \tilde{q}) \right) + \\
                         & \frac{1}{2} \nabla^4 G(\tilde{q} - p_i) : \left( \sum_j g_j (x_j - \tilde{q}) \otimes (x_j - \tilde{q}) \right) \Biggr] m_i\end{align*}$$
@@ -566,7 +569,7 @@
                       Denoting the local vertex boundary derivative vector field as $F_k(x_j) = \frac{\partial \Omega_T(x_j)}{\partial v_k} \in \mathbb{R}^3$,
                       we express its Taylor serialization about $\tilde{q}$ directly as:
                   </p>
-                  <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center">
+                  <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
                       $$\begin{align*}F_k(x_j) \approx & F_k(\tilde{q}) +\\
                       & \nabla F_k(\tilde{q})(x_j - \tilde{q}) + \\
                       & \frac{1}{2} \mathbf{H}_{F_k}(\tilde{q}) : \left[ (x_j - \tilde{q}) \otimes (x_j - \tilde{q}) \right]\end{align*}$$
@@ -574,7 +577,7 @@
                   <p class="text-sm text-slate-600 mb-2">
                       Distributing the scalar loss adjoint $g_j$ yields the localized structural summation form:
                   </p>
-                  <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center">
+                  <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
                       $$\begin{align*}\frac{\partial \mathcal{L}}{\partial v_k} \approx & F_k(\tilde{q}) \left( \sum_j g_j \right) + \\
                       & \nabla F_k(\tilde{q}) \left( \sum_j g_j (x_j - \tilde{q}) \right) + \\
                       & \frac{1}{2} \mathbf{H}_{F_k}(\tilde{q}) : \left( \sum_j g_j (x_j - \tilde{q}) \otimes (x_j - \tilde{q}) \right)\end{align*}$$
@@ -789,6 +792,9 @@
                 </div>
             </div>
         </section>
+    <footer class="bg-slate-950 text-slate-500 text-center py-8 border-t border-slate-900 text-xs mt-16 font-mono">
+        <p>© 2026  Raphael Braun. Shared under MIT Licence.</p>
+    </footer>
 
     <script>
         // Parsed Benchmark Data Matrix from your CSV logs
