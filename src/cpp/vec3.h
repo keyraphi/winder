@@ -8,38 +8,38 @@
 struct Vec3;
 struct AABB;
 
-struct Vec3_bf16 {
-  nv_bfloat16 x, y, z;
+struct Vec3_f16 {
+  half x, y, z;
 
   __host__ __device__ __forceinline__ static auto from_float(const Vec3 &v)
-      -> Vec3_bf16;
+      -> Vec3_f16;
 
-  __host__ __device__ __forceinline__ auto operator+(const Vec3_bf16 &b) const
-      -> Vec3_bf16 {
+  __host__ __device__ __forceinline__ auto operator+(const Vec3_f16 &b) const
+      -> Vec3_f16 {
     return {x + b.x, y + b.y, z + b.z};
   }
-  __host__ __device__ __forceinline__ auto operator-(const Vec3_bf16 &b) const
-      -> Vec3_bf16 {
+  __host__ __device__ __forceinline__ auto operator-(const Vec3_f16 &b) const
+      -> Vec3_f16 {
     return {x - b.x, y - b.y, z - b.z};
   }
-  __host__ __device__ __forceinline__ auto operator*(const Vec3_bf16 &b) const
-      -> Vec3_bf16 {
+  __host__ __device__ __forceinline__ auto operator*(const Vec3_f16 &b) const
+      -> Vec3_f16 {
     return {x * b.x, y * b.y, z * b.z};
   }
-  __host__ __device__ __forceinline__ auto operator*(nv_bfloat16 s) const
-      -> Vec3_bf16 {
+  __host__ __device__ __forceinline__ auto operator*(half s) const
+      -> Vec3_f16 {
     return {x * s, y * s, z * s};
   }
 
-  __device__ __forceinline__ auto length2() const -> nv_bfloat16;
-  __device__ __forceinline__ auto length() const -> nv_bfloat16;
+  __device__ __forceinline__ auto length2() const -> half;
+  __device__ __forceinline__ auto length() const -> half;
 
   __host__ __device__ __forceinline__ auto
-  outer_product(const Vec3_bf16 &b) const -> Mat3x3_bf16 {
+  outer_product(const Vec3_f16 &b) const -> Mat3x3_f16 {
     // x*b.x, x*b.y, x*b.z
     // y*b.x, y*b.y, y*b.z
     // z*b.x, z*b.y, z*b.z
-    Mat3x3_bf16 m;
+    Mat3x3_f16 m;
     m.data[0] = x * b.x;
     m.data[1] = x * b.y;
     m.data[2] = x * b.z;
@@ -53,13 +53,13 @@ struct Vec3_bf16 {
   }
 
   __host__ __device__ __forceinline__ auto operator=(const Vec3 &v)
-      -> Vec3_bf16;
+      -> Vec3_f16;
 };
 
 struct Vec3 {
   float x, y, z;
 
-  __host__ __device__ __forceinline__ static auto from_bf16(const Vec3_bf16 &v)
+  __host__ __device__ __forceinline__ static auto from_f16(const Vec3_f16 &v)
       -> Vec3 {
     Vec3 result;
     result.x = v.x;
@@ -109,9 +109,9 @@ struct Vec3 {
     z *= f;
     return *this;
   }
-  __host__ __device__ __forceinline__ auto operator+=(const Vec3_bf16 &b)
+  __host__ __device__ __forceinline__ auto operator+=(const Vec3_f16 &b)
       -> Vec3 & {
-    return *this += Vec3::from_bf16(b);
+    return *this += Vec3::from_f16(b);
   }
   __host__ __device__ __forceinline__ auto operator-(const Vec3 &b) const
       -> Vec3 {
@@ -156,15 +156,15 @@ struct Vec3 {
             a.x * b.y - a.y * b.x};
   }
 
-  __host__ __device__ __forceinline__ auto operator=(const Vec3_bf16 &v) {
+  __host__ __device__ __forceinline__ auto operator=(const Vec3_f16 &v) {
     x = v.x;
     y = v.y;
     z = v.z;
   }
 };
 
-__host__ __device__ __forceinline__ auto Vec3_bf16::operator=(const Vec3 &v)
-    -> Vec3_bf16 {
+__host__ __device__ __forceinline__ auto Vec3_f16::operator=(const Vec3 &v)
+    -> Vec3_f16 {
   x = v.x;
   y = v.y;
   z = v.z;
@@ -180,9 +180,9 @@ __host__ __device__ __forceinline__ auto operator*(const float n, const Vec3 &v)
   return {n * v.x, n * v.y, n * v.z};
 }
 
-__host__ __device__ __forceinline__ auto Vec3_bf16::from_float(const Vec3 &v)
-    -> Vec3_bf16 {
-  Vec3_bf16 result;
+__host__ __device__ __forceinline__ auto Vec3_f16::from_float(const Vec3 &v)
+    -> Vec3_f16 {
+  Vec3_f16 result;
   result.x = v.x;
   result.y = v.y;
   result.z = v.z;
@@ -191,10 +191,10 @@ __host__ __device__ __forceinline__ auto Vec3_bf16::from_float(const Vec3 &v)
 
 // only for cuda compiler:
 #ifdef __CUDACC__
-__device__ __forceinline__ auto Vec3_bf16::length2() const -> nv_bfloat16 {
+__device__ __forceinline__ auto Vec3_f16::length2() const -> half {
   return x * x + y * y + z * z;
 }
-__device__ __forceinline__ auto Vec3_bf16::length() const -> nv_bfloat16 {
+__device__ __forceinline__ auto Vec3_f16::length() const -> half {
   return hsqrt(length2());
 }
 #endif

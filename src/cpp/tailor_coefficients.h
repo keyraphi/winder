@@ -29,20 +29,20 @@ struct TailorCoefficientsQuantized {
   set_tailor_coefficients(const Vec3 &zero_order, const Mat3x3 &first_order,
                           const Tensor3_compressed &second_order);
 
-  __device__ inline auto get_tailor_zero_order() const -> Vec3_bf16;
+  __device__ inline auto get_tailor_zero_order() const -> Vec3_f16;
 
-  __device__ inline auto get_tailor_first_order() const -> Mat3x3_bf16;
+  __device__ inline auto get_tailor_first_order() const -> Mat3x3_f16;
 
   __device__ inline auto
-  get_tailor_second_order() const -> Tensor3_bf16_compressed;
+  get_tailor_second_order() const -> Tesor3_f16_compressed;
 };
 
 // For leaf nodes
 // 64 byte
-struct TailorCoefficientsBf16 {
-  Vec3_bf16 zero_order;
-  Mat3x3_bf16 first_order;
-  Tensor3_bf16_compressed second_order;
+struct TailorCoefficientsF16 {
+  Vec3_f16 zero_order;
+  Mat3x3_f16 first_order;
+  Tesor3_f16_compressed second_order;
   // 60 bytes
   CenterOfMass_quantized center_of_mass; // 4 bytes
 };
@@ -55,11 +55,11 @@ struct TailorCoefficients {
   Tensor3_compressed second_order;
 
   __host__ __device__ static auto
-  from_bf16(const TailorCoefficientsBf16 &t) -> TailorCoefficients {
+  from_f16(const TailorCoefficientsF16 &t) -> TailorCoefficients {
     TailorCoefficients result;
-    result.zero_order = Vec3::from_bf16(t.zero_order);
-    result.first_order = Mat3x3::from_bf16(t.first_order);
-    result.second_order = Tensor3_compressed::from_bf16(t.second_order);
+    result.zero_order = Vec3::from_f16(t.zero_order);
+    result.first_order = Mat3x3::from_f16(t.first_order);
+    result.second_order = Tensor3_compressed::from_f16(t.second_order);
     return result;
   }
 };
@@ -68,31 +68,12 @@ struct TailorCoefficients {
 #ifdef __CUDACC__
 #include <cmath>
 #include <cstdio>
-#include <cuda_bf16.h>
+#include <cuda_fp16.h>
 #include <cuda_runtime_api.h>
 #include <sys/types.h>
 #include <vector_types.h>
 
 #if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800)
-// Native Ampere/Hopper conversion
-#define BF16_CONVERT_STR(OUT_IDX) "cvt.rn.bf16.f32 " OUT_IDX ", f_tmp;\n\t"
-#else
-// Emulated Turing/Pascal conversion
-#define BF16_CONVERT_STR(OUT_IDX)                                              \
-  "mov.b32 m_tmp, f_tmp;\n\t"                                                  \
-  "add.u32 m_tmp, m_tmp, 0x8000;\n\t"                                          \
-  "shr.u32 m_tmp, m_tmp, 16;\n\t"                                              \
-  "cvt.u16.u32 " OUT_IDX ", m_tmp;\n\t"
-#endif
-
-#define UNPACK_SCALE_STR(SELECTOR, SHIFT, OUT, IN_A, IN_B, SCALE)              \
-  "prmt.b32 m_tmp, " IN_A ", " IN_B ", " SELECTOR ";\n\t"                      \
-  "shr.b32  m_tmp, m_tmp, " SHIFT ";\n\t"                                      \
-  "and.b32  m_tmp, m_tmp, 0x7ff;\n\t"                                          \
-  "shl.b32  m_tmp, m_tmp, 21;\n\t"                                             \
-  "shr.s32  m_tmp, m_tmp, 21;\n\t"                                             \
-  "cvt.rn.f32.s32 f_tmp, m_tmp;\n\t"                                           \
-  "mul.f32  f_tmp, f_tmp, " SCALE ";\n\t" BF16_CONVERT_STR(OUT)
 
 #define STR_HELPER(x) #x
 #define TO_STR(x) STR_HELPER(x)
@@ -274,9 +255,9 @@ __device__ inline void TailorCoefficientsQuantized::set_tailor_coefficients(
                      (static_cast<uint32_t>(shared_exponent_low) << 24);
 }
 
-__device__ __forceinline__ auto unpack_bf16(uint32_t selector, uint32_t shift,
+__device__ __forceinline__ auto unpack_f16(uint32_t selector, uint32_t shift,
                                             uint32_t in_a, uint32_t in_b,
-                                            float scale) -> nv_bfloat16 {
+                                            float scale) -> half {
   uint16_t out_reg; // Correct 16-bit target for "=h"
   asm volatile("{\n\t"
                ".reg .b32 m_tmp;\n\t"
@@ -288,75 +269,35 @@ __device__ __forceinline__ auto unpack_bf16(uint32_t selector, uint32_t shift,
                "shr.s32  m_tmp, m_tmp, 21;\n\t"
                "cvt.rn.f32.s32 f_tmp, m_tmp;\n\t"
                "mul.f32  f_tmp, f_tmp, %5;\n\t"
-#if __CUDA_ARCH__ >= 800
-               "cvt.rn.bf16.f32 %0, f_tmp;\n\t"
-#else
-               "mov.b32 m_tmp, f_tmp;\n\t"
-               "add.u32 m_tmp, m_tmp, 0x8000;\n\t"
-               "shr.u32 m_tmp, m_tmp, 16;\n\t"
-               "cvt.u16.u32 %0, m_tmp;\n\t"
-#endif
+               "cvt.rn.f16.f32 %0, f_tmp;\n\t"
                "}"
                : "=h"(out_reg)
                : "r"(in_a), "r"(in_b), "r"(selector), "r"(shift), "f"(scale));
-  return reinterpret_cast<nv_bfloat16 &>(out_reg);
+  return reinterpret_cast<half &>(out_reg);
 }
 
 __device__ inline auto
-TailorCoefficientsQuantized::get_tailor_zero_order() const -> Vec3_bf16 {
+TailorCoefficientsQuantized::get_tailor_zero_order() const -> Vec3_f16 {
   const auto *d = reinterpret_cast<const uint32_t *>(tailor_data);
   float shared_scale_factor = get_shared_scale_factor_low();
 
   // [          raw1,                                 raw0               ]
   // [{stuff.stuff.stuff.-------z}, {zzzzzzzz.zzyyyyyy.yyyyyxxx.xxxxxxxx}]
   //    7      6    5        4            3       2      1          0
-  Vec3_bf16 result;
-  result.x = unpack_bf16(0x0010, 0, d[0], d[1], shared_scale_factor);
-  result.y = unpack_bf16(0x0021, 3, d[0], d[1], shared_scale_factor);
-  result.z = unpack_bf16(0x5432, 6, d[0], d[1], shared_scale_factor);
+  Vec3_f16 result;
+  result.x = unpack_f16(0x0010, 0, d[0], d[1], shared_scale_factor);
+  result.y = unpack_f16(0x0021, 3, d[0], d[1], shared_scale_factor);
+  result.z = unpack_f16(0x5432, 6, d[0], d[1], shared_scale_factor);
 
   return result;
 }
 
-// __device__ inline auto TailorCoefficientsQuantized::get_tailor_zero_order(
-//     const float shared_scale_factor) const -> Vec3_bf16 {
-//   const auto *uint32_data = reinterpret_cast<const uint32_t *>(
-//       tailor_data); // works because tailor_data is b-byte aligned
-//   const uint32_t raw_0 = uint32_data[0];
-//   const uint32_t raw_1 = uint32_data[1];
-//
-//   Vec3_bf16 result;
-//
-//   // [          raw1,                                 raw0               ]
-//   // [{stuff.stuff.stuff.-------z}, {zzzzzzzz.zzyyyyyy.yyyyyxxx.xxxxxxxx}]
-//   //    7      6    5        4            3       2      1          0
-//   asm volatile(
-//       // unpack and convert to bfloat16s
-//       "{\n\t"
-//       // temporary registers
-//       ".reg .s32 m_tmp;\n\t"
-//       ".reg .f32 f_tmp;\n\t"
-//
-//       UNPACK_SCALE_STR("0x0010", "0", "%0", "%3", "%4", "%5") // x
-//       UNPACK_SCALE_STR("0x0021", "3", "%1", "%3", "%4", "%5") // y
-//       UNPACK_SCALE_STR("0x5432", "6", "%2", "%3", "%4", "%5") // z
-//       "}"
-//
-//       : "=h"(reinterpret_cast<unsigned short &>(result.x)), //%0
-//         "=h"(reinterpret_cast<unsigned short &>(result.y)), //%1
-//         "=h"(reinterpret_cast<unsigned short &>(result.z))  //%2
-//       : "r"(raw_0), "r"(raw_1),
-//         "f"(shared_scale_factor) // %3 %4 and %5 (Inputs)
-//   );
-//
-//   return result;
-// }
 
 __device__ inline auto TailorCoefficientsQuantized::get_tailor_first_order(
-) const -> Mat3x3_bf16 {
+) const -> Mat3x3_f16 {
   const auto *d = reinterpret_cast<const uint32_t *>(tailor_data);
   float shared_scale_factor = get_shared_scale_factor_low();
-  Mat3x3_bf16 result;
+  Mat3x3_f16 result;
   // tailor_data[1]
   // [22222222.21111111.11110000.0000000-]
   // tailor_data[2]
@@ -367,91 +308,35 @@ __device__ inline auto TailorCoefficientsQuantized::get_tailor_first_order(
   // [--------.--------.--------.----8888]
 
   result.data[0] =
-      unpack_bf16(0x0010, 1, d[1], d[2], shared_scale_factor); // xx
+      unpack_f16(0x0010, 1, d[1], d[2], shared_scale_factor); // xx
   result.data[1] =
-      unpack_bf16(0x0021, 4, d[1], d[2], shared_scale_factor); // xy
+      unpack_f16(0x0021, 4, d[1], d[2], shared_scale_factor); // xy
   result.data[2] =
-      unpack_bf16(0x0432, 7, d[1], d[2], shared_scale_factor); // xz
+      unpack_f16(0x0432, 7, d[1], d[2], shared_scale_factor); // xz
 
   result.data[3] =
-      unpack_bf16(0x0010, 2, d[2], d[3], shared_scale_factor); // yx
+      unpack_f16(0x0010, 2, d[2], d[3], shared_scale_factor); // yx
   result.data[4] =
-      unpack_bf16(0x0021, 5, d[2], d[3], shared_scale_factor); // yy
+      unpack_f16(0x0021, 5, d[2], d[3], shared_scale_factor); // yy
   result.data[5] =
-      unpack_bf16(0x0043, 0, d[2], d[3], shared_scale_factor); // yz
+      unpack_f16(0x0043, 0, d[2], d[3], shared_scale_factor); // yz
 
   result.data[6] =
-      unpack_bf16(0x0054, 3, d[2], d[3], shared_scale_factor); // zx
+      unpack_f16(0x0054, 3, d[2], d[3], shared_scale_factor); // zx
   result.data[7] =
-      unpack_bf16(0x0765, 6, d[2], d[3], shared_scale_factor); // zy
+      unpack_f16(0x0765, 6, d[2], d[3], shared_scale_factor); // zy
   result.data[8] =
-      unpack_bf16(0x0043, 1, d[3], d[4], shared_scale_factor); // zz
+      unpack_f16(0x0043, 1, d[3], d[4], shared_scale_factor); // zz
 
   return result;
 }
-// __device__ inline auto TailorCoefficientsQuantized::get_tailor_first_order(
-//     const float shared_scale_factor) const -> Mat3x3_bf16 {
-//   // tailor_data[1]
-//   // [22222222.21111111.11110000.0000000-]
-//   // tailor_data[2]
-//   // [55555555.44444444.44433333.33333322]
-//   // tailor_data[3]
-//   // [88888887.77777777.77666666.66666555]
-//   // tailor_data[4]
-//   // [--------.--------.--------.----8888]
-//   Mat3x3_bf16 result;
-//   asm volatile("{\n\t"
-//                ".reg .s32 m_tmp;\n\t"
-//                ".reg .f32 f_tmp;\n\t"
-//
-//                UNPACK_SCALE_STR("0x0010", "1", "%0", "%9", "%10", "%13")  //
-//                xx UNPACK_SCALE_STR("0x0021", "4", "%1", "%9", "%10", "%13")
-//                // xy UNPACK_SCALE_STR("0x0432", "7", "%2", "%9", "%10",
-//                "%13")  // xz UNPACK_SCALE_STR("0x0010", "2", "%3", "%10",
-//                "%11", "%13") // yx UNPACK_SCALE_STR("0x0021", "5", "%4",
-//                "%10", "%11", "%13") // yy UNPACK_SCALE_STR("0x0043", "0",
-//                "%5", "%10", "%11", "%13") // yz UNPACK_SCALE_STR("0x0054",
-//                "3", "%6", "%10", "%11", "%13") // zx
-//                UNPACK_SCALE_STR("0x0765", "6", "%7", "%10", "%11", "%13") //
-//                zy UNPACK_SCALE_STR("0x0043", "1", "%8", "%11", "%12", "%13")
-//                // zz
-//                "}"
-//
-//                // outputs
-//                : "=h"(reinterpret_cast<unsigned short &>(result.data[0])), //
-//                %0
-//                  "=h"(reinterpret_cast<unsigned short &>(result.data[1])), //
-//                  %1
-//                  "=h"(reinterpret_cast<unsigned short &>(result.data[2])), //
-//                  %2
-//                  "=h"(reinterpret_cast<unsigned short &>(result.data[3])), //
-//                  %3
-//                  "=h"(reinterpret_cast<unsigned short &>(result.data[4])), //
-//                  %4
-//                  "=h"(reinterpret_cast<unsigned short &>(result.data[5])), //
-//                  %5
-//                  "=h"(reinterpret_cast<unsigned short &>(result.data[6])), //
-//                  %6
-//                  "=h"(reinterpret_cast<unsigned short &>(result.data[7])), //
-//                  %7
-//                  "=h"(reinterpret_cast<unsigned short &>(result.data[8]))  //
-//                  %8
-//                // inputs
-//                : "r"(tailor_data[1]),     // %9
-//                  "r"(tailor_data[2]),     // %10
-//                  "r"(tailor_data[3]),     // %11
-//                  "r"(tailor_data[4]),     // %12
-//                  "f"(shared_scale_factor) // %13
-//   );
-//   return result;
-// }
 
 __device__ inline auto TailorCoefficientsQuantized::get_tailor_second_order(
-) const -> Tensor3_bf16_compressed {
+) const -> Tensor3_f16_compressed {
   const auto *d = reinterpret_cast<const uint32_t *>(tailor_data);
   float shared_scale_factor = get_shared_scale_factor_second();
 
-  Tensor3_bf16_compressed result;
+  Tensor3_f16_compressed result;
 
   // tailor_data[4]
   // [22222211.11111111.10000000.0000----]
@@ -467,104 +352,31 @@ __device__ inline auto TailorCoefficientsQuantized::get_tailor_second_order(
   // [76666666.66665555.55555554.44444444]
   // tailor_data[10]
   // [eeeeeeee.--------.------77.77777777]
-  result.data[0] = unpack_bf16(0x0010, 4, d[4], d[5], shared_scale_factor);
-  result.data[1] = unpack_bf16(0x0321, 7, d[4], d[5], shared_scale_factor);
-  result.data[2] = unpack_bf16(0x0043, 2, d[4], d[5], shared_scale_factor);
-  result.data[3] = unpack_bf16(0x0054, 5, d[4], d[5], shared_scale_factor);
-  result.data[4] = unpack_bf16(0x0076, 0, d[4], d[5], shared_scale_factor);
+  result.data[0] = unpack_f16(0x0010, 4, d[4], d[5], shared_scale_factor);
+  result.data[1] = unpack_f16(0x0321, 7, d[4], d[5], shared_scale_factor);
+  result.data[2] = unpack_f16(0x0043, 2, d[4], d[5], shared_scale_factor);
+  result.data[3] = unpack_f16(0x0054, 5, d[4], d[5], shared_scale_factor);
+  result.data[4] = unpack_f16(0x0076, 0, d[4], d[5], shared_scale_factor);
 
-  result.data[5] = unpack_bf16(0x0043, 3, d[5], d[6], shared_scale_factor);
-  result.data[6] = unpack_bf16(0x0654, 6, d[5], d[6], shared_scale_factor);
-  result.data[7] = unpack_bf16(0x0076, 1, d[5], d[6], shared_scale_factor);
+  result.data[5] = unpack_f16(0x0043, 3, d[5], d[6], shared_scale_factor);
+  result.data[6] = unpack_f16(0x0654, 6, d[5], d[6], shared_scale_factor);
+  result.data[7] = unpack_f16(0x0076, 1, d[5], d[6], shared_scale_factor);
 
-  result.data[8] = unpack_bf16(0x0043, 4, d[6], d[7], shared_scale_factor);
+  result.data[8] = unpack_f16(0x0043, 4, d[6], d[7], shared_scale_factor);
 
-  result.data[9] = unpack_bf16(0x0210, 7, d[7], d[8], shared_scale_factor);
-  result.data[10] = unpack_bf16(0x0032, 2, d[7], d[8], shared_scale_factor);
-  result.data[11] = unpack_bf16(0x0043, 5, d[7], d[8], shared_scale_factor);
-  result.data[12] = unpack_bf16(0x0065, 0, d[7], d[8], shared_scale_factor);
-  result.data[13] = unpack_bf16(0x0076, 3, d[7], d[8], shared_scale_factor);
+  result.data[9] = unpack_f16(0x0210, 7, d[7], d[8], shared_scale_factor);
+  result.data[10] = unpack_f16(0x0032, 2, d[7], d[8], shared_scale_factor);
+  result.data[11] = unpack_f16(0x0043, 5, d[7], d[8], shared_scale_factor);
+  result.data[12] = unpack_f16(0x0065, 0, d[7], d[8], shared_scale_factor);
+  result.data[13] = unpack_f16(0x0076, 3, d[7], d[8], shared_scale_factor);
 
-  result.data[14] = unpack_bf16(0x0543, 6, d[8], d[9], shared_scale_factor);
-  result.data[15] = unpack_bf16(0x0065, 1, d[8], d[9], shared_scale_factor);
-  result.data[16] = unpack_bf16(0x0076, 4, d[8], d[9], shared_scale_factor);
+  result.data[14] = unpack_f16(0x0543, 6, d[8], d[9], shared_scale_factor);
+  result.data[15] = unpack_f16(0x0065, 1, d[8], d[9], shared_scale_factor);
+  result.data[16] = unpack_f16(0x0076, 4, d[8], d[9], shared_scale_factor);
 
-  result.data[17] = unpack_bf16(0x0543, 7, d[9], d[10], shared_scale_factor);
+  result.data[17] = unpack_f16(0x0543, 7, d[9], d[10], shared_scale_factor);
 
   return result;
 }
 
-// __device__ inline auto TailorCoefficientsQuantized::get_tailor_second_order(
-//     const float shared_scale_factor) const -> Tensor3_bf16_compressed {
-//   // tailor_data[4]
-//   // [22222211.11111111.10000000.0000----]
-//   // tailor_data[5]
-//   // [55555444.44444444.33333333.33322222]
-//   // tailor_data[6]
-//   // [88887777.77777776.66666666.66555555]
-//   // tailor_data[7]
-//   // [11100000.00000099.99999999.98888888]
-//   // tailor_data[8]
-//   // [44333333.33333222.22222222.11111111]
-//   // tailor_data[9]
-//   // [76666666.66665555.55555554.44444444]
-//   // tailor_data[10]
-//   // [eeeeeeee.--------.------77.77777777]
-//   Tensor3_bf16_compressed result;
-//
-//   asm volatile(
-//       "{\n\t"
-//       ".reg .s32 m_tmp;\n\t"
-//       ".reg .f32 f_tmp;\n\t"
-//
-//       UNPACK_SCALE_STR("0x0010", "4", "%0", "%18", "%19", "%25")  // 0
-//       UNPACK_SCALE_STR("0x0321", "7", "%1", "%18", "%19", "%25")  // 1
-//       UNPACK_SCALE_STR("0x0043", "2", "%2", "%18", "%19", "%25")  // 2
-//       UNPACK_SCALE_STR("0x0054", "5", "%3", "%18", "%19", "%25")  // 3
-//       UNPACK_SCALE_STR("0x0076", "0", "%4", "%18", "%19", "%25")  // 4
-//       UNPACK_SCALE_STR("0x0043", "3", "%5", "%19", "%20", "%25")  // 5
-//       UNPACK_SCALE_STR("0x0654", "6", "%6", "%19", "%20", "%25")  // 6
-//       UNPACK_SCALE_STR("0x0076", "1", "%7", "%19", "%20", "%25")  // 7
-//       UNPACK_SCALE_STR("0x0043", "4", "%8", "%20", "%21", "%25")  // 8
-//       UNPACK_SCALE_STR("0x0210", "7", "%9", "%21", "%22", "%25")  // 9
-//       UNPACK_SCALE_STR("0x0032", "2", "%10", "%21", "%22", "%25") // 10
-//       UNPACK_SCALE_STR("0x0043", "5", "%11", "%21", "%22", "%25") // 11
-//       UNPACK_SCALE_STR("0x0065", "0", "%12", "%21", "%22", "%25") // 12
-//       UNPACK_SCALE_STR("0x0076", "3", "%13", "%21", "%22", "%25") // 13
-//       UNPACK_SCALE_STR("0x0543", "6", "%14", "%22", "%23", "%25") // 14
-//       UNPACK_SCALE_STR("0x0065", "1", "%15", "%22", "%23", "%25") // 15
-//       UNPACK_SCALE_STR("0x0076", "4", "%16", "%22", "%23", "%25") // 16
-//       UNPACK_SCALE_STR("0x0543", "7", "%17", "%23", "%24", "%25") // 17
-//       "}"
-//       // outputs
-//       : "=h"(reinterpret_cast<unsigned short &>(result.data[0])),  // %0
-//         "=h"(reinterpret_cast<unsigned short &>(result.data[1])),  // %1
-//         "=h"(reinterpret_cast<unsigned short &>(result.data[2])),  // %2
-//         "=h"(reinterpret_cast<unsigned short &>(result.data[3])),  // %3
-//         "=h"(reinterpret_cast<unsigned short &>(result.data[4])),  // %4
-//         "=h"(reinterpret_cast<unsigned short &>(result.data[5])),  // %5
-//         "=h"(reinterpret_cast<unsigned short &>(result.data[6])),  // %6
-//         "=h"(reinterpret_cast<unsigned short &>(result.data[7])),  // %7
-//         "=h"(reinterpret_cast<unsigned short &>(result.data[8])),  // %8
-//         "=h"(reinterpret_cast<unsigned short &>(result.data[9])),  // %9
-//         "=h"(reinterpret_cast<unsigned short &>(result.data[10])), // %10
-//         "=h"(reinterpret_cast<unsigned short &>(result.data[11])), // %11
-//         "=h"(reinterpret_cast<unsigned short &>(result.data[12])), // %12
-//         "=h"(reinterpret_cast<unsigned short &>(result.data[13])), // %13
-//         "=h"(reinterpret_cast<unsigned short &>(result.data[14])), // %14
-//         "=h"(reinterpret_cast<unsigned short &>(result.data[15])), // %15
-//         "=h"(reinterpret_cast<unsigned short &>(result.data[16])), // %16
-//         "=h"(reinterpret_cast<unsigned short &>(result.data[17]))  // %17
-//       // inputs
-//       : "r"(tailor_data[4]),     // %18
-//         "r"(tailor_data[5]),     // %19
-//         "r"(tailor_data[6]),     // %20
-//         "r"(tailor_data[7]),     // %21
-//         "r"(tailor_data[8]),     // %22
-//         "r"(tailor_data[9]),     // %23
-//         "r"(tailor_data[10]),    // %24
-//         "f"(shared_scale_factor) // %25
-//   );
-//   return result;
-// }
 #endif

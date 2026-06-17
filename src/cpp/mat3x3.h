@@ -1,17 +1,17 @@
 #pragma once
-#include <cuda_bf16.h>
+#include <cuda_fp16.h>
 #include <cuda_runtime_api.h>
 
 struct Mat3x3;
 struct Tensor3;
 
-struct Mat3x3_bf16 {
-  nv_bfloat16 data[9];
+struct Mat3x3_f16 {
+  half data[9];
 
   __host__ __device__ __forceinline__ static auto from_float(const Mat3x3 &v)
-      -> Mat3x3_bf16;
+      -> Mat3x3_f16;
   __host__ __device__ __forceinline__ auto operator=(const Mat3x3 &m)
-      -> Mat3x3_bf16;
+      -> Mat3x3_f16;
 };
 
 struct Mat3x3 {
@@ -22,7 +22,7 @@ struct Mat3x3 {
   }
 
   __host__ __device__ __forceinline__ static auto
-  from_bf16(const Mat3x3_bf16 &m) -> Mat3x3 {
+  from_f16(const Mat3x3_f16 &m) -> Mat3x3 {
     Mat3x3 result;
     for (int i = 0; i < 9; i++) {
       result.data[i] = m.data[i];
@@ -30,7 +30,7 @@ struct Mat3x3 {
     return result;
   }
 
-  __host__ __device__ __forceinline__ auto operator=(const Mat3x3_bf16 &m) {
+  __host__ __device__ __forceinline__ auto operator=(const Mat3x3_f16 &m) {
     for (int i = 0; i < 9; i++) {
       data[i] = m.data[i];
     }
@@ -61,16 +61,16 @@ __host__ __device__ __forceinline__ auto operator*(const float n,
 }
 
 __host__ __device__ __forceinline__ auto
-Mat3x3_bf16::from_float(const Mat3x3 &m) -> Mat3x3_bf16 {
-  Mat3x3_bf16 result;
+Mat3x3_f16::from_float(const Mat3x3 &m) -> Mat3x3_f16 {
+  Mat3x3_f16 result;
   for (int i = 0; i < 9; i++) {
     result.data[i] = m.data[i];
   }
   return result;
 }
 
-__host__ __device__ __forceinline__ auto Mat3x3_bf16::operator=(const Mat3x3 &m)
-    -> Mat3x3_bf16 {
+__host__ __device__ __forceinline__ auto Mat3x3_f16::operator=(const Mat3x3 &m)
+    -> Mat3x3_f16 {
 
   for (int i = 0; i < 9; i++) {
     data[i] = m.data[i];

@@ -119,8 +119,8 @@ public: // TODO DEBUG  make private!
   // --- BVH8 Tree Structure (Final Output) ---
   BVH8Node *m_bvh8_nodes; // [~0.2L] The 8-way wide-tree nodes (Quantized AABBs
                           // + Topology)
-  TailorCoefficientsBf16 *m_leaf_coefficients; // [L] Taylor expansion terms for
-                                               // leaf clusters (Bfloat16)
+  TailorCoefficientsF16 *m_leaf_coefficients; // [L] Taylor expansion terms for
+                                               // leaf clusters (half)
 
   // --- BVH8 Construction & M2M Support ---
   LeafPointers *m_bvh8_leaf_pointers; // [0.2L] Map: BVH8Node slot -> Leaf index

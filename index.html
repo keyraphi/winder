@@ -71,7 +71,7 @@
                 </span>
                 <span class="text-slate-600 hidden sm:inline">•</span>
                 <span class="flex items-center gap-1.5">
-                    <span class="text-amber-400">💾</span> Quantized bfloat16 Hardware Co-Design
+                    <span class="text-amber-400">💾</span> Quantized float16 Hardware Co-Design
                 </span>
             </div>
 
@@ -431,8 +431,8 @@
                       baseline of original <em>Fast Winding Numbers</em>, it provides a tighter mathematical fidelity profile
                       than zero-order dipole frameworks.</li>
 
-                    <li><strong>bfloat16 Far-Field Math:</strong> All calculations in the far-field are done in the
-                      <code>bfloat16</code> floating-point format, leading to high ALU computing throughput.</li>
+                    <li><strong>float16 Far-Field Math:</strong> All calculations in the far-field are done in the
+                      <code>float16</code> floating-point format, leading to high ALU computing throughput.</li>
 
                     <li><strong>Bit-Packed Mantissas &amp; 128-Byte Cache Alignment:</strong> Tree node coefficients are aggressively bit-packed
                       down to a custom 11-bit mantissa format with shared exponents, while spatial metadata—such as the cluster center of mass and localized

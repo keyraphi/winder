@@ -21,15 +21,15 @@
   } while (0)
 
 __global__ void test_TailorCoefficientQuantization_kernel(
-    const TailorCoefficientsBf16 *tailor_in,
+    const TailorCoefficientsF16 *tailor_in,
     TailorCoefficientsQuantized *tailor_quantized_out,
-    TailorCoefficientsBf16 *tailor_out, float *shared_scale_out) {
+    TailorCoefficientsF16 *tailor_out, float *shared_scale_out) {
   if (threadIdx.x > 0) {
     return;
   }
-  Vec3_bf16 zero_bf16 = tailor_in[0].zero_order;
+  Vec3_f16 zero_bf16 = tailor_in[0].zero_order;
   Mat3x3_bf16 first_bf16 = tailor_in[0].first_order;
-  Tensor3_bf16_compressed second_bf16 = tailor_in[0].second_order;
+  Tesor3_f16_compressed second_bf16 = tailor_in[0].second_order;
 
   Vec3 zero_f32 = Vec3::from_bf16(zero_bf16);
   Mat3x3 first_f32 = Mat3x3::from_bf16(first_bf16);
@@ -67,7 +67,7 @@ __global__ void test_TailorCoefficientQuantization_kernel(
   tailor_quantized_out[0] = tailor_q;
 
   // unpack
-  TailorCoefficientsBf16 tailor;
+  TailorCoefficientsF16 tailor;
   float shared_scale_factor_low = tailor_q.get_shared_scale_factor_low();
   float shared_scale_factor_second = tailor_q.get_shared_scale_factor_second();
   // printf("SHARED SCALE FACTOR\n");
@@ -128,13 +128,13 @@ float get_rand(float min, float max, std::mt19937 &gen) {
 }
 
 // Fills the struct with random values and returns the max absolute value found
-float fill_random(TailorCoefficientsBf16 &host_struct, float range,
+float fill_random(TailorCoefficientsF16 &host_struct, float range,
                   std::mt19937 &gen) {
   float max_abs = 0.0F;
-  auto fill_val = [&](nv_bfloat16 &target) {
+  auto fill_val = [&](half &target) {
     float val = get_rand(-range, range, gen);
     max_abs = std::max(max_abs, std::abs(val));
-    target = __float2bfloat16(val);
+    target = __float2half(val);
   };
 
   fill_val(host_struct.zero_order.x);
@@ -148,9 +148,9 @@ float fill_random(TailorCoefficientsBf16 &host_struct, float range,
   return max_abs;
 }
 
-bool check_close(const char *label, nv_bfloat16 actual_bf, float original_f32,
+bool check_close(const char *label, half actual_bf, float original_f32,
                  float threshold) {
-  float actual_f32 = __bfloat162float(actual_bf);
+  float actual_f32 = __half2float(actual_bf);
   float diff = std::abs(actual_f32 - original_f32);
   if (diff > threshold + 1e-5f) { // adding small epsilon for bf16 precision
     printf("FAIL [%s]: Orig: %f, Got: %f, Diff: %f (Max Allowed: %f)\n", label,
@@ -161,9 +161,9 @@ bool check_close(const char *label, nv_bfloat16 actual_bf, float original_f32,
 }
 
 // Fills with specific edge-case patterns
-void fill_edge_case(TailorCoefficientsBf16 &host_struct, int case_type) {
+void fill_edge_case(TailorCoefficientsF16 &host_struct, int case_type) {
   auto set_all = [&](float val) {
-    nv_bfloat16 b = __float2bfloat16(val);
+    half b = __float2half(val);
     host_struct.zero_order.x = b;
     host_struct.zero_order.y = b;
     host_struct.zero_order.z = b;
@@ -179,7 +179,7 @@ void fill_edge_case(TailorCoefficientsBf16 &host_struct, int case_type) {
     break;
   case 1: // Single Outlier (The "Needle in a Haystack")
     set_all(0.001f);
-    host_struct.second_order.data[17] = __float2bfloat16(1000.0f);
+    host_struct.second_order.data[17] = __float2half(1000.0f);
     break;
   case 2: // All Negative
     set_all(-500.0f);
@@ -193,19 +193,19 @@ void fill_edge_case(TailorCoefficientsBf16 &host_struct, int case_type) {
   }
 }
 
-void run_edge_cases(TailorCoefficientsBf16 *d_in,
+void run_edge_cases(TailorCoefficientsF16 *d_in,
                     TailorCoefficientsQuantized *d_q,
-                    TailorCoefficientsBf16 *d_out, float *d_scale) {
+                    TailorCoefficientsF16 *d_out, float *d_scale) {
   const char *names[] = {"ALL ZEROS", "SINGLE OUTLIER", "ALL NEGATIVE",
                          "POW2 BOUNDARY", "NEGATIVE BOUNDARY"};
 
   for (int i = 0; i < 5; ++i) {
     printf("Testing Edge Case: %s... ", names[i]);
 
-    TailorCoefficientsBf16 h_in, h_out;
+    TailorCoefficientsF16 h_in, h_out;
     fill_edge_case(h_in, i);
 
-    CUDA_CHECK(cudaMemcpy(d_in, &h_in, sizeof(TailorCoefficientsBf16),
+    CUDA_CHECK(cudaMemcpy(d_in, &h_in, sizeof(TailorCoefficientsF16),
                           cudaMemcpyHostToDevice));
 
     test_TailorCoefficientQuantization_kernel<<<1, 1>>>(d_in, d_q, d_out,
@@ -215,7 +215,7 @@ void run_edge_cases(TailorCoefficientsBf16 *d_in,
     float h_scale;
     CUDA_CHECK(
         cudaMemcpy(&h_scale, d_scale, sizeof(float), cudaMemcpyDeviceToHost));
-    CUDA_CHECK(cudaMemcpy(&h_out, d_out, sizeof(TailorCoefficientsBf16),
+    CUDA_CHECK(cudaMemcpy(&h_out, d_out, sizeof(TailorCoefficientsF16),
                           cudaMemcpyDeviceToHost));
 
     // Validation logic
@@ -223,8 +223,8 @@ void run_edge_cases(TailorCoefficientsBf16 *d_in,
     bool success = true;
 
     // We check index 17 specifically for the outlier case
-    float orig_17 = __bfloat162float(h_in.second_order.data[17]);
-    float got_17 = __bfloat162float(h_out.second_order.data[17]);
+    float orig_17 = __half2float(h_in.second_order.data[17]);
+    float got_17 = __half2float(h_out.second_order.data[17]);
 
     if (std::abs(orig_17 - got_17) > max_err)
       success = false;
@@ -240,14 +240,14 @@ void run_edge_cases(TailorCoefficientsBf16 *d_in,
 int main() {
   // device stuff
   float *shared_scale_device;
-  TailorCoefficientsBf16 *tailor_input_device;
+  TailorCoefficientsF16 *tailor_input_device;
   TailorCoefficientsQuantized *tailor_quantized_device;
-  TailorCoefficientsBf16 *tailor_output_device;
+  TailorCoefficientsF16 *tailor_output_device;
   CUDA_CHECK(cudaMalloc(&shared_scale_device, 2 * sizeof(float)));
-  CUDA_CHECK(cudaMalloc(&tailor_input_device, sizeof(TailorCoefficientsBf16)));
+  CUDA_CHECK(cudaMalloc(&tailor_input_device, sizeof(TailorCoefficientsF16)));
   CUDA_CHECK(cudaMalloc(&tailor_quantized_device,
                         sizeof(TailorCoefficientsQuantized)));
-  CUDA_CHECK(cudaMalloc(&tailor_output_device, sizeof(TailorCoefficientsBf16)));
+  CUDA_CHECK(cudaMalloc(&tailor_output_device, sizeof(TailorCoefficientsF16)));
 
   // random stuff
   std::mt19937 gen(42);
@@ -257,7 +257,7 @@ int main() {
   for (float range : test_ranges) {
     printf("Testing Range: [-%.1f, %.1f]... ", range, range);
 
-    TailorCoefficientsBf16 input_host, output_host;
+    TailorCoefficientsF16 input_host, output_host;
     std::vector<float> scale_host(2);
 
     // 1. Generate Data
@@ -265,7 +265,7 @@ int main() {
 
     // 2. GPU Processing
     CUDA_CHECK(cudaMemcpy(tailor_input_device, &input_host,
-                          sizeof(TailorCoefficientsBf16),
+                          sizeof(TailorCoefficientsF16),
                           cudaMemcpyHostToDevice));
     test_TailorCoefficientQuantization_kernel<<<1, 1>>>(
         tailor_input_device, tailor_quantized_device, tailor_output_device,
@@ -275,7 +275,7 @@ int main() {
     CUDA_CHECK(cudaMemcpy(scale_host.data(), shared_scale_device, sizeof(float),
                           cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(&output_host, tailor_output_device,
-                          sizeof(TailorCoefficientsBf16),
+                          sizeof(TailorCoefficientsF16),
                           cudaMemcpyDeviceToHost));
 
     // 3. Validation
@@ -285,26 +285,26 @@ int main() {
 
     // Check a few samples or the whole set
     if (!check_close("zero", output_host.zero_order.x,
-                     __bfloat162float(input_host.zero_order.x),
+                     __half2float(input_host.zero_order.x),
                      max_allowed_error))
       success = false;
     if (!check_close("zero", output_host.zero_order.y,
-                     __bfloat162float(input_host.zero_order.y),
+                     __half2float(input_host.zero_order.y),
                      max_allowed_error))
       success = false;
     if (!check_close("zero", output_host.zero_order.z,
-                     __bfloat162float(input_host.zero_order.z),
+                     __half2float(input_host.zero_order.z),
                      max_allowed_error))
       success = false;
     for (int i = 0; i < 9; ++i) {
       if (!check_close("first", output_host.first_order.data[i],
-                       __bfloat162float(input_host.first_order.data[i]),
+                       __half2float(input_host.first_order.data[i]),
                        max_allowed_error))
         success = false;
     }
     for (int i = 0; i < 18; ++i) {
       if (!check_close("second", output_host.second_order.data[i],
-                       __bfloat162float(input_host.second_order.data[i]),
+                       __half2float(input_host.second_order.data[i]),
                        max_allowed_error))
         success = false;
     }
