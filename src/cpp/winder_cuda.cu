@@ -140,7 +140,7 @@ WinderBackend<Geometry>::WinderBackend(size_t size, int device_id)
   CUDA_CHECK(cudaMallocAsync(&m_bvh8_nodes, max_bvh8_nodes * sizeof(BVH8Node),
                              m_stream_0));
   CUDA_CHECK(cudaMallocAsync(&m_leaf_coefficients,
-                             leaf_count * sizeof(TailorCoefficientsBf16),
+                             leaf_count * sizeof(TailorCoefficientsF16),
                              m_stream_0));
   CUDA_CHECK(cudaMallocAsync(&m_bvh8_leaf_pointers,
                              max_bvh8_nodes * sizeof(LeafPointers),
@@ -728,7 +728,7 @@ void WinderBackend<Triangle>::solve_for_normals(
 }
 
 __global__ void getTailorCoefficientsKernel(const BVH8Node *nodes,
-                                             TailorCoefficientsBf16 *result,
+                                             TailorCoefficientsF16 *result,
                                              uint32_t node_count) {
   uint32_t tid = threadIdx.x + blockIdx.x * blockDim.x;
   if (tid < node_count) {
@@ -820,14 +820,14 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
                         node_count * sizeof(LeafPointers),
                         cudaMemcpyDeviceToHost));
 
-  std::vector<TailorCoefficientsBf16> leaf_coefficients(leaf_count);
+  std::vector<TailorCoefficientsF16> leaf_coefficients(leaf_count);
   CUDA_CHECK(cudaMemcpy(leaf_coefficients.data(), m_leaf_coefficients,
-                        leaf_count * sizeof(TailorCoefficientsBf16),
+                        leaf_count * sizeof(TailorCoefficientsF16),
                         cudaMemcpyDeviceToHost));
 
-  TailorCoefficientsBf16 *d_node_coefficients = nullptr;
+  TailorCoefficientsF16 *d_node_coefficients = nullptr;
   CUDA_CHECK(cudaMalloc(&d_node_coefficients,
-                        sizeof(TailorCoefficientsBf16) * node_count));
+                        sizeof(TailorCoefficientsF16) * node_count));
 
   // Calculate execution configuration and launch on the device
   uint32_t block = 128;
@@ -840,9 +840,9 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
   CUDA_CHECK(cudaDeviceSynchronize());
 
   // Pull unpacked values into your local host stack tracking vector
-  std::vector<TailorCoefficientsBf16> node_coefficients(node_count);
+  std::vector<TailorCoefficientsF16> node_coefficients(node_count);
   CUDA_CHECK(cudaMemcpy(node_coefficients.data(), d_node_coefficients,
-                        sizeof(TailorCoefficientsBf16) * node_count,
+                        sizeof(TailorCoefficientsF16) * node_count,
                         cudaMemcpyDeviceToHost));
 
   // Free the temporary GPU allocation
@@ -859,7 +859,7 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
 
     const BVH8Node &current_node = bvh8_nodes[current_id];
     TailorCoefficients node_coeff =
-        TailorCoefficients::from_bf16(node_coefficients[current_id]);
+        TailorCoefficients::from_f16(node_coefficients[current_id]);
     AABB aabb = current_node.parent_aabb;
     Vec3 node_com = aabb.center_of_mass.get(aabb.min, aabb.diagonal());
 
@@ -939,7 +939,7 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
         AABB leaf_aabb = leaf_aabbs[l_id];
 
         TailorCoefficients coeff =
-            TailorCoefficients::from_bf16(leaf_coefficients[l_id]);
+            TailorCoefficients::from_f16(leaf_coefficients[l_id]);
         Vec3 leaf_com = leaf_coefficients[l_id].center_of_mass.get(
             leaf_aabb.min, leaf_aabb.diagonal());
 

@@ -37,11 +37,15 @@ void cuda_free(void *ptr) {
     CUDA_CHECK(cudaFree(ptr));
   }
 }
+void cuda_free_async(void *ptr, cudaStream_t stream) {
+  if (ptr != nullptr) {
+    CUDA_CHECK(cudaFreeAsync(ptr, stream));
+  }
+}
 
 void thrust_fill_float(float *ptr, size_t count, float value) {
   thrust::device_ptr<float> dev_ptr(ptr);
   thrust::fill(dev_ptr, dev_ptr + count, value);
 }
 
-
-} // namespace cuda
+} // namespace winder_cuda

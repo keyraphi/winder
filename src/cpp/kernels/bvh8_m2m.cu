@@ -21,7 +21,7 @@
 
 __global__ void compute_internal_tailor_coefficients_m2m_kernel(
     BVH8Node *nodes, const uint32_t *internal_parent_map,
-    const AABB *leaf_aabbs, const TailorCoefficientsBf16 *leaf_coefficients,
+    const AABB *leaf_aabbs, const TailorCoefficientsF16 *leaf_coefficients,
     const uint32_t *leaf_parents, const LeafPointers *leaf_pointers,
     TailorCoefficients *m2m_f32_coefficients, const uint32_t leaf_count,
     uint32_t *atomic_counters) {
@@ -68,7 +68,7 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
         child_center =
             leaf_aabb.center_of_mass.get(leaf_aabb.min, leaf_aabb.diagonal());
         child_coefficients =
-            TailorCoefficients::from_bf16(leaf_coefficients[leaf_idx]);
+            TailorCoefficients::from_f16(leaf_coefficients[leaf_idx]);
       } else {
         uint32_t child_idx = node.child_base + internal_child_count;
         internal_child_count++;
@@ -186,7 +186,7 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
 
 void compute_internal_tailor_coefficients_m2m(
     BVH8Node *nodes, const uint32_t *internal_parent_map,
-    const AABB *leaf_aabbs, const TailorCoefficientsBf16 *leaf_coefficients,
+    const AABB *leaf_aabbs, const TailorCoefficientsF16 *leaf_coefficients,
     const uint32_t *leaf_parents, const LeafPointers *leaf_pointers,
     TailorCoefficients *m2m_f32_coefficients, const uint32_t leaf_count,
     uint32_t *atomic_counters, const cudaStream_t &stream) {

@@ -251,7 +251,7 @@ __device__ __forceinline__ auto warp_reduce_add_down(float val) -> float {
 template <IsGeometry Geometry>
 __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
     const SoAView<Geometry> sorted_geometry,
-    TailorCoefficientsBf16 *leaf_coefficients, const uint32_t leaf_count,
+    TailorCoefficientsF16 *leaf_coefficients, const uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, uint32_t *atomic_counters,
     const uint32_t geometry_count) {
@@ -444,7 +444,7 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
 template <IsGeometry Geometry>
 void populate_binary_tree_aabb_and_leaf_coefficients(
     const float *__restrict__ sorted_geometry,
-    TailorCoefficientsBf16 *leaf_coefficients, const uint32_t leaf_count,
+    TailorCoefficientsF16 *leaf_coefficients, const uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, uint32_t *atomic_counters,
     const uint32_t geometry_count, const cudaStream_t &stream) {
@@ -465,14 +465,14 @@ void populate_binary_tree_aabb_and_leaf_coefficients(
 // Tell the compiler to generate the code for these types
 template void populate_binary_tree_aabb_and_leaf_coefficients<PointNormal>(
     const float *__restrict__ sorted_geometry,
-    TailorCoefficientsBf16 *leaf_coefficients, uint32_t leaf_count,
+    TailorCoefficientsF16 *leaf_coefficients, uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, uint32_t *atomic_counters,
     uint32_t geometry_count, const cudaStream_t &stream);
 
 template void populate_binary_tree_aabb_and_leaf_coefficients<Triangle>(
     const float *__restrict__ sorted_geometry,
-    TailorCoefficientsBf16 *leaf_coefficients, uint32_t leaf_count,
+    TailorCoefficientsF16 *leaf_coefficients, uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, uint32_t *atomic_counters,
     uint32_t geometry_count, const cudaStream_t &stream);

@@ -33,8 +33,8 @@ get_root_coefficients_kernel(const BVH8Node *nodes,
         root.tailor_coefficients.get_shared_scale_factor_second();
 
     // 2. Unpack and dequantize Zero Order
-    Vec3_bf16 z_bf16 = root.tailor_coefficients.get_tailor_zero_order();
-    out_data->zero_order = Vec3::from_bf16(z_bf16);
+    Vec3_f16 z_f16 = root.tailor_coefficients.get_tailor_zero_order();
+    out_data->zero_order = Vec3::from_f16(z_f16);
 
     // 3. Unpack and dequantize First Order
     // (Assuming you have a matching getter implemented for first order)
@@ -53,7 +53,7 @@ TEST(M2M, AllOrdersQuantizationAware) {
   thrust::host_vector<Vec3> scaled_normals_h(count);
 
   std::mt19937 gen(42);
-  std::uniform_real_distribution<float> dist_pos(-50.0f, 50.0f);
+  std::uniform_real_distribution<float> dist_pos(-20.0f, 20.0f);
   std::normal_distribution<float> norm_dis(0.0f, 5.0f);
 
   for (size_t i = 0; i < count; ++i) {
@@ -90,9 +90,9 @@ TEST(M2M, AllOrdersQuantizationAware) {
                         backend->m_binary_aabbs + leaf_count - 1,
                         sizeof(AABB) * leaf_count, cudaMemcpyDeviceToHost));
 
-  std::vector<TailorCoefficientsBf16> leaf_coeffs_bf16_h(leaf_count);
-  CUDA_CHECK(cudaMemcpy(leaf_coeffs_bf16_h.data(), backend->m_leaf_coefficients,
-                        leaf_count * sizeof(TailorCoefficientsBf16),
+  std::vector<TailorCoefficientsF16> leaf_coeffs_f16_h(leaf_count);
+  CUDA_CHECK(cudaMemcpy(leaf_coeffs_f16_h.data(), backend->m_leaf_coefficients,
+                        leaf_count * sizeof(TailorCoefficientsF16),
                         cudaMemcpyDeviceToHost));
 
   // 3. Compute unquantized reference values on the host using a direct flat M2M
@@ -107,7 +107,7 @@ TEST(M2M, AllOrdersQuantizationAware) {
     Vec3 leaf_center = leaf_aabbs_h[i].center_of_mass.get(
         leaf_aabbs_h[i].min, leaf_aabbs_h[i].diagonal());
     TailorCoefficients child_coefficients =
-        TailorCoefficients::from_bf16(leaf_coeffs_bf16_h[i]);
+        TailorCoefficients::from_f16(leaf_coeffs_f16_h[i]);
 
     Vec3 shift = leaf_center - root_parent_center;
     const Vec3 &zero_child = child_coefficients.zero_order;

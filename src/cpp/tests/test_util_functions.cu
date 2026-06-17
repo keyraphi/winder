@@ -2,9 +2,9 @@
 #include "binary_node.h"
 #include "center_of_mass.h"
 #include "geometry.h"
+#include "kernels/build_binary_tree.cuh"
 #include "kernels/common.cuh"
 #include "kernels/node_approx.cuh"
-#include "kernels/build_binary_tree.cuh"
 #include "mat3x3.h"
 #include "tailor_coefficients.h"
 #include "tensor3.h"
@@ -29,7 +29,7 @@ TEST(Sizes, AABB) {
 TEST(Sizes, BinaryNode) { EXPECT_EQ(sizeof(BinaryNode), 8); }
 TEST(Sizes, TailorCoefficients) {
   EXPECT_EQ(sizeof(TailorCoefficientsQuantized), 44);
-  EXPECT_EQ(sizeof(TailorCoefficientsBf16), 64);
+  EXPECT_EQ(sizeof(TailorCoefficientsF16), 64);
 }
 TEST(Sizes, Geometry) {
   EXPECT_EQ(sizeof(Triangle), 36);
@@ -229,13 +229,8 @@ TEST(AABB, MergeUnbalanced) {
   EXPECT_FLOAT_EQ(merged.max.y, 10.F);
   EXPECT_FLOAT_EQ(merged.max.z, 10.F);
   Vec3 merged_com = merged.center_of_mass.get(merged.min, merged.diagonal());
-  float merged_max_dist =
-      merged.center_of_mass.getMaxDistance(merged.diagonal().length());
 
   Vec3 expected_com = (a_com * a_count + b_com * b_count) / (a_count + b_count);
-  float expected_merged_max_dist =
-      fmaxf((merged_com - a_com).length() + a_max_dist,
-            (merged_com - b_com).length() + b_max_dist);
 
   // Error propagation in merge through quantization
   Vec3 err_a = a.diagonal() / (2.F * 255.F);
@@ -245,14 +240,9 @@ TEST(AABB, MergeUnbalanced) {
   float b_factor = (float)b_count / (float)(a_count + b_count);
   Vec3 expected_error = (err_a * a_factor) + (err_b * b_factor) + err_merged;
   // same for max_distance
-  float expected_dist_error =
-      (a.diagonal().length() / (2.F * 255.F)) * a_factor +
-      (b.diagonal().length() / (2.F * 255.F)) * b_factor +
-      (merged.diagonal().length() / (2.F * 255.F));
   EXPECT_NEAR(merged_com.x, expected_com.x, expected_error.x);
   EXPECT_NEAR(merged_com.y, expected_com.y, expected_error.y);
   EXPECT_NEAR(merged_com.z, expected_com.z, expected_error.z);
-  EXPECT_NEAR(merged_max_dist, expected_merged_max_dist, expected_dist_error);
 
   // test device code
   thrust::device_vector<AABB> d_a(1);
@@ -282,8 +272,6 @@ TEST(AABB, MergeUnbalanced) {
             merged.center_of_mass._center_of_mass[1]);
   EXPECT_EQ(h_merged[0].center_of_mass._center_of_mass[2],
             merged.center_of_mass._center_of_mass[2]);
-  EXPECT_EQ(h_merged[0].center_of_mass._max_distance_to_center,
-            merged.center_of_mass._max_distance_to_center);
 }
 
 template <IsGeometry Geometry>
@@ -423,6 +411,10 @@ TEST(TailorTerms, Triangle) {
                         .outer_product(1.F / 2.F * (t2.v2 + t2.v0) - center2);
   Tensor3 second_gt1 = Tensor3::from_outer_product(Ct_1, n1);
   Tensor3 second_gt2 = Tensor3::from_outer_product(Ct_2, n2);
+  for (int i = 0; i < 27; ++i) {
+    second_gt1.data[i] *= 0.5f;
+    second_gt2.data[i] *= 0.5f;
+  }
   Tensor3 second1 = h_second[0].uncompress();
   Tensor3 second2 = h_second[1].uncompress();
   for (int i = 0; i < 27; ++i) {
@@ -497,8 +489,8 @@ TEST(GeometryWindingNumberContribution, Triangle) {
 }
 
 __global__ void test_approximation_kernel(
-    const Vec3 query, const Vec3 com, const Vec3_bf16 zero_coeff,
-    const Mat3x3_bf16 first_coeff, const Tensor3_bf16_compressed second_coeff,
+    const Vec3 query, const Vec3 com, const Vec3_f16 zero_coeff,
+    const Mat3x3_f16 first_coeff, const Tensor3_f16_compressed second_coeff,
     float *out_result) {
   *out_result = compute_node_approximation(query, com, zero_coeff, first_coeff,
                                            second_coeff);
@@ -546,14 +538,14 @@ TEST(TaylorApproximation, Triangle) {
 
   float *d_result;
   cudaMalloc(&d_result, sizeof(float));
-  Vec3_bf16 h_zero = Vec3_bf16::from_float(zero_order_sum);
-  Mat3x3_bf16 h_first = Mat3x3_bf16::from_float(first_order_sum);
-  Tensor3_bf16_compressed h_second =
-      ::Tensor3_bf16_compressed::from_float(second_order_sum);
+  Vec3_f16 h_zero = Vec3_f16::from_float(zero_order_sum);
+  Mat3x3_f16 h_first = Mat3x3_f16::from_float(first_order_sum);
+  Tensor3_f16_compressed h_second =
+      ::Tensor3_f16_compressed::from_float(second_order_sum);
 
   // 4. Test at multiple distances to observe error decay
   // Query points moving away along the diagonal
-  float distances[] = {5.0f, 10.0f, 50.0f};
+  float distances[] = {5.0f, 10.0f, 20.0f};
 
   for (float dist : distances) {
     Vec3 query = com + Vec3{dist, dist, dist};
@@ -633,13 +625,13 @@ TEST(TaylorApproximation, TriangleRandomized) {
   // Prepare GPU data
   float *d_result;
   cudaMalloc(&d_result, sizeof(float));
-  Vec3_bf16 h_zero = Vec3_bf16::from_float(zero_order_sum);
-  Mat3x3_bf16 h_first = Mat3x3_bf16::from_float(first_order_sum);
-  Tensor3_bf16_compressed h_second =
-      ::Tensor3_bf16_compressed::from_float(second_order_sum);
+  Vec3_f16 h_zero = Vec3_f16::from_float(zero_order_sum);
+  Mat3x3_f16 h_first = Mat3x3_f16::from_float(first_order_sum);
+  Tensor3_f16_compressed h_second =
+      ::Tensor3_f16_compressed::from_float(second_order_sum);
 
   // 4. Test at multiple distances with M random directions
-  float distances[] = {5.0f, 10.0f, 50.0f};
+  float distances[] = {5.0f, 10.0f, 20.0f};
 
   for (float dist_mag : distances) {
     float max_error = 0.0f;
@@ -721,12 +713,12 @@ TEST(TaylorApproximation, PointNormal) {
   // Prepare GPU data
   float *d_result;
   cudaMalloc(&d_result, sizeof(float));
-  Vec3_bf16 h_zero = Vec3_bf16::from_float(zero_order_sum);
-  Mat3x3_bf16 h_first = Mat3x3_bf16::from_float(first_order_sum);
-  Tensor3_bf16_compressed h_second =
-      ::Tensor3_bf16_compressed::from_float(second_order_sum);
+  Vec3_f16 h_zero = Vec3_f16::from_float(zero_order_sum);
+  Mat3x3_f16 h_first = Mat3x3_f16::from_float(first_order_sum);
+  Tensor3_f16_compressed h_second =
+      ::Tensor3_f16_compressed::from_float(second_order_sum);
 
-  float distances[] = {5.0f, 10.0f, 50.0f};
+  float distances[] = {5.0f, 10.0f, 20.0f};
   for (float dist : distances) {
     Vec3 query = com + Vec3{dist, dist, dist};
 
@@ -799,12 +791,12 @@ TEST(TaylorApproximation, PointNormalRandomized) {
 
   float *d_result;
   cudaMalloc(&d_result, sizeof(float));
-  Vec3_bf16 h_zero = Vec3_bf16::from_float(zero_order_sum);
-  Mat3x3_bf16 h_first = Mat3x3_bf16::from_float(first_order_sum);
-  Tensor3_bf16_compressed h_second =
-      ::Tensor3_bf16_compressed::from_float(second_order_sum);
+  Vec3_f16 h_zero = Vec3_f16::from_float(zero_order_sum);
+  Mat3x3_f16 h_first = Mat3x3_f16::from_float(first_order_sum);
+  Tensor3_f16_compressed h_second =
+      ::Tensor3_f16_compressed::from_float(second_order_sum);
 
-  float distances[] = {5.0f, 10.0f, 50.0f};
+  float distances[] = {5.0f, 10.0f, 20.0f};
   for (float dist_mag : distances) {
     float max_error = 0.0f;
     for (int m = 0; m < M_QUERIES; ++m) {

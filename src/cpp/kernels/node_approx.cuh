@@ -44,7 +44,7 @@ __device__ __forceinline__ auto to_bits(const half2 f16x2) -> uint32_t {
   return result;
 }
 
-__device__ __forceinline__ auto to_bits(const half2 f16) -> short {
+__device__ __forceinline__ auto to_bits(const half f16) -> short {
   short result = *(short *)&f16;
   return result;
 }
@@ -159,7 +159,7 @@ computeSecondOrderContribution(const Tensor3_f16_compressed &C,
                                const half inv_r5, // 3.0f / (4pi * |r|^5)
                                const half inv_r7  // 15.0f / (4pi * |r|^7)
                                ) -> float {
-  const hal two = __float2half(2.0f);
+  const half two = __float2half(2.0f);
 
   // Vector Trace V
   // Cxxx+Cxyy+Cxzz

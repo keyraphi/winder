@@ -34,7 +34,7 @@ struct TailorCoefficientsQuantized {
   __device__ inline auto get_tailor_first_order() const -> Mat3x3_f16;
 
   __device__ inline auto
-  get_tailor_second_order() const -> Tesor3_f16_compressed;
+  get_tailor_second_order() const -> Tensor3_f16_compressed;
 };
 
 // For leaf nodes
@@ -42,7 +42,7 @@ struct TailorCoefficientsQuantized {
 struct TailorCoefficientsF16 {
   Vec3_f16 zero_order;
   Mat3x3_f16 first_order;
-  Tesor3_f16_compressed second_order;
+  Tensor3_f16_compressed second_order;
   // 60 bytes
   CenterOfMass_quantized center_of_mass; // 4 bytes
 };
@@ -72,8 +72,6 @@ struct TailorCoefficients {
 #include <cuda_runtime_api.h>
 #include <sys/types.h>
 #include <vector_types.h>
-
-#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800)
 
 #define STR_HELPER(x) #x
 #define TO_STR(x) STR_HELPER(x)
@@ -273,7 +271,7 @@ __device__ __forceinline__ auto unpack_f16(uint32_t selector, uint32_t shift,
                "}"
                : "=h"(out_reg)
                : "r"(in_a), "r"(in_b), "r"(selector), "r"(shift), "f"(scale));
-  return reinterpret_cast<half &>(out_reg);
+  return __ushort_as_half(out_reg);
 }
 
 __device__ inline auto

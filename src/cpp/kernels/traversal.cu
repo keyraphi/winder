@@ -65,7 +65,7 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
     const uint32_t *__restrict__ sort_indirections,
     const BVH8Node *__restrict__ bvh8_nodes,
     const LeafPointers *__restrict__ bvh8_leaf_pointers,
-    const TailorCoefficientsBf16 *__restrict__ leaf_coefficients,
+    const TailorCoefficientsF16 *__restrict__ leaf_coefficients,
     const SoAView<Geometry> sorted_geometry, const uint32_t query_count,
     const uint32_t geometry_count, float *__restrict__ winding_numbers,
     uint32_t *__restrict__ global_device_counter, const float beta_2,
@@ -160,13 +160,13 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
                            my_query, current_node.parent_aabb, beta_2)) {
         // tailor_coefficients dequantization
         // Zero Order
-        Vec3_bf16 zero_order_coeff =
+        Vec3_f16 zero_order_coeff =
             current_node.tailor_coefficients.get_tailor_zero_order();
         // First Order
-        Mat3x3_bf16 first_order_coeff =
+        Mat3x3_f16 first_order_coeff =
             current_node.tailor_coefficients.get_tailor_first_order();
         // Second order
-        Tensor3_bf16_compressed second_order_coeff =
+        Tensor3_f16_compressed second_order_coeff =
             current_node.tailor_coefficients.get_tailor_second_order();
 
         // Do approximation
@@ -213,7 +213,7 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
           bool is_detail_eval_needed = true;
           if (is_still_active &&
               should_leaf_node_be_approximated(my_query, child_aabb, beta_2)) {
-            const TailorCoefficientsBf16 &current_leaf_coefficients =
+            const TailorCoefficientsF16 &current_leaf_coefficients =
                 leaf_coefficients[leaf_idx];
             const Vec3 leaf_center_of_mass =
                 current_leaf_coefficients.center_of_mass.get(

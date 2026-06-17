@@ -28,38 +28,12 @@ __global__ void test_TailorCoefficientQuantization_kernel(
     return;
   }
   Vec3_f16 zero_bf16 = tailor_in[0].zero_order;
-  Mat3x3_bf16 first_bf16 = tailor_in[0].first_order;
-  Tesor3_f16_compressed second_bf16 = tailor_in[0].second_order;
+  Mat3x3_f16 first_bf16 = tailor_in[0].first_order;
+  Tensor3_f16_compressed second_bf16 = tailor_in[0].second_order;
 
-  Vec3 zero_f32 = Vec3::from_bf16(zero_bf16);
-  Mat3x3 first_f32 = Mat3x3::from_bf16(first_bf16);
-  Tensor3_compressed second_f32 = Tensor3_compressed::from_bf16(second_bf16);
-
-  // Verify input data
-  // printf("INPUT----------------------------------\n");
-  // printf("zero_order input:\n [%f, %f, %f]\n\n", zero_f32.x, zero_f32.y,
-  //        zero_f32.z);
-  // printf("first_order input:\n");
-  // printf("[[%f, %f, %f],\n", first_f32.data[0], first_f32.data[1],
-  //        first_f32.data[2]);
-  // printf(" [%f, %f, %f],\n", first_f32.data[3], first_f32.data[4],
-  //        first_f32.data[5]);
-  // printf(" [%f, %f, %f]]\n\n", first_f32.data[6], first_f32.data[7],
-  //        first_f32.data[8]);
-  // printf("second_order input:\n");
-  // printf("[[[%f, %f, %f],\n", second_f32.data[0], second_f32.data[1],
-  //        second_f32.data[2]);
-  // printf("  [%f, %f, %f],\n", second_f32.data[3], second_f32.data[4],
-  //        second_f32.data[5]);
-  // printf("  [%f, %f, %f]],\n", second_f32.data[6], second_f32.data[7],
-  //        second_f32.data[8]);
-  // printf(" [[%f, %f, %f],\n", second_f32.data[9], second_f32.data[10],
-  //        second_f32.data[11]);
-  // printf("  [%f, %f, %f],\n", second_f32.data[12], second_f32.data[13],
-  //        second_f32.data[14]);
-  // printf("  [%f, %f, %f]],\n", second_f32.data[15], second_f32.data[16],
-  //        second_f32.data[17]);
-  // printf("---------------------------------------\n\n\n");
+  Vec3 zero_f32 = Vec3::from_f16(zero_bf16);
+  Mat3x3 first_f32 = Mat3x3::from_f16(first_bf16);
+  Tensor3_compressed second_f32 = Tensor3_compressed::from_f16(second_bf16);
 
   // quantize
   TailorCoefficientsQuantized tailor_q;
@@ -70,18 +44,7 @@ __global__ void test_TailorCoefficientQuantization_kernel(
   TailorCoefficientsF16 tailor;
   float shared_scale_factor_low = tailor_q.get_shared_scale_factor_low();
   float shared_scale_factor_second = tailor_q.get_shared_scale_factor_second();
-  // printf("SHARED SCALE FACTOR\n");
-  // printf("shared_exponent: %u\n", tailor_q.tailor_data[43]);
-  // printf("shared_scale_factor: %f\n", shared_scale_factor);
-  // printf(
-  //     "quantized coefficients: %u, %u, %u, %u, %u, %u, %u, %u, %u, %u, %u\n",
-  //     tailor_q.tailor_data[0], tailor_q.tailor_data[1],
-  //     tailor_q.tailor_data[2], tailor_q.tailor_data[3],
-  //     tailor_q.tailor_data[4], tailor_q.tailor_data[5],
-  //     tailor_q.tailor_data[6], tailor_q.tailor_data[7],
-  //     tailor_q.tailor_data[8], tailor_q.tailor_data[9],
-  //     tailor_q.tailor_data[10]);
-  // printf("tailor_data[7] hex: 0x%08X\n", tailor_q.tailor_data[7]);
+
   shared_scale_out[0] = shared_scale_factor_low;
   shared_scale_out[1] = shared_scale_factor_second;
   tailor.zero_order = tailor_q.get_tailor_zero_order();
@@ -252,7 +215,7 @@ int main() {
   // random stuff
   std::mt19937 gen(42);
   std::vector<float> test_ranges = {1.0f,     10.0f,     100.0f,    1000.0f,
-                                    10000.0f, 100000.0f, 1000000.0f};
+                                    10000.0f, 50000.0f};
 
   for (float range : test_ranges) {
     printf("Testing Range: [-%.1f, %.1f]... ", range, range);

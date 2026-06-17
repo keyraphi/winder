@@ -11,7 +11,7 @@ template <IsGeometry Geometry> struct ComputeWindingNumbersParams {
   const uint32_t *sort_indirections;
   const BVH8Node *bvh8_nodes;
   const LeafPointers *bvh8_leaf_pointers;
-  const TailorCoefficientsBf16 *leaf_coefficients;
+  const TailorCoefficientsF16 *leaf_coefficients;
   const SoAView<Geometry> sorted_geometry;
   uint32_t query_count;
   uint32_t geometry_count;
