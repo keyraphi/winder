@@ -37,6 +37,11 @@ public:
 };
 
 struct CudaDeleter {
+  size_t stream = 0; // Plain integer data type, safe for pure C++
+
+  // Constructor to make initialization clean
+  explicit CudaDeleter(size_t stream_ptr = 0) : stream(stream_ptr) {}
+
   void operator()(void *ptr) const;
 };
 
@@ -48,12 +53,12 @@ public:
   ~WinderBackend();
 
   static auto CreateFromTriangles(const float *triangles, size_t triangle_count,
-                             int device_id)
+                                  int device_id)
       -> std::unique_ptr<WinderBackend<Triangle>>;
 
   static auto CreateFromMesh(const float *vertices, size_t vertex_count,
-      const uint32_t *triangle_indices, size_t triangle_count,
-                             int device_id)
+                             const uint32_t *triangle_indices,
+                             size_t triangle_count, int device_id)
       -> std::unique_ptr<WinderBackend<Triangle>>;
 
   static auto CreateFromPoints(const float *points, const float *scaled_normals,
@@ -68,8 +73,8 @@ public:
                float epsilon = -1, size_t stream = 0) const
       -> CudaUniquePtr<float>;
 
-  auto brute_force(const float *queries, size_t query_count, float epsilon=-1,  size_t stream = 0) const
-      -> CudaUniquePtr<float>;
+  auto brute_force(const float *queries, size_t query_count, float epsilon = -1,
+                   size_t stream = 0) const -> CudaUniquePtr<float>;
 
   [[nodiscard]] auto get_normals() const -> CudaUniquePtr<float>;
   [[nodiscard]] auto grad_normals(const float *grad_output,
@@ -94,11 +99,10 @@ public:
 
 private:
   int m_device;
-  cudaStream_t m_stream_0, m_stream_1;
+  cudaStream_t m_build_stream;
   cudaEvent_t m_start_tree_construction_event;
   cudaEvent_t m_tree_construction_finished_event;
-  thrust::cuda_cub::execute_on_stream m_stream_0_policy;
-  thrust::cuda_cub::execute_on_stream m_stream_1_policy;
+  thrust::cuda_cub::execute_on_stream m_build_stream_policy;
 
   // Private constructor used in factories. Allocates vectors but doesn't fill
   // them yet
@@ -107,12 +111,11 @@ private:
 public: // TODO DEBUG  make private!
   const size_t m_count;
 
-
   // --- Geometric Data & Permutation Maps ---
-  uint32_t *m_to_internal;     // [N] Map: Original index -> Morton sorted index
-  float *m_sorted_geometry;    // [N] Interleaved P and N (or Triangles)
+  uint32_t *m_to_internal;  // [N] Map: Original index -> Morton sorted index
+  float *m_sorted_geometry; // [N] Interleaved P and N (or Triangles)
 
-  AABB *m_binary_aabbs;        // [2L-1] AABBs for all binary nodes/leaves
+  AABB *m_binary_aabbs; // [2L-1] AABBs for all binary nodes/leaves
   uint32_t
       *m_bvh8_node_count; // [1] number of bvh8 nodes created during conversion
 
@@ -129,5 +132,6 @@ public: // TODO DEBUG  make private!
 private: // TODO DEBUG
   // private helpers
   template <IsPrimitiveGeometry PrimitiveGeometry>
-  auto initializeMortonCodes(const PrimitiveGeometry *geometry, uint64_t *geometry_morton_codes) -> void;
+  auto initializeMortonCodes(const PrimitiveGeometry *geometry,
+                             uint64_t *geometry_morton_codes) -> void;
 };

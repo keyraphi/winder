@@ -423,7 +423,7 @@ def create_vis_points(
 
             print("Computing winding numbers with WINDER...")
             start_time = time()
-            winding_numbers = engine.compute(query_list_block_torch)
+            winding_numbers = engine.compute(query_list_block_torch, stream=torch.cuda.current_stream().cuda_stream)
             torch.cuda.synchronize()
             end_time = time()
             duration = end_time - start_time
@@ -464,7 +464,7 @@ def create_vis_points(
 
             print("Computing winding numbers with WINDER BRUTE FORCE...")
             start_time = time()
-            winding_numbers = engine.brute_force(query_list_block_torch)
+            winding_numbers = engine.brute_force(query_list_block_torch, stream=torch.cuda.current_stream().cuda_stream)
             torch.cuda.synchronize()
             end_time = time()
             duration = end_time - start_time

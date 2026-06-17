@@ -45,6 +45,11 @@ auto scalar_with_default(const std::optional<Scalar_t> &maybe_pc_wn,
 
 } // namespace winder_cuda
 
+struct AsyncCleanupGlue {
+    float *ptr;
+    CudaDeleter deleter;
+};
+
 class WinderEngine {
 public:
   // --- Triangle Mesh Constructor ---
@@ -150,10 +155,17 @@ public:
       raw_ptr_unique =
           m_impl_pn->compute(queries.data(), n, beta, epsilon, stream);
     }
-    float *raw_ptr = raw_ptr_unique.release();
-    nb::capsule owner(
-        raw_ptr, [](void *p) noexcept -> void { winder_cuda::cuda_free(p); });
 
+    CudaDeleter deleter = raw_ptr_unique.get_deleter();
+    float *raw_ptr = raw_ptr_unique.release();
+
+    auto *glue = new AsyncCleanupGlue{raw_ptr, deleter};
+
+    nb::capsule owner(glue, [](void *p) noexcept -> void {
+        auto *g = static_cast<AsyncCleanupGlue *>(p);
+        g->deleter(g->ptr);
+        delete g;
+    }); 
     return {raw_ptr, {n}, owner};
   }
 
@@ -170,9 +182,16 @@ public:
       raw_ptr_unique =
           m_impl_pn->brute_force(queries.data(), n, epsilon, stream);
     }
+    CudaDeleter deleter = raw_ptr_unique.get_deleter();
     float *raw_ptr = raw_ptr_unique.release();
-    nb::capsule owner(raw_ptr,
-                      [](void *p) noexcept { winder_cuda::cuda_free(p); });
+
+    auto *glue = new AsyncCleanupGlue{raw_ptr, deleter};
+
+    nb::capsule owner(glue, [](void *p) noexcept -> void {
+        auto *g = static_cast<AsyncCleanupGlue *>(p);
+        g->deleter(g->ptr);
+        delete g;
+    }); 
 
     return {raw_ptr, {n}, owner};
   }
@@ -353,6 +372,24 @@ NB_MODULE(winder_module, m) {
                 ----------
                 queries : Array
                     (N, 3) CUDA array of query points.
+                beta    : float
+                    Scalar that controlls the degree of approximation.
+                    Larger beta leads to more precise results, but also slower execution.
+                    Use any negative number to get default values.
+                    Default for point clouds is 2.0.
+                    Default flor triangles is 2.3
+                epsilon : float, optional
+                    Regularization scale (smoothing radius) used to prevent numerical 
+                    singularities (NaN/infinity) when queries land near points in point clouds.
+                    Only applies to point cloud backends.
+                    - distance >= 2*epsilon: Acts as standard unregularized potential.
+                    - distance < 2*epsilon: Smoothly dampens potential to a finite maximum.
+                    Use any negative number to use the default value (1/250).
+                stream  : int, optional
+                    The raw 64-bit identifier (handle) of a CUDA stream. 
+                    Allows enqueuing operations asynchronously within deep learning frameworks.
+                    For example, in PyTorch pass: `torch.cuda.current_stream().cuda_stream`.
+                    Default is 0 (the default/null stream).
 
                 Returns
                 -------
@@ -371,6 +408,18 @@ NB_MODULE(winder_module, m) {
                 ----------
                 queries : Array
                     (N, 3) CUDA array of query points.
+                epsilon : float, optional
+                    Regularization scale (smoothing radius) used to prevent numerical 
+                    singularities (NaN/infinity) when queries land near points in point clouds.
+                    Only applies to point cloud backends.
+                    - distance >= 2*epsilon: Acts as standard unregularized potential.
+                    - distance < 2*epsilon: Smoothly dampens potential to a finite maximum.
+                    Use any negative number to use the default value (1/250).
+                stream  : int, optional
+                    The raw 64-bit identifier (handle) of a CUDA stream. 
+                    Allows enqueuing operations asynchronously within deep learning frameworks.
+                    For example, in PyTorch pass: `torch.cuda.current_stream().cuda_stream`.
+                    Default is 0 (the default/null stream).
 
                 Returns
                 -------
@@ -406,6 +455,7 @@ NB_MODULE(winder_module, m) {
                 ----
                 If the engine was initialized in Triangle Mesh mode, this returns 
                 an array of zeros as normals are not primary inputs.
+                SUBJECT TO CHANGE
             )doc")
 
       .def("grad_points", &WinderEngine::get_grad_points, "grad_output"_a,
@@ -432,9 +482,9 @@ NB_MODULE(winder_module, m) {
                     
                 Note
                 ----
-                For point clouds, this computes the gradient of the dipole potential.
-                For meshes, this computes the gradient of the signed solid angle 
-                with respect to triangle vertices.
+                For point clouds, this computes the gradient w.r.t. point positions.
+                For meshes, this computes the gradient w.r.t triangle vertice positions.
+                SUBJECT TO CHANGE
             )doc")
 
       // --- Utilities ---
