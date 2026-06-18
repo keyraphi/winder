@@ -822,14 +822,13 @@
                 <strong class="text-slate-900">Winder:</strong> Our production pipeline, evaluating highly optimized
                 accelerated tracking steps across an 8-way bounding volume hierarchy.
             </li>
-            <!-- <li> -->
-            <!--     <strong class="text-slate-900">Winder (Zero-Order):</strong> An isolated architectural variant branch running -->
-            <!--     exclusively with <code class="font-mono bg-slate-200/60 px-1 rounded">bfloat16</code> zero-order coefficients. This -->
-            <!--     variant uses our custom Morton-coded BVH8 layout with 32-leaf primitive clustering to isolate the precise cost of -->
-            <!--     second-order calculations versus structural spatial transformations against standard offline octrees. -->
-            <!-- </li> -->
             <li>
-                <strong class="text-slate-900">PyTorch (Native):</strong> A raw reference implementation utilizing optimized
+                <strong class="text-slate-900">Winder float16:</strong> 
+                Results from the float16 branch. The main branch currently still uses bfloat16, which leads to more quantization noise and thus higher errors.
+                This branch will be merged to main later because the results are better.
+            </li>
+            <li>
+                <strong class="text-slate-900">PyTorch:</strong> A raw reference implementation utilizing optimized
                 calculations via compiled execution loops (<code class="font-mono bg-slate-200/60 px-1 rounded">torch.compile</code>).
             </li>
             <li>
