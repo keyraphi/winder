@@ -50,7 +50,7 @@
     <header class="bg-gradient-to-b from-slate-900 to-slate-800 text-white pt-16 pb-12 px-4 shadow-md">
         <div class="max-w-5xl mx-auto text-center">
             <span class="bg-cyan-500 text-slate-900 text-xs font-bold uppercase tracking-widest px-3 py-1 rounded-full">Technical Report</span>
-            <h1 class="text-4xl md:text-5xl font-extrabold mt-4 mb-3 tracking-tight">Tree Winder</h1>
+            <h1 class="text-4xl md:text-5xl font-extrabold mt-4 mb-3 tracking-tight">Winder</h1>
             <p class="text-xl md:text-2xl text-slate-300 font-light max-w-3xl mx-auto mb-8">
                 A Library for Fully Differentiable Fast Winding Number Fields on GPU
             </p>
@@ -94,9 +94,9 @@
             </h2>
             <div class="prose prose-slate max-w-none text-slate-600 leading-relaxed space-y-4">
                 <p>
-                    Computing spatial queries—such as determining whether a localized query coordinate sits inside or outside an arbitrary
-                    geometric shell—is a foundational requirement in geometric processing, 3D computer vision, and physical simulators.
-                    Traditionally, this is straightforward for watertight, perfectly clean manifold topologies. However, raw real-world data
+                    Determining whether a query coordinate is inside or outside an arbitrary
+                    geometric shell is a foundational requirement in geometric processing, 3D computer vision, and physical simulations.
+                    This is straightforward for watertight, perfectly clean manifold topologies. However, raw real-world data
                     presents severe challenges, often appearing as fractured triangle soups, open boundaries, or raw unorganized point arrays.
                 </p>
                 <p>
@@ -114,7 +114,7 @@
                     infinitesimal area element.
                 </p>
                 <p>
-                    When dealing with digital geometry, this continuous formulation must be discretized. For standard <strong>Triangle
+                    When dealing with digital geometry, this continuous formulation ist discretized. For standard <strong>Triangle
                       Soups</strong> (unoriented, non-manifold, or disconnected meshes), the total winding number at query site $x$ is
                     evaluated as the sum of signed solid angles $\Omega_t$ subtended by each individual triangle $t$ within the collection
                     $\mathcal{T}$:
@@ -174,15 +174,15 @@
               </div>
 
                 <p>
-                    For raw <strong>Point Clouds</strong> lacking explicit connectivity, the surface is treated as a distribution of point
+                    For <strong>Point Clouds</strong> lacking explicit connectivity, the surface is treated as a distribution of point
                     dipoles. The continuous integration reduces to a discrete sum over point samples $i$:
                 </p>
                 <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
                     $$\mathcal{W}_{\text{points}}(x) = \frac{1}{4\pi} \sum_{i} \frac{(p_i - x) \cdot n_i}{\|p_i - x\|^3} a_i$$
                 </div>
                 <p>
-                    Where $p_i$ represents the 3D spatial position of point sample $i$, $n_i$ represents its oriented unit normal vector,
-                    and $a_i$ denotes the localized surface area weight associated with that sample.
+                    Where $p_i$ represents the 3D spatial position of point sample $i$, $n_i$ represents its orientation unit normal vector,
+                    and $a_i$ denotes the surface area associated with that sample.
                 </p>
 
               <div class="my-8">
@@ -249,13 +249,11 @@
                     turns into a serious bottleneck in any pipeline.
                 </p>
                 <p>
-                    To mitigate this, earlier spatial indexing approaches attempted to use exact hierarchical structures. Notably, the
-                    divide-and-conquer framework introduced by <a href="https://dl.acm.org/doi/10.1145/2461912.2461916" target="_blank"
+                    To mitigate this, <a href="https://dl.acm.org/doi/10.1145/2461912.2461916" target="_blank"
                       class="text-cyan-600 font-medium hover:underline">Jacobson et al. (2013)</a> leverages a bounding volume hierarchy
                     (BVH) to group together manifold sub parts of the mesh. However, this method's algorithmic performance is highly
                     dependent on clean, continuous mesh connectivity. When confronted with unoriented triangle soups, disconnected
-                    components, or broken
-                    geometry boundaries, their traversal can break down under worst-case inputs, degrading directly back to a
+                    components, or broken geometry boundaries, their traversal can break down under worst-case inputs, degrading directly back to a
                     brute-force $\mathcal{O}(nm)$ summation loop. This limitation makes large-scale processing of raw, non-manifold
                     assets highly inefficient.
                 </p>
@@ -264,9 +262,9 @@
                 <p>
                     To resolve this scaling wall, <a href="https://dl.acm.org/doi/10.1145/3197517.3201337" target="_blank"
                       class="text-cyan-600 font-medium hover:underline">Barill et al. (2018)</a> introduced the <strong>Fast Winding
-                      Numbers</strong> framework. This methodology shifts the problem from an exact evaluation to a carefully constructed,
-                    hierarchical approximation. It is a tree-based algorithm in the Barnes-Hut family and builds a spatial hierarchy
-                    (such as an octree) to group distant geometric zones into structured bounding cells.
+                      Numbers</strong> framework. This method utilizes the fact that the influence of a geometry elment quickly decays with increasing distance.
+                    The algorithm is a tree based Barnes-Hut algorithm and builds a spatial hierarchy
+                    (such as an octree) to group geometry into hierarchical clusters.
                 </p>
                 <p>
                     Instead of computing contribution from individual geometry elements in the far-field, the collective contribution of a
@@ -277,9 +275,9 @@
                     overhead and relies on strict structural distributions that raw surface point distributions rarely satisfy.
                 </p>
                 <p>
-                The core breakthrough of the <strong>Fast Winding Numbers</strong> approach lies in treating the evaluation of a cluster
-                of area-weighted dipoles as a truncated <strong>Taylor series expansion</strong> of the Laplace Green's function
-                derivatives, evaluated with respect to the source position about the node's center of mass $\tilde{p}$.
+                The core mechanic of the <strong>Fast Winding Numbers</strong> approach lies in approximating the far field cluster
+                nodes with a truncated <strong>Taylor series expansion</strong> of the Laplace Green's function
+                derivatives, evaluated with respect to node's center of mass $\tilde{p}$.
                 </p>
 
                 <h4 class="text-sm font-bold text-slate-700 tracking-wide uppercase mt-4">Point Cloud Expansion Formulation</h4>
@@ -294,7 +292,7 @@
                 </div>
                 <p>
                     Where the operations $\otimes$ and $\cdot$ denote the tensor outer product and inner tensor contraction respectively.
-                    Here, $q$ is the 3D evaluation query point, $\tilde{p}$ is the precomputed center of mass of the target tree node, $p_i$
+                    Here, $q$ is the 3D query point, $\tilde{p}$ is the precomputed center of mass of the node holding the cluster, $p_i$
                     is the position of point sample $i$, $\hat{n}_i$ is its oriented unit normal, and $a_i$ is its localized area weight.
                     The terms $\nabla G$, $\nabla^2 G$, and $\nabla^3 G$ represent the gradient (a vector), the Hessian (a symmetric
                     two-tensor), and the third-derivative (a three-tensor) of the standard fundamental Green's function for the Laplace
@@ -353,6 +351,71 @@
 
         <section class="bg-white p-8 rounded-xl shadow-xs border border-slate-200/80">
             <h2 class="text-2xl font-bold border-b border-slate-200 pb-3 mb-4 text-slate-900 flex items-center gap-2">
+                <span class="text-cyan-600">03.</span> Differentiability: Motivation &amp; Bottlenecks in Field-Based Optimization
+            </h2>
+            <div class="prose prose-slate max-w-none text-slate-600 leading-relaxed space-y-6">
+
+                <h3 class="text-lg font-semibold text-slate-800 mt-2 mb-1">1. Global Gradient Propagation</h3>
+                <p>
+                    The core motivation for constructing a differentiable winding number field stems from its mathematical formulation as a
+                    global summation. Because the winding potential $w(x)$ at any point in space integrates the collective influence of all
+                    primitives, <strong>every single geometry element contributes to the continuous field.</strong>
+                </p>
+                <p>
+                    Unlike signed distance fields or discrete voxel grids—which suffer from localized clipping or zero-gradient dead
+                    zones—the winding number landscape provides an uninterrupted gradient flow. An error or loss metric evaluated at any
+                    arbitrary query position $x$ can be backpropagating directly to every point-normal or triangle vertex in the scene. This
+                    unlocks long-range spatial signals, allowing optimization routines to steer and correct geometry from anywhere in the
+                    field.
+                </p>
+
+                <h3 class="text-lg font-semibold text-slate-800 mt-6 mb-1">2. Analysis of Existing Frameworks</h3>
+                <p>
+                    While several contemporary works leverage this global differentiability, they remain constrained by architectural
+                    bottlenecks or specialized application silos:
+                </p>
+                
+                <ul class="list-disc list-inside space-y-4 text-sm text-slate-600 pl-2">
+                    <li>
+                        <strong>Winding Clearness:</strong> The framework introduced by 
+                        <a href="https://www.sciencedirect.com/science/article/pii/S0010448525000910" target="_blank"
+                          class="text-cyan-600 font-medium hover:underline">Xiao et al.</a> uses the field's global boundary behavior to denoise
+                        point clouds. However, its implementation relies on a dense linear least-squares solver (<code>torch.lsqr</code>) to
+                        calculate area-scaled normals. This approach is computationally expensive and introduces a severe memory footprint,
+                        capping its viability to small datasets of a few thousand points. Furthermore, because point coordinate translations
+                        introduce non-linearities into the potential formulation, this linear system cannot optimize actual point positions—it
+                        is strictly limited to orienting normals.
+                    </li>
+                    <li>
+                        <strong>Fast Dipole Sums (Chen et al. — Application Silos &amp; Build Overhead):</strong> This method by <a
+                          href="https://dl.acm.org/doi/10.1145/3687914" target="_blank" class="text-cyan-600 font-medium hover:underline">Chen
+                          et al.</a> successfully applies differentiable winding queries to an inverse rendering pipeline, introducing a crucial
+                        spatial regularization kernel to smooth out proximity singularities near point sources. However, the system is
+                        hardlocked to its specific neural radiance field use case. It completely lacks gradients for point positions (relying on
+                        fixed Structure-from-Motion initializations), provides no support for triangle mesh primitives, and suffers from an
+                        unparallelized Octree generation routine with very slow initialization times.
+                    </li>
+                </ul>
+
+                <h3 class="text-lg font-semibold text-slate-800 mt-6 mb-1">3. A General-Purpose Geometry Kernel</h3>
+                <p>
+                    <code>Winder</code> decouples the differentiable winding field from any specific downstream task or rigid solver
+                    constraint. It is built as an application-agnostic, high-performance GPU engine designed to handle
+                    geometric optimization at scale.
+                </p>
+                <p>
+                    By supporting full analytical gradients for point positions, area-scaled normals, and triangle vertices simultaneously,
+                    it ulocks the true potential of winding number fields in optimizations. <code>Winder</code> uses an ultra-fast,
+                    GPU acceleration structure turning the winding field into a
+                    fast, foundational primitive for large-scale graphics and
+                    machine learning pipelines.
+                </p>
+
+            </div>
+        </section>
+
+        <section class="bg-white p-8 rounded-xl shadow-xs border border-slate-200/80">
+            <h2 class="text-2xl font-bold border-b border-slate-200 pb-3 mb-4 text-slate-900 flex items-center gap-2">
                 <span class="text-cyan-600">04.</span> Winder: Core Vision, Architectural Philosophy &amp; Hardware Co-Design
             </h2>
             <div class="prose prose-slate max-w-none text-slate-600 leading-relaxed space-y-6">
@@ -360,22 +423,16 @@
                 <h3 class="text-lg font-semibold text-slate-800 mt-2 mb-1">1. The Construction-First Paradigm</h3>
                 <p>
                     Existing compute pipelines treating fast winding numbers rely on offline-computed
-                    spatial structures. For instance, the recent <a href="https://dl.acm.org/doi/10.1145/3687914" target="_blank"
-                    class="text-cyan-600 font-medium hover:underline">Dipole Sums</a> implementation establishes an incredibly
-                    tight, deeply optimized Octree layout. While this minimizes traversal steps, it incurs a crippling generation bottleneck
+                    spatial structures. For instance the <a href="https://dl.acm.org/doi/10.1145/3687914" target="_blank"
+                    class="text-cyan-600 font-medium hover:underline">Dipole Sums</a> implementation establishes a
+                    tight Octree layout. While this minimizes traversal steps, this construction is a bottleneck
                     (often taking hundreds of seconds) that completely breaks viability for deep learning optimization loops or real-time
                     dynamic geometry.
-                    <span class="text-xs text-slate-500 block mt-2 italic">
-                        Note: This extreme build time is largely an artifact of an unparallelized, single-threaded reference implementation rather
-                        than an inherent topological limitation of Octrees. Indeed, the original Fast Winding Numbers framework demonstrates a
-                        significantly more performant tree-building routine. However, it underscores a systemic architectural risk: prioritizing
-                        downstream traversal density at the cost of sequential upstream construction bottlenecks.
-                    </span>
                 </p>
                 <p>
-                    <code>Winder</code> was designed with an inverted priority system: <strong>spatial hierarchy generation must be
+                    <code>Winder</code> was designed with an inverted priority in mind: <strong>spatial hierarchy generation must be
                       virtually free.</strong> Rather than chasing a perfect spatial partition offline, the architecture targets
-                    millisecond, GPU-native tree builds. Everything else in the library - the precision handling, layout design, and
+                    millisecond, GPU-native tree builds. Everything else - the precision handling, layout design, and
                     mathematical formulation—is a direct architectural consequence built to exploit this lightning-fast, construction-first
                     engine baseline.
                 </p>
@@ -392,11 +449,19 @@
                         <span class="block text-xs text-slate-500 mt-1">Dynamic on-the-fly execution over <strong>5,559,132 points</strong></span>
                     </div>
                 </div>
+                    <span class="text-xs text-slate-500 block mt-2 italic">
+                        Note: This extreme build time for Fast Dipole Sums is largely an artifact of an unparallelized, single-threaded reference implementation rather
+                        than an inherent topological limitation of Octrees. Indeed, the original Fast Winding Numbers framework demonstrates a
+                        significantly more performant tree-building routine. However, it underscores a systemic architectural risk: prioritizing
+                        downstream traversal density at the cost of sequential upstream construction bottlenecks.
+                    </span>
 
                 <h3 class="text-lg font-semibold text-slate-800 mt-6 mb-1">2. Warp-Cooperative Leaf Design &amp; Spatial Penalties</h3>
                 <p>
-                    To achieve this millisecond build speed, <code>Winder</code> utilizes a parallel Linear Bounding Volume Hierarchy
-                    (LBVH) converted into a wide 8-ary structure (<strong>BVH8</strong>). To ensure tree generation scales flawlessly
+                    To achieve this millisecond build speed, <code>Winder</code> utilizes a parallel <a
+                      href="https://ieeexplore.ieee.org/document/8781571/" target="_blank"
+                      class="text-cyan-600 font-medium hover:underline">Bounding Volume Hierarchy
+                      (LBVH)</a> converted into a wide 8-ary structure (<strong>BVH8</strong>). To ensure tree generation scales flawlessly
                     inside parallel GPU sorting kernels, the leaf capacity is strictly locked to exactly <strong>32 primitives</strong>.
                 </p>
                 <p>
@@ -419,9 +484,10 @@
 
                 <h3 class="text-lg font-semibold text-slate-800 mt-6 mb-1">3. Compounding Speed: Compensating via Hardware Quantization</h3>
                 <p>
-                    Because the spatial bounding structure is intentionally loose to favor ultra-fast generation, the evaluation pass faces
-                    a higher mathematical workload. <code>Winder</code> systematically counteracts this spatial penalty not by making the
-                    boxes tighter, but by making the mathematics handling them blisteringly cheap through extreme hardware co-design:
+                    Because the spatial bounding structure is more loose to favor ultra-fast generation, the evaluation pass can face
+                    a slightly higher computational workload. <code>Winder</code> counteracts this penalty not by making the
+                    boxes tighter and with them the construction slower, but by making the evaluation blisteringly fast
+                    through extreme hardware co-design:
                 </p>
                 <ul class="list-disc list-inside space-y-3 text-sm text-slate-600 pl-2">
                     <li><strong>Second-Order Taylor Expansions:</strong> Because the 32-primitive leaf footprint delays the onset of
@@ -432,7 +498,7 @@
                       than zero-order dipole frameworks.</li>
 
                     <li><strong>float16 Far-Field Math:</strong> All calculations in the far-field are done in the
-                      <code>float16</code> floating-point format, leading to high ALU computing throughput.</li>
+                      <code>float16</code> floating-point format, leading to high computational throughput.</li>
 
                     <li><strong>Bit-Packed Mantissas &amp; 128-Byte Cache Alignment:</strong> Tree node coefficients are aggressively bit-packed
                       down to a custom 11-bit mantissa format with shared exponents, while spatial metadata—such as the cluster center of mass and localized
@@ -454,7 +520,7 @@
                         </video>
                     </div>
                     <span class="block text-xs text-slate-500 mt-1.5 italic">
-                        Figure 4.1: Visualization of the the wide 8-ary BVH8 (purple), and the leafs (green) we get from the morton order.
+                        Figure 4.1: Visualization of the the wide 8-ary BVH8 (purple), and the leafs (green) we get from the morton order. Note the leafs can be quite large where the geometry is sparse.
                     </span>
                 </div>
 
@@ -584,7 +650,7 @@
                   </p>
               </div>
 
-              <h4 class="text-sm font-bold uppercase tracking-wider text-slate-700 mt-6 mb-2">The Inversion Convergence: Unified Query Moments</h4>
+              <h4 class="text-sm font-bold uppercase tracking-wider text-slate-700 mt-6 mb-2">Unified Query Moments</h4>
               <p>
                   The critical revelation of this parallel derivation is revealed by inspecting the encapsulated terms in parentheses
                   across all three primitive spaces. These are the components that are entirely independent of the source geometry
@@ -611,7 +677,7 @@
               </div>
 
               <p>
-                  By constructing the tree over the <strong>query coordinates</strong> on the fly, a single bottom-up parallel prefix pass
+                  By constructing the tree over the <strong>query coordinates</strong> on the fly, a single bottom-up parallel pass
                   calculates these moments. During execution, geometry elements act as tree traversers, evaluating field derivatives
                   through local $\mathcal{O}(1)$ contractions against the cached $G_0$, $G_1$, and $G_2$ node blocks. This limits the
                   backward computational pass strictly to a highly efficient execution complexity of $\mathcal{O}((M + N) \log M)$,
@@ -676,9 +742,70 @@
             </div>
         </section>
 
+         <section class="bg-slate-900 text-white p-8 rounded-2xl shadow-xl space-y-8">
+            <div>
+                <span class="bg-cyan-500 text-slate-900 text-xs font-bold uppercase tracking-widest px-2.5 py-1 rounded">Architecture Layout</span>
+                <h2 class="text-3xl font-extrabold mt-3 tracking-tight">Engine Pipeline &amp; Features</h2>
+                <p class="text-slate-400 mt-1">High-performance hardware design choices engineered for massive geometric datasets.</p>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              <a target="_blank" href="https://github.com/keyraphi/winder/blob/db3a58d56cadde1e68aa933e545d79f92fa7656f/src/cpp/winder_cuda.cu#L224-L260">
+                <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
+                    <div class="text-cyan-400 text-lg mb-2 font-mono">⚡ Morton-Encoded LBVH</div>
+                    <p class="text-sm text-slate-300 leading-relaxed">
+                    Constructs linear bounding hierarchies via 64-bit Morton codes using an ultra-fast radix tree structure mapped entirely
+                    on GPU blocks in <strong>linear time</strong>, bypassing traditional CPU-side tree generation bottlenecks.
+                    </p>
+                </div>
+              </a>
+              <a target="_blank" href="https://github.com/keyraphi/winder/blob/db3a58d56cadde1e68aa933e545d79f92fa7656f/src/cpp/kernels/binary2bvh8.cu#L26-L231">
+                <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
+                    <div class="text-cyan-400 text-lg mb-2 font-mono">🌿 Wide BVH8 Generation</div>
+                    <p class="text-sm text-slate-300 leading-relaxed">
+                        Collapses binary trees into shallow 8-way Bounding Volume Hierary (BVH8). This flat structure increases coherency and compresses traversal depth during traversal.
+                    </p>
+                </div>
+              </a>
+              <a target="_blank" href="https://github.com/keyraphi/winder/blob/db3a58d56cadde1e68aa933e545d79f92fa7656f/src/cpp/kernels/bvh8_m2m.cu#L22-L185">
+                <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
+                    <div class="text-cyan-400 text-lg mb-2 font-mono">🌲 Bottom-Up M2M Layers</div>
+                    <p class="text-sm text-slate-300 leading-relaxed">
+                        Extremely efficient propagation of Taylor series coefficients from leaf elements up to the root node via Multipole-to-Multipole translation.
+                    </p>
+                </div>
+              </a>
+              <a target="_blank" href="https://github.com/keyraphi/winder/blob/db3a58d56cadde1e68aa933e545d79f92fa7656f/src/cpp/tailor_coefficients.h">
+                <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
+                    <div class="text-cyan-400 text-lg mb-2 font-mono">📦 128-Byte Quantized Nodes</div>
+                    <p class="text-sm text-slate-300 leading-relaxed">
+                        Compresses BVH8 entries into compact 128-byte struct using a custom quantization scheme implemented with PTX assembly to maximize memory throughput.
+                    </p>
+                </div>
+              </a>
+              <a target="_blank" href="https://github.com/keyraphi/winder/blob/db3a58d56cadde1e68aa933e545d79f92fa7656f/src/cpp/kernels/node_approx.cuh">
+                <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
+                    <div class="text-cyan-400 text-lg mb-2 font-mono">🔢 Dual-Precision Tracks</div>
+                    <p class="text-sm text-slate-300 leading-relaxed">
+                        Alternates dynamically between high-speed <code>float16</code> math operations for distant far-field approximations and robust <code>float32</code> compute tracks for high-precision near-field intersections.
+                    </p>
+                </div>
+              </a>
+              <a target="_blank" href="https://github.com/keyraphi/winder/blob/db3a58d56cadde1e68aa933e545d79f92fa7656f/src/cpp/kernels/traversal.cu#L62-L288">
+                <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
+                    <div class="text-cyan-400 text-lg mb-2 font-mono">🤝 Cooperative Kernels</div>
+                    <p class="text-sm text-slate-300 leading-relaxed">
+                        Distributes work evenly across active threads using synchronized shared-memory tracking queues, minimizing warp divergence during hierarchical tree steps.
+                    </p>
+                </div>
+              </a>
+            </div>
+        </section>
+
+
         <section id="interactive-suite" class="bg-white p-8 rounded-xl shadow-xs border border-slate-200/80 space-y-8">
             <div>
-                <h2 class="text-2xl font-bold text-slate-900 tracking-tight">04. Interactive Performance Benchmarks - Forward Pass</h2>
+                <h2 class="text-2xl font-bold text-slate-900 tracking-tight">05. Interactive Performance Benchmarks - Forward Pass</h2>
                 <p class="text-slate-500 text-sm mt-1">
                     Compare performance metrics between different data modalities and execution backends using the interactive charts and options below.
                 </p>
@@ -692,17 +819,16 @@
                 as the exact ground-truth numerical reference across all modality workflows.
             </li>
             <li>
-                <strong class="text-slate-900">Winder (Production):</strong> Our production pipeline, evaluating highly optimized
+                <strong class="text-slate-900">Winder:</strong> Our production pipeline, evaluating highly optimized
                 accelerated tracking steps across an 8-way bounding volume hierarchy.
             </li>
             <li>
-                <strong class="text-slate-900">Winder (Zero-Order):</strong> An isolated architectural variant branch running
-                exclusively with <code class="font-mono bg-slate-200/60 px-1 rounded">bfloat16</code> zero-order coefficients. This
-                variant uses our custom Morton-coded BVH8 layout with 32-leaf primitive clustering to isolate the precise cost of
-                second-order calculations versus structural spatial transformations against standard offline octrees.
+                <strong class="text-slate-900">Winder float16:</strong> 
+                Results from the float16 branch. The main branch currently still uses bfloat16, which leads to more quantization noise and thus higher errors.
+                This branch will be merged to main later because the results are better.
             </li>
             <li>
-                <strong class="text-slate-900">PyTorch (Native):</strong> A raw reference implementation utilizing optimized
+                <strong class="text-slate-900">PyTorch:</strong> A raw reference implementation utilizing optimized
                 calculations via compiled execution loops (<code class="font-mono bg-slate-200/60 px-1 rounded">torch.compile</code>).
             </li>
             <li>
@@ -716,8 +842,7 @@
                 href="https://dl.acm.org/doi/10.1145/3687914" target="_blank"
                 class="text-cyan-600 font-medium hover:underline">Fast Dipole Sums for Point Clouds (Sharp et al., ACM TOG 2024)</a>.
               <span class="text-amber-700 font-medium block mt-0.5">⚠️ Note: Fast Dipole Sums encountered a memory access error during
-                execution on code <code class="font-mono bg-slate-200/60 px-1 rounded">jaws_attack_benchy.obj</code> and is omitted from
-                  its execution track.</span>
+                execution on code <code class="font-mono bg-slate-200/60 px-1 rounded">jaws_attack_benchy.obj</code> and is therefore missing for this method.</span>
             </li>
         </ul>
     </div>
@@ -757,8 +882,11 @@
         </div>
       </div>
     </div>
+    <div id="scalingChart" class="w-full h-96 mt-6"></div>
+            <div id="buildScalingChart" class="w-full h-96 mt-6"></div>
+            <div id="rmseOverviewChart" class="w-full h-96 mt-6"></div>
 
-            <div class="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-wrap gap-6 items-center justify-between">
+            <div class="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-wrap gap-6 items-center justify-between mt-8">
                 <div class="flex flex-wrap items-center gap-6">
                     <div>
                         <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Target Modality</label>
@@ -782,14 +910,13 @@
                     </div>
                 </div>
                 <div class="text-right hidden sm:block">
-                    <span class="text-xs text-slate-400 font-mono">Evaluation Workspace Resolution: $256^2\times 1,200$ Grid</span>
+                    <span class="text-xs text-slate-400 font-mono">Query Resolution: 1200 frames with a $256^2$ Grid each. All queries evaluated in one go.</span>
                 </div>
             </div>
 
-            <div id="scalingChart" class="w-full h-96 mt-6"></div>
-            <div id="performanceChart" class="w-full h-96"></div>
+            <div id="performanceChart" class="w-full h-96 mt-6"></div>
 
-            <div class="space-y-4">
+            <div class="space-y-4 mt-8">
                 <button id="masterPlayBtn" class="mb-4 px-4 py-2 bg-cyan-600 text-white rounded-md text-sm font-medium hover:bg-cyan-700 transition">
                     Pause All
                 </button>
@@ -806,217 +933,113 @@
             </div>
         </section>
     <footer class="bg-slate-950 text-slate-500 text-center py-8 border-t border-slate-900 text-xs mt-16 font-mono">
-        <p>© 2026  Raphael Braun. Shared under MIT Licence.</p>
+        <p>© 2026 Raphael Braun. Shared under MIT Licence.</p>
     </footer>
 
     <script>
-        // Parsed Benchmark Data Matrix from your CSV logs
-        const benchmarkDataset = {
-          mesh: {
-              "benchy.obj": {
-                  elements: "225,154 triangles",
-                  metrics: {
-                      brute_force: { build_time: 0.01317, compute_time: 52.33323, rmse: 0.0 },
-                      winder_fwn: { build_time: 0.00141, compute_time: 0.94016, rmse: 0.00864 },
-                      winder_zero: { build_time: 0.01165, compute_time: 0.34188, rmse: 0.02178 },
-                      libigl: { build_time: 0.0, compute_time: 124.67419, rmse: 0.00231 },
-                      pytorch_ref: { build_time: 0.0, compute_time: 73.25829, rmse: 0.00028 }
-                  }
-              },
-              "cheeky_monkey.obj": {
-                  elements: "910,154 triangles",
-                  metrics: {
-                      brute_force: { build_time: 0.01378, compute_time: 218.80974, rmse: 0.0 },
-                      winder_fwn: { build_time: 0.00176, compute_time: 0.97843, rmse: 0.01520 },
-                      winder_zero: { build_time: 0.01169, compute_time: 0.41505, rmse: 0.01678 },
-                      libigl: { build_time: 0.0, compute_time: 10.14851, rmse: 0.01186 },
-                      pytorch_ref: { build_time: 0.0, compute_time: 314.27667, rmse: 0.00043 }
-                  }
-              },
-              "diaggihl_the_master.obj": {
-                  elements: "5,145,676 triangles",
-                  metrics: {
-                      brute_force: { build_time: 0.01591, compute_time: 1244.33250, rmse: 0.0 },
-                      winder_fwn: { build_time: 0.00478, compute_time: 0.61600, rmse: 0.00537 },
-                      winder_zero: { build_time: 0.01406, compute_time: 0.25374, rmse: 0.00938 },
-                      libigl: { build_time: 0.0, compute_time: 8.48112, rmse: 0.00114 },
-                      pytorch_ref: { build_time: 0.0, compute_time: 1823.14424, rmse: 0.00105 }
-                  }
-              },
-              "ghost_benchy.obj": {
-                  elements: "233,870 triangles",
-                  metrics: {
-                      brute_force: { build_time: 0.01358, compute_time: 55.37902, rmse: 0.0 },
-                      winder_fwn: { build_time: 0.00138, compute_time: 1.04183, rmse: 0.00743 },
-                      winder_zero: { build_time: 0.01142, compute_time: 0.43587, rmse: 0.02010 },
-                      libigl: { build_time: 0.0, compute_time: 7.02044, rmse: 0.00087 },
-                      pytorch_ref: { build_time: 0.0, compute_time: 79.82552, rmse: 0.00016 }
-                  }
-              },
-              "jaws_attack_benchy.obj": {
-                  elements: "538,660 triangles",
-                  metrics: {
-                      brute_force: { build_time: 0.01315, compute_time: 128.61686, rmse: 0.0 },
-                      winder_fwn: { build_time: 0.00169, compute_time: 0.83385, rmse: 0.01700 },
-                      winder_zero: { build_time: 0.01117, compute_time: 0.31444, rmse: 0.02961 },
-                      libigl: { build_time: 0.0, compute_time: 79.12992, rmse: 0.00058 },
-                      pytorch_ref: { build_time: 0.0, compute_time: 181.23715, rmse: 0.00032 }
-                  }
-              },
-              "mack_rhukta.obj": {
-                  elements: "2,754,400 triangles",
-                  metrics: {
-                      brute_force: { build_time: 0.01460, compute_time: 665.39219, rmse: 0.0 },
-                      winder_fwn: { build_time: 0.00304, compute_time: 1.07431, rmse: 0.01368 },
-                      winder_zero: { build_time: 0.01314, compute_time: 0.45273, rmse: 0.00900 },
-                      libigl: { build_time: 0.0, compute_time: 9.31280, rmse: 0.00093 },
-                      pytorch_ref: { build_time: 0.0, compute_time: 954.35753, rmse: 0.00065 }
-                  }
-              },
-              "orc_chief_nakhbruh.obj": {
-                  elements: "2,118,386 triangles",
-                  metrics: {
-                      brute_force: { build_time: 0.01388, compute_time: 510.77662, rmse: 0.0 },
-                      winder_fwn: { build_time: 0.00255, compute_time: 1.00896, rmse: 0.01470 },
-                      winder_zero: { build_time: 0.01286, compute_time: 0.43918, rmse: 0.00978 },
-                      libigl: { build_time: 0.0, compute_time: 6.87530, rmse: 0.00094 },
-                      pytorch_ref: { build_time: 0.0, compute_time: 733.57617, rmse: 0.00061 }
-                  }
-              },
-              "salty_mc_creedy.obj": {
-                  elements: "1,990,670 triangles",
-                  metrics: {
-                      brute_force: { build_time: 0.01432, compute_time: 481.09027, rmse: 0.0 },
-                      winder_fwn: { build_time: 0.00252, compute_time: 0.99506, rmse: 0.01379 },
-                      winder_zero: { build_time: 0.01225, compute_time: 0.43707, rmse: 0.01220 },
-                      libigl: { build_time: 0.0, compute_time: 16.58708, rmse: 0.00084 },
-                      pytorch_ref: { build_time: 0.0, compute_time: 688.75389, rmse: 0.00054 }
-                  }
-              },
-              "snakeman.obj": {
-                  elements: "5,000,608 triangles",
-                  metrics: {
-                      brute_force: { build_time: 0.01600, compute_time: 1210.46181, rmse: 0.0 },
-                      winder_fwn: { build_time: 0.00517, compute_time: 0.50111, rmse: 0.00718 },
-                      winder_zero: { build_time: 0.01472, compute_time: 0.20507, rmse: 0.00866 },
-                      libigl: { build_time: 0.0, compute_time: 7.42541, rmse: 0.00120 },
-                      pytorch_ref: { build_time: 0.0, compute_time: 1806.74488, rmse: 0.00111 }
-                  }
-              },
-              "su_laegildah.obj": {
-                  elements: "3,356,812 triangles",
-                  metrics: {
-                      brute_force: { build_time: 0.01530, compute_time: 812.21414, rmse: 0.0 },
-                      winder_fwn: { build_time: 0.00369, compute_time: 1.09915, rmse: 0.01429 },
-                      winder_zero: { build_time: 0.01311, compute_time: 0.47889, rmse: 0.00984 },
-                      libigl: { build_time: 0.0, compute_time: 9.52302, rmse: 0.00088 },
-                      pytorch_ref: { build_time: 0.0, compute_time: 1165.54672, rmse: 0.00063 }
-                  }
-              }
-            },
-            points: {
-                "benchy.obj": {
-                    elements: "112,569 points",
-                    metrics: {
-                        brute_force: { build_time: 0.01350, compute_time: 16.09121, rmse: 0.0 },
-                        winder_fwn: { build_time: 0.00122, compute_time: 0.37160, rmse: 0.00958 },
-                        winder_zero: { build_time: 0.01219, compute_time: 0.15349, rmse: 0.02119 },
-                        pytorch_ref: { build_time: 0.0, compute_time: 74.92480, rmse: 0.00751 },
-                        fast_dipole: { build_time: 24.25043, compute_time: 0.08881, rmse: 0.02703 }
-                    }
-                },
-                "cheeky_monkey.obj": {
-                    elements: "454,920 points",
-                    metrics: {
-                        brute_force: { build_time: 0.01316, compute_time: 65.38155, rmse: 0.0 },
-                        winder_fwn: { build_time: 0.00145, compute_time: 0.48187, rmse: 0.01724 },
-                        winder_zero: { build_time: 0.01190, compute_time: 0.19537, rmse: 0.01493 },
-                        pytorch_ref: { build_time: 0.0, compute_time: 305.35804, rmse: 0.00081 },
-                        fast_dipole: { build_time: 90.80888, compute_time: 0.10751, rmse: 0.01922 }
-                    }
-                },
-                "diaggihl_the_master.obj": {
-                    elements: "2,559,132 points",
-                    metrics: {
-                        brute_force: { build_time: 0.01498, compute_time: 380.72595, rmse: 0.0 },
-                        winder_fwn: { build_time: 0.00328, compute_time: 0.31667, rmse: 0.00753 },
-                        winder_zero: { build_time: 0.01517, compute_time: 0.12332, rmse: 0.01151 },
-                        pytorch_ref: { build_time: 0.0, compute_time: 1705.39083, rmse: 0.00060 },
-                        fast_dipole: { build_time: 570.24154, compute_time: 0.12843, rmse: 0.01088 }
-                    }
-                },
-                "ghost_benchy.obj": {
-                    elements: "116,388 points",
-                    metrics: {
-                        brute_force: { build_time: 0.01314, compute_time: 16.62497, rmse: 0.0 },
-                        winder_fwn: { build_time: 0.00118, compute_time: 0.43989, rmse: 0.01139 },
-                        winder_zero: { build_time: 0.01220, compute_time: 0.18901, rmse: 0.02469 },
-                        pytorch_ref: { build_time: 0.0, compute_time: 77.98978, rmse: 0.00096 },
-                        fast_dipole: { build_time: 22.38025, compute_time: 0.11322, rmse: 0.02979 }
-                    }
-                },
-                "jaws_attack_benchy.obj": {
-                    elements: "253,471 points",
-                    metrics: {
-                        brute_force: { build_time: 0.01700, compute_time: 38.34798, rmse: 0.0 },
-                        winder_fwn: { build_time: 0.00136, compute_time: 0.32754, rmse: 0.01413 },
-                        winder_zero: { build_time: 0.01255, compute_time: 0.13756, rmse: 0.02719 },
-                        pytorch_ref: { build_time: 0.0, compute_time: 177.04983, rmse: 0.00216 },
-                        fast_dipole: { build_time: 0.0, compute_time: 0.0, rmse: 0.0 } // Omitted in point source logs due to platform crash exception
-                    }
-                },
-                "mack_rhukta.obj": {
-                    elements: "1,377,200 points",
-                    metrics: {
-                        brute_force: { build_time: 0.01359, compute_time: 199.26167, rmse: 0.0 },
-                        winder_fwn: { build_time: 0.00212, compute_time: 0.53299, rmse: 0.01910 },
-                        winder_zero: { build_time: 0.01295, compute_time: 0.21390, rmse: 0.01176 },
-                        pytorch_ref: { build_time: 0.0, compute_time: 931.09665, rmse: 0.00070 },
-                        fast_dipole: { build_time: 298.28498, compute_time: 0.15478, rmse: 0.01415 }
-                    }
-                },
-                "orc_chief_nakhbruh.obj": {
-                    elements: "1,058,625 points",
-                    metrics: {
-                        brute_force: { build_time: 0.01359, compute_time: 152.78671, rmse: 0.0 },
-                        winder_fwn: { build_time: 0.00191, compute_time: 0.52938, rmse: 0.01547 },
-                        winder_zero: { build_time: 0.01293, compute_time: 0.22404, rmse: 0.01287 },
-                        pytorch_ref: { build_time: 0.0, compute_time: 709.92909, rmse: 0.00075 },
-                        fast_dipole: { build_time: 213.26109, compute_time: 0.13799, rmse: 0.01176 }
-                    }
-                },
-                "salty_mc_creedy.obj": {
-                    elements: "994,408 points",
-                    metrics: {
-                        brute_force: { build_time: 0.01251, compute_time: 143.30951, rmse: 0.0 },
-                        winder_fwn: { build_time: 0.01326, compute_time: 0.48221, rmse: 0.01364 },
-                        winder_zero: { build_time: 0.01778, compute_time: 0.20259, rmse: 0.01518 },
-                        pytorch_ref: { build_time: 0.0, compute_time: 659.85376, rmse: 0.00084 },
-                        fast_dipole: { build_time: 197.42072, compute_time: 0.13295, rmse: 0.01387 }
-                    }
-                },
-                "snakeman.obj": {
-                    elements: "2,499,998 points",
-                    metrics: {
-                        brute_force: { build_time: 0.01485, compute_time: 364.29682, rmse: 0.0 },
-                        winder_fwn: { build_time: 0.00337, compute_time: 0.26915, rmse: 0.00981 },
-                        winder_zero: { build_time: 0.01355, compute_time: 0.10288, rmse: 0.01084 },
-                        pytorch_ref: { build_time: 0.0, compute_time: 1692.76968, rmse: 0.00056 },
-                        fast_dipole: { build_time: 546.95957, compute_time: 0.11899, rmse: 0.01063 }
-                    }
-                },
-                "su_laegildah.obj": {
-                    elements: "1,677,741 points",
-                    metrics: {
-                        brute_force: { build_time: 0.01428, compute_time: 243.32491, rmse: 0.0 },
-                        winder_fwn: { build_time: 0.00272, compute_time: 0.58599, rmse: 0.01690 },
-                        winder_zero: { build_time: 0.01321, compute_time: 0.23041, rmse: 0.01242 },
-                        pytorch_ref: { build_time: 0.0, compute_time: 1119.60814, rmse: 0.00063 },
-                        fast_dipole: { build_time: 347.28216, compute_time: 0.16083, rmse: 0.01243 }
-                    }
-                }
-            }
+        // Global object initialized empty; populated dynamically from local CSV files
+        let benchmarkDataset = {
+            mesh: {},
+            points: {}
         };
+
+        // Standard CSV Parser that handles raw text splits safely
+        function parseCSVText(text) {
+            const lines = text.trim().split("\n");
+            if (lines.length === 0) return [];
+            
+            const headers = lines[0].split(",").map(h => h.trim());
+            return lines.slice(1).map(line => {
+                const values = line.split(",");
+                return headers.reduce((object, header, index) => {
+                    object[header] = values[index] ? values[index].trim() : null;
+                    return object;
+                }, {});
+            });
+        }
+
+        // Asynchronously load and map database files to existing dashboard architecture
+        async function loadCSVBenchmarks() {
+            try {
+                // 1. Fetch raw CSV payload tracks
+                const [meshResponse, pointsResponse] = await Promise.all([
+                    fetch('comparisons/mesh/6000/benchmark_metrics_clean.csv'),
+                    fetch('comparisons/points/6000/benchmark_metrics_clean.csv')
+                ]);
+
+                if (!meshResponse.ok || !pointsResponse.ok) {
+                    throw new Error("Failed to capture one or both CSV benchmark files.");
+                }
+
+                const meshRawText = await meshResponse.text();
+                const pointsRawText = await pointsResponse.text();
+
+                const meshRows = parseCSVText(meshRawText);
+                const pointsRows = parseCSVText(pointsRawText);
+
+                // Dictionary mapper converting raw CSV engine strings to layout engine identifiers
+                const engineMethodMap = {
+                    'brute_force': 'brute_force',
+                    'winder': 'winder_fwn',
+                    'winder_float16': 'winder_float16',
+                    'torch': 'pytorch_ref',
+                    'igl': 'libigl',
+                    'fast_dipole_sums': 'fast_dipole'
+                };
+
+                // 2. Process Mesh Entries
+                meshRows.forEach(row => {
+                    const meshName = row.mesh_name;
+                    if (!meshName) return;
+
+                    if (!benchmarkDataset.mesh[meshName]) {
+                        const triangleCount = parseInt(row.triangles, 10).toLocaleString();
+                        benchmarkDataset.mesh[meshName] = {
+                            elements: `${triangleCount} triangles`,
+                            metrics: {}
+                        };
+                    }
+
+                    const translatedMethod = engineMethodMap[row.mode] || row.mode;
+                    benchmarkDataset.mesh[meshName].metrics[translatedMethod] = {
+                        build_time: parseFloat(row.build_time_sec) || 0.0,
+                        compute_time: parseFloat(row.compute_time_sec) || 0.0,
+                        rmse: parseFloat(row.rmse) || 0.0
+                    };
+                });
+
+                // 3. Process Point Entry Targets
+                pointsRows.forEach(row => {
+                    const meshName = row.mesh_name;
+                    if (!meshName) return;
+
+                    if (!benchmarkDataset.points[meshName]) {
+                        const pointCount = parseInt(row.points, 10).toLocaleString();
+                        benchmarkDataset.points[meshName] = {
+                            elements: `${pointCount} points`,
+                            metrics: {}
+                        };
+                    }
+
+                    const translatedMethod = engineMethodMap[row.mode] || row.mode;
+                    benchmarkDataset.points[meshName].metrics[translatedMethod] = {
+                        build_time: parseFloat(row.build_time_sec) || 0.0,
+                        compute_time: parseFloat(row.compute_time_sec) || 0.0,
+                        rmse: parseFloat(row.rmse) || 0.0
+                    };
+                });
+
+                // 4. Trigger UI Setup Lifecycle once structural assignment completes safely
+                populateSelectors();
+
+            } catch (error) {
+                console.error("Critical error building runtime dashboard matrices:", error);
+                document.body.prepend(Object.assign(document.createElement('div'), {
+                    className: "bg-red-500 text-white p-4 text-center font-bold",
+                    textContent: `Failed to load clean metrics: ${error.message}`
+                }));
+            }
+        }
 
         function initVideoSync() {
             const videos = document.querySelectorAll('.js-sync-video');
@@ -1026,37 +1049,26 @@
             const slaves = Array.from(videos).slice(1);
 
             master.addEventListener('play', () => {
-                slaves.forEach(slave => {
-                    if (slave.paused) slave.play();
-                });
+                slaves.forEach(slave => { if (slave.paused) slave.play(); });
             });
 
             master.addEventListener('pause', () => {
-                slaves.forEach(slave => {
-                    if (!slave.paused) slave.pause();
-                });
+                slaves.forEach(slave => { if (!slave.paused) slave.pause(); });
             });
 
             master.addEventListener('seeking', () => {
-                slaves.forEach(slave => {
-                    slave.currentTime = master.currentTime;
-                });
+                slaves.forEach(slave => { slave.currentTime = master.currentTime; });
             });
 
-            // Prevent Loop Drift tracking checks
             setInterval(() => {
                 if (master.paused) return;
-
                 slaves.forEach(slave => {
                     const timeDiff = Math.abs(slave.currentTime - master.currentTime);
-                    if (timeDiff > 0.1) {
-                        slave.currentTime = master.currentTime;
-                    }
+                    if (timeDiff > 0.1) slave.currentTime = master.currentTime;
                 });
             }, 500);
         }
 
-        // Initialize Global Master Button Triggers cleanly outside intervals
         function initPlayButtonControl() {
             const playBtn = document.getElementById('masterPlayBtn');
             if (playBtn) {
@@ -1095,6 +1107,8 @@
             const chosenModel = document.getElementById("modelSelector").value;
             const selectedMetric = document.getElementById("timeMetricSelector").value;
 
+            if (!chosenModel || !benchmarkDataset[modeType][chosenModel]) return;
+
             document.getElementById("mediaTrackLabel").textContent = modeType === "mesh" ? "Mesh Mode" : "Point Cloud Mode";
 
             const modelData = benchmarkDataset[modeType][chosenModel];
@@ -1102,8 +1116,7 @@
 
             function resolveTimeValue(metricsBlock, targetEngine) {
                 const data = metricsBlock[targetEngine];
-                if (!data || (targetEngine !== 'fast_dipole' && data.compute_time === 0)) return null;
-                if (targetEngine === 'fast_dipole' && data.build_time === 0 && data.compute_time === 0) return null;
+                if (!data) return null;
 
                 if (selectedMetric === "total") {
                     return data.compute_time + data.build_time;
@@ -1116,51 +1129,51 @@
             }
 
             // ==========================================
-            // 1. BAR CHART PREPARATION
+            // 1. INDIVIDUAL PERFORMANCE PROFILE CHART
             // ==========================================
             let targetCategories = [];
             let timeSeriesData = [];
             let errorSeriesData = [];
 
             if (modeType === "mesh") {
-                targetCategories = ['PyTorch (Native)', 'LibIGL (CPU)', 'Brute Force (GPU)', 'Winder (Zero-Order)', 'Winder (Production)'];
+                targetCategories = ['Brute Force (GT)', 'PyTorch', 'LibIGL (CPU)', 'Winder float16', 'Winder'];
                 timeSeriesData = [
+                    resolveTimeValue(datasetMetrics, 'brute_force'),
                     resolveTimeValue(datasetMetrics, 'pytorch_ref'),
                     resolveTimeValue(datasetMetrics, 'libigl'),
-                    resolveTimeValue(datasetMetrics, 'brute_force'),
-                    resolveTimeValue(datasetMetrics, 'winder_zero'),
+                    resolveTimeValue(datasetMetrics, 'winder_float16'),
                     resolveTimeValue(datasetMetrics, 'winder_fwn')
                 ];
                 errorSeriesData = [
-                    datasetMetrics.pytorch_ref.rmse,
-                    datasetMetrics.libigl.rmse,
-                    0,
-                    datasetMetrics.winder_zero.rmse,
-                    datasetMetrics.winder_fwn.rmse
+                    datasetMetrics.brute_force?.rmse || 0,
+                    datasetMetrics.pytorch_ref?.rmse || 0,
+                    datasetMetrics.libigl?.rmse || 0,
+                    datasetMetrics.winder_float16?.rmse || 0,
+                    datasetMetrics.winder_fwn?.rmse || 0
                 ];
             } else {
-                targetCategories = ['PyTorch (Native)', 'Fast Dipole Sums', 'Brute Force (GPU)', 'Winder (Zero-Order)', 'Winder (Production)'];
+                targetCategories = ['Brute Force (GT)', 'PyTorch', 'Fast Dipole Sums', 'Winder float16', 'Winder'];
                 timeSeriesData = [
+                    resolveTimeValue(datasetMetrics, 'brute_force'),
                     resolveTimeValue(datasetMetrics, 'pytorch_ref'),
                     resolveTimeValue(datasetMetrics, 'fast_dipole'),
-                    resolveTimeValue(datasetMetrics, 'brute_force'),
-                    resolveTimeValue(datasetMetrics, 'winder_zero'),
+                    resolveTimeValue(datasetMetrics, 'winder_float16'),
                     resolveTimeValue(datasetMetrics, 'winder_fwn')
                 ];
                 errorSeriesData = [
-                    datasetMetrics.pytorch_ref.rmse,
-                    datasetMetrics.fast_dipole ? datasetMetrics.fast_dipole.rmse : 0,
-                    0,
-                    datasetMetrics.winder_zero.rmse,
-                    datasetMetrics.winder_fwn.rmse
+                    datasetMetrics.brute_force?.rmse || 0,
+                    datasetMetrics.pytorch_ref?.rmse || 0,
+                    datasetMetrics.fast_dipole?.rmse || 0,
+                    datasetMetrics.winder_float16?.rmse || 0,
+                    datasetMetrics.winder_fwn?.rmse || 0
                 ];
             }
 
             let yAxisTitle = 'Compute Time (Seconds) - Log Scale';
             if (selectedMetric === 'build') {
-                yAxisTitle = 'Structure Build Time (Seconds) - Log Scale';
+                yAxisTitle = 'BVH Build Time (Seconds) - Log Scale';
             } else if (selectedMetric === 'compute') {
-                yAxisTitle = 'Pure Kernel Execution Time (Seconds) - Log Scale';
+                yAxisTitle = 'Pure Compute Time (Seconds) - Log Scale';
             }
 
             Highcharts.chart('performanceChart', {
@@ -1193,32 +1206,40 @@
             });
 
             // ==========================================
-            // 2. COMPLEXITY SCALING LINE CHART
+            // 2. ASYMPTOTIC DATASET PARSING & SORTING
             // ==========================================
             function parseElementCount(elementsStr) {
                 if (!elementsStr) return 0;
                 return parseInt(elementsStr.replace(/[^0-9]/g, ''), 10) || 0;
             }
 
-            const globalModelsList = Object.values(benchmarkDataset[modeType]);
+            // Convert map to entry pairs containing names to drive global X-Axis distributions
+            const globalModelsList = Object.entries(benchmarkDataset[modeType]).map(([name, data]) => ({
+                name: name,
+                elements: data.elements,
+                metrics: data.metrics
+            }));
             globalModelsList.sort((a, b) => parseElementCount(a.elements) - parseElementCount(b.elements));
 
             const engineConfigMap = modeType === "mesh"
                 ? [
-                    { key: 'pytorch_ref', name: 'PyTorch (Native)', color: '#0ea5e9' },
+                    { key: 'brute_force', name: 'Brute Force (GT)', color: '#64748b' },
+                    { key: 'pytorch_ref', name: 'PyTorch', color: '#0ea5e9' },
                     { key: 'libigl', name: 'LibIGL (CPU)', color: '#a855f7' },
-                    { key: 'brute_force', name: 'Brute Force (GPU)', color: '#64748b' },
-                    { key: 'winder_zero', name: 'Winder (Zero-Order)', color: '#eab308' },
-                    { key: 'winder_fwn', name: 'Winder (Production)', color: '#10b981' }
+                    { key: 'winder_float16', name: 'Winder float16', color: '#eab308' },
+                    { key: 'winder_fwn', name: 'Winder', color: '#10b981' }
                   ]
                 : [
-                    { key: 'pytorch_ref', name: 'PyTorch (Native)', color: '#0ea5e9' },
+                    { key: 'brute_force', name: 'Brute Force (GT)', color: '#64748b' },
+                    { key: 'pytorch_ref', name: 'PyTorch', color: '#0ea5e9' },
                     { key: 'fast_dipole', name: 'Fast Dipole Sums', color: '#ec4899' },
-                    { key: 'brute_force', name: 'Brute Force (GPU)', color: '#64748b' },
-                    { key: 'winder_zero', name: 'Winder (Zero-Order)', color: '#eab308' },
-                    { key: 'winder_fwn', name: 'Winder (Production)', color: '#10b981' }
+                    { key: 'winder_float16', name: 'Winder float16', color: '#eab308' },
+                    { key: 'winder_fwn', name: 'Winder', color: '#10b981' }
                   ];
 
+            // ==========================================
+            // 2a. COMPLEXITY SCALING LINE CHART
+            // ==========================================
             const scalingLineSeries = engineConfigMap.map(engine => {
                 const structuralCoordinates = globalModelsList.map(model => {
                     const timeVal = resolveTimeValue(model.metrics, engine.key);
@@ -1235,12 +1256,12 @@
                 };
             });
 
-            const xAxisTitleString = modeType === "mesh" ? "Complexity Scale (Total Triangle Primitives)" : "Complexity Scale (Total Surface Points)";
+            const xAxisTitleString = modeType === "mesh" ? "Triangle Count" : "Point Count";
 
             Highcharts.chart('scalingChart', {
                 chart: { type: 'line', backgroundColor: '#f8fafc' },
-                title: { text: 'Asymptotic Scaling Complexity Metrics', style: { fontSize: '14px', fontWeight: 'bold', color: '#0f172a' } },
-                subtitle: { text: `Algorithmic processing growth profiles across system assets` },
+                title: { text: 'Compoute Time', style: { fontSize: '14px', fontWeight: 'bold', color: '#0f172a' } },
+                subtitle: { text: `Compute time dependent on asset size` },
                 xAxis: {
                     type: 'logarithmic',
                     title: { text: xAxisTitleString, style: { color: '#475569', fontWeight: 'bold' } },
@@ -1269,6 +1290,98 @@
             });
 
             // ==========================================
+            // 2b. STRUCTURE BUILD TIME SCALING LINE CHART
+            // ==========================================
+            const buildScalingLineSeries = engineConfigMap.map(engine => {
+                const structuralCoordinates = globalModelsList.map(model => {
+                    const data = model.metrics[engine.key];
+                    if (!data || !data.build_time || data.build_time <= 0) return null;
+                    
+                    const numericX = parseElementCount(model.elements);
+                    return [numericX, data.build_time];
+                }).filter(coord => coord !== null);
+
+                return {
+                    name: engine.name,
+                    data: structuralCoordinates,
+                    color: engine.color,
+                    lineWidth: 2.5,
+                    marker: { enabled: true, radius: 4 }
+                };
+            });
+
+            Highcharts.chart('buildScalingChart', {
+                chart: { type: 'line', backgroundColor: '#f8fafc' },
+                title: { text: 'Acceleration Structure Build Time', style: { fontSize: '14px', fontWeight: 'bold', color: '#0f172a' } },
+                subtitle: { text: 'Spatial index generation initialization profiles (Engines with 0s build times omitted)' },
+                xAxis: {
+                    type: 'logarithmic',
+                    title: { text: xAxisTitleString, style: { color: '#475569', fontWeight: 'bold' } },
+                    labels: {
+                        style: { color: '#475569' },
+                        formatter: function() { return this.value.toLocaleString(); }
+                    },
+                    gridLineWidth: 1,
+                    gridLineColor: '#e2e8f0'
+                },
+                yAxis: {
+                    type: 'logarithmic',
+                    title: { text: 'BVH Build Time (Seconds) - Log Scale', style: { color: '#0f172a' } },
+                    labels: { style: { color: '#475569' } },
+                    gridLineColor: '#e2e8f0'
+                },
+                tooltip: {
+                    shared: true,
+                    headerFormat: '<span style="font-size: 10px">Geometry Size: <b>{point.key:,f}</b> elements</span><br/>',
+                    valueSuffix: ' s'
+                },
+                plotOptions: {
+                    line: { dataLabels: { enabled: false }, enableMouseTracking: true }
+                },
+                series: buildScalingLineSeries,
+                credits: { enabled: false }
+            });
+
+            // ==========================================
+            // 2c. GLOBAL RECONSTRUCTION ERROR (RMSE) OVERVIEW
+            // ==========================================
+            const rmseBarSeries = engineConfigMap.map(engine => {
+                const metricsValues = globalModelsList.map(model => {
+                    return model.metrics[engine.key]?.rmse || 0;
+                });
+
+                return {
+                    name: engine.name,
+                    data: metricsValues,
+                    color: engine.color
+                };
+            });
+
+            Highcharts.chart('rmseOverviewChart', {
+                chart: { type: 'column', backgroundColor: '#f8fafc' },
+                title: { text: 'Accuracy Overview (RMSE)', style: { fontSize: '14px', fontWeight: 'bold', color: '#0f172a' } },
+                subtitle: { text: 'Lower values indicate closer mathematical alignment to the Ground Truth reference.' },
+                xAxis: {
+                    categories: globalModelsList.map(m => m.name),
+                    labels: { style: { color: '#475569', fontSize: '11px' } }
+                },
+                yAxis: {
+                    title: { text: 'Root Mean Squared Error (RMSE)', style: { color: '#0f172a', fontWeight: 'bold' } },
+                    labels: { style: { color: '#475569' } },
+                    gridLineColor: '#e2e8f0'
+                },
+                tooltip: {
+                    shared: true,
+                    valueDecimals: 6
+                },
+                plotOptions: {
+                    column: { borderRadius: 3, borderWidth: 0 }
+                },
+                series: rmseBarSeries,
+                credits: { enabled: false }
+            });
+
+            // ==========================================
             // 3. MEDIA GENERATION & SYNCHRONIZATION
             // ==========================================
             const localMediaTracks = [
@@ -1284,8 +1397,8 @@
             }
 
             localMediaTracks.push(
-                { name: "Winder (Zero-Order Isolation)", file: `zero_order_${chosenModel}_winder.mp4` },
-                { name: "Winder (Production Pipeline)", file: `${chosenModel}_winder.mp4` }
+                { name: "Winder float16", file: `${chosenModel}_winder_float16.mp4` },
+                { name: "Winder", file: `${chosenModel}_winder.mp4` }
             );
 
             const mediaGrid = document.getElementById("mediaGrid");
@@ -1314,26 +1427,9 @@
 
             initVideoSync();
         }
-        function syncVideos() {
-            // Select all video elements on the page (or use a specific class like '.compare-video')
-            const videos = document.querySelectorAll('video');
 
-            // First, pause all videos and rewind them to the start
-            videos.forEach(video => {
-                video.pause();
-                video.currentTime = 0;
-            });
-
-            // Play them all simultaneously
-            videos.forEach(video => {
-                // .play() returns a promise, it's good practice to catch browser autoplay blocks
-                video.play().catch(error => {
-                    console.warn("Playback was prevented on a video element:", error);
-                });
-            });
-        }
-
-        window.addEventListener("DOMContentLoaded", populateSelectors);
+        // Intercept initial window listener to kick off async fetch stack instead of selectors
+        window.addEventListener("DOMContentLoaded", loadCSVBenchmarks);
     </script>
 
 </body>
