@@ -299,7 +299,7 @@ __global__ void __launch_bounds__(128) compute_exact_max_distances_kernel(
     if (current_node_idx != 0xFFFFFFFF) {
       AABB aabb = nodes[current_node_idx].parent_aabb;
       Vec3 com = aabb.center_of_mass.get(aabb.min, aabb.diagonal());
-      exact_dist = (my_geometry.centroid() - com).length();
+      exact_dist = my_geometry.max_distance_to(com);
     }
 
     // High-speed intra-warp reduction from cub

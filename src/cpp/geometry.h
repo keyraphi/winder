@@ -59,9 +59,36 @@ struct Triangle {
     result.min = min;
     result.max = max;
     Vec3 diagonal = max - min;
-    result.center_of_mass.set(centroid(), min, 1.F / diagonal);
-    result.center_of_mass.setMaxDistance(0.F, diagonal.inv_length());
+    Vec3 c = centroid();
+
+    float d0 = (v0 - c).length2();
+    float d1 = (v1 - c).length2();
+    float d2 = (v2 - c).length2();
+    float max_dist_sq = fmaxf(d0, fmaxf(d1, d2));
+    float max_dist = sqrtf(max_dist_sq);
+
+    result.center_of_mass.set(c, min, 1.F / diagonal);
+    result.center_of_mass.setMaxDistance(max_dist, diagonal.inv_length());
     return result;
+  }
+
+  __host__ __device__ __forceinline__ auto get_weight() const -> float {
+    // weight is surface area
+    Vec3 e1 = v1 - v0;
+    Vec3 e2 = v2 - v0;
+    Vec3 cp = Vec3{e1.y * e2.z - e1.z * e2.y, e1.z * e2.x - e1.x * e2.z,
+                   e1.x * e2.y - e1.y * e2.x};
+    return 0.5F *
+           sqrtf(cp.x * cp.x + cp.y * cp.y + cp.z * cp.z);
+  }
+  __host__ __device__ __forceinline__ auto
+  max_distance_to(const Vec3 &pos) const -> float {
+    // A triangle is convex; its maximum distance to ANY point is always at one
+    // of its vertices
+    float d0 = (v0 - pos).length2();
+    float d1 = (v1 - pos).length2();
+    float d2 = (v2 - pos).length2();
+    return sqrtf(fmaxf(d0, fmaxf(d1, d2)));
   }
   __host__ __device__ __forceinline__ auto centroid() const -> Vec3 {
     return (v0 + v1 + v2) / 3.F;
@@ -94,6 +121,14 @@ struct PointNormal {
   __host__ __device__ __forceinline__ static auto
   load(const SoAView<PointNormal> &view, uint32_t idx, uint32_t count)
       -> PointNormal;
+
+  __host__ __device__ __forceinline__ auto get_weight() const -> float {
+    return 1.0F;
+  }
+  __host__ __device__ __forceinline__ auto
+  max_distance_to(const Vec3 &pos) const -> float {
+    return (p - pos).length();
+  }
 
   __host__ __device__ __forceinline__ auto get_aabb() const -> AABB;
   __host__ __device__ __forceinline__ auto centroid() const -> Vec3;
@@ -359,6 +394,8 @@ concept IsGeometry =
       { T::load(gp, u, u) } -> std::same_as<T>;
       { g.get_aabb() } -> std::same_as<AABB>;
       { g.centroid() } -> std::same_as<Vec3>;
+      { g.get_weight() } -> std::same_as<float>;
+      { g.max_distance_to(p) } -> std::same_as<float>;
       { g.get_tailor_terms(p, active, z, m, t) } -> std::same_as<void>;
       { g.contributionToQuery(p, f) } -> std::same_as<float>;
     };

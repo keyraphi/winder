@@ -583,8 +583,9 @@ def main():
                 if "brute_force" not in methods_to_execute:
                     methods_to_execute.insert(0, "brute_force")
         else:
-            if "brute_force" not in methods_to_execute:
-                methods_to_execute.insert(0, "brute_force")
+            if "brute_force" in methods_to_execute:
+                methods_to_execute.remove("brute_force")
+            methods_to_execute.insert(0, "brute_force")
 
     # Compute selected evaluations sequentially
     for method in methods_to_execute:

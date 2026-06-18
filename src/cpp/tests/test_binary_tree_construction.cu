@@ -351,8 +351,8 @@ TEST(BinaryTreeRefit, BottomUpAABB) {
   thrust::device_vector<BinaryNode> d_nodes = h_nodes;
   thrust::device_vector<uint32_t> d_parents = h_parents;
   thrust::device_vector<AABB> d_aabbs(leaf_count + node_count);
-  thrust::device_vector<uint32_t> d_atomic_counters(node_count, 0);
   thrust::device_vector<TailorCoefficientsF16> d_coefficients(leaf_count);
+  thrust::device_vector<float> d_atomic_counters(node_count, 0.F);
   // leaf_coefficients would be sized leaf_count
 
   // 4. Launch
@@ -413,7 +413,7 @@ TEST(BinaryTreeRefit, SingleLeafCoefficients) {
   thrust::device_vector<TailorCoefficientsF16> d_coeffs(leaf_count);
   thrust::device_vector<AABB> d_aabbs(leaf_count); // Just the leaf AABB
   thrust::device_vector<uint32_t> d_parents(1, 0xFFFFFFFF);
-  thrust::device_vector<uint32_t> d_atomic(0); // No internal nodes
+  thrust::device_vector<float> d_atomic(0.F); // No internal nodes
 
   // 3. Launch
   populate_binary_tree_aabb_and_leaf_coefficients<PointNormal>(
