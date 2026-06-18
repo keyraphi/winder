@@ -72,11 +72,11 @@ struct SceneParams {
 };
 __constant__ SceneParams d_scene_params;
 
-void CudaDeleter::operator()(void *ptr) const { 
-    if (ptr != nullptr) {
-        auto compute_stream = reinterpret_cast<cudaStream_t>(stream);
-        cudaFreeAsync(ptr, compute_stream); 
-    }
+void CudaDeleter::operator()(void *ptr) const {
+  if (ptr != nullptr) {
+    auto compute_stream = reinterpret_cast<cudaStream_t>(stream);
+    cudaFreeAsync(ptr, compute_stream);
+  }
 }
 
 template <IsGeometry Geometry> WinderBackend<Geometry>::~WinderBackend() {
@@ -132,12 +132,12 @@ WinderBackend<Geometry>::WinderBackend(size_t size, int device_id)
 
   CUDA_CHECK(
       cudaMallocAsync(&m_to_internal, size * sizeof(uint32_t), m_build_stream));
-  CUDA_CHECK(
-      cudaMallocAsync(&m_sorted_geometry, size * sizeof(Geometry), m_build_stream));
-  CUDA_CHECK(cudaMallocAsync(&m_binary_aabbs,
-                             (2 * leaf_count - 1) * sizeof(AABB), m_build_stream));
-  CUDA_CHECK(
-      cudaMallocAsync(&m_bvh8_node_count, 1 * sizeof(uint32_t), m_build_stream));
+  CUDA_CHECK(cudaMallocAsync(&m_sorted_geometry, size * sizeof(Geometry),
+                             m_build_stream));
+  CUDA_CHECK(cudaMallocAsync(
+      &m_binary_aabbs, (2 * leaf_count - 1) * sizeof(AABB), m_build_stream));
+  CUDA_CHECK(cudaMallocAsync(&m_bvh8_node_count, 1 * sizeof(uint32_t),
+                             m_build_stream));
   CUDA_CHECK(cudaMallocAsync(&m_bvh8_nodes, max_bvh8_nodes * sizeof(BVH8Node),
                              m_build_stream));
   CUDA_CHECK(cudaMallocAsync(&m_leaf_coefficients,
@@ -189,7 +189,7 @@ template <IsPrimitiveGeometry PrimitiveGeometry>
 auto WinderBackend<Geometry>::initializeMortonCodes(
     const PrimitiveGeometry *geometry, uint64_t *geometry_morton_codes)
     -> void {
-  // compute scene bounds
+  // compute scene bound
   auto aabb_transform = thrust::make_transform_iterator(
       geometry, GeometryToAABB<PrimitiveGeometry>{});
 
@@ -223,7 +223,8 @@ void WinderBackend<Triangle>::initialize_triangle_data(const float *triangles) {
   initializeMortonCodes(triangles_tri, geometry_morton_codes);
 
   // sort by morton codes
-  thrust::sequence(m_build_stream_policy, m_to_internal, m_to_internal + m_count);
+  thrust::sequence(m_build_stream_policy, m_to_internal,
+                   m_to_internal + m_count);
   // sorts both morton_codes and m_to_internal
   thrust::sort_by_key(m_build_stream_policy, geometry_morton_codes,
                       geometry_morton_codes + m_count, m_to_internal);
@@ -254,21 +255,23 @@ void WinderBackend<Triangle>::initialize_triangle_data(const float *triangles) {
   uint32_t *binary_parents;
   CUDA_CHECK(cudaMallocAsync(
       &binary_nodes, (leaf_count - 1) * sizeof(BinaryNode), m_build_stream));
-  CUDA_CHECK(cudaMallocAsync(
-      &binary_parents, (2 * leaf_count - 1) * sizeof(uint32_t), m_build_stream));
+  CUDA_CHECK(cudaMallocAsync(&binary_parents,
+                             (2 * leaf_count - 1) * sizeof(uint32_t),
+                             m_build_stream));
   build_binary_topology(leaf_morton_codes, binary_nodes, binary_parents,
                         leaf_count, m_build_stream);
   CUDA_CHECK(cudaFreeAsync(leaf_morton_codes, m_build_stream));
 
-  // initialize the atomic counters to 0
-  uint32_t *atomic_counters;
-  CUDA_CHECK(cudaMallocAsync(&atomic_counters,
-                             (leaf_count - 1) * sizeof(uint32_t), m_build_stream));
-  thrust::fill_n(m_build_stream_policy, atomic_counters, leaf_count - 1, 0);
+  // initialize the atomic weights to 0
+  float *atomic_weights;
+  CUDA_CHECK(cudaMallocAsync(&atomic_weights, (leaf_count - 1) * sizeof(float),
+                             m_build_stream));
+  thrust::fill_n(m_build_stream_policy, atomic_weights, leaf_count - 1, 0.F);
   populate_binary_tree_aabb_and_leaf_coefficients<Triangle>(
       m_sorted_geometry, m_leaf_coefficients, leaf_count, binary_nodes,
-      m_binary_aabbs, binary_parents, atomic_counters, m_count, m_build_stream);
+      m_binary_aabbs, binary_parents, atomic_weights, m_count, m_build_stream);
   CUDA_CHECK(cudaFreeAsync(binary_parents, m_build_stream));
+  CUDA_CHECK(cudaFreeAsync(atomic_weights, m_build_stream));
 
   // Convert binary LBVH tree into BVH8 tree
   uint32_t *bvh8_work_queue_A;
@@ -276,12 +279,13 @@ void WinderBackend<Triangle>::initialize_triangle_data(const float *triangles) {
   uint32_t *bvh8_internal_parent_map;
   uint32_t *global_counter;
   uint32_t *bvh8_leaf_parents;
-  CUDA_CHECK(cudaMallocAsync(&bvh8_work_queue_A,
-                             (leaf_count - 1) * sizeof(uint32_t), m_build_stream));
-  CUDA_CHECK(cudaMallocAsync(&bvh8_work_queue_B,
-                             (leaf_count - 1) * sizeof(uint32_t), m_build_stream));
+  CUDA_CHECK(cudaMallocAsync(
+      &bvh8_work_queue_A, (leaf_count - 1) * sizeof(uint32_t), m_build_stream));
+  CUDA_CHECK(cudaMallocAsync(
+      &bvh8_work_queue_B, (leaf_count - 1) * sizeof(uint32_t), m_build_stream));
   CUDA_CHECK(cudaMallocAsync(&bvh8_internal_parent_map,
-                             max_bvh8_nodes * sizeof(uint32_t), m_build_stream));
+                             max_bvh8_nodes * sizeof(uint32_t),
+                             m_build_stream));
   CUDA_CHECK(
       cudaMallocAsync(&global_counter, 1 * sizeof(uint32_t), m_build_stream));
   CUDA_CHECK(cudaMallocAsync(&bvh8_leaf_parents, leaf_count * sizeof(uint32_t),
@@ -307,7 +311,8 @@ void WinderBackend<Triangle>::initialize_triangle_data(const float *triangles) {
   float *tmp_max_distances;
   CUDA_CHECK(cudaMallocAsync(&tmp_max_distances,
                              bvh8_node_count * sizeof(float), m_build_stream));
-  thrust::fill_n(m_build_stream_policy, tmp_max_distances, bvh8_node_count, 0.F);
+  thrust::fill_n(m_build_stream_policy, tmp_max_distances, bvh8_node_count,
+                 0.F);
   compute_max_distances<Triangle>(
       m_bvh8_nodes, m_sorted_geometry, bvh8_leaf_parents,
       bvh8_internal_parent_map, tmp_max_distances,
@@ -315,7 +320,10 @@ void WinderBackend<Triangle>::initialize_triangle_data(const float *triangles) {
   CUDA_CHECK(cudaFreeAsync(tmp_max_distances, m_build_stream));
 
   // populate BVH8 nodes with tailor coefficients using m2m
-  // initialize the atomic counters to 0
+  // initialize atomic counters to 0 (TODO: good idea?)
+  uint32_t *atomic_counters;
+  CUDA_CHECK(cudaMallocAsync(
+      &atomic_counters, (leaf_count - 1) * sizeof(uint32_t), m_build_stream));
   thrust::fill_n(m_build_stream_policy, atomic_counters, leaf_count - 1, 0);
   TailorCoefficients *m2m_f32_coefficients;
   CUDA_CHECK(cudaMallocAsync(&m2m_f32_coefficients,
@@ -331,7 +339,8 @@ void WinderBackend<Triangle>::initialize_triangle_data(const float *triangles) {
   CUDA_CHECK(cudaFreeAsync(bvh8_internal_parent_map, m_build_stream));
   CUDA_CHECK(cudaFreeAsync(bvh8_leaf_parents, m_build_stream));
 
-  CUDA_CHECK(cudaEventRecord(m_tree_construction_finished_event, m_build_stream));
+  CUDA_CHECK(
+      cudaEventRecord(m_tree_construction_finished_event, m_build_stream));
 }
 
 template <>
@@ -347,7 +356,8 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
   initializeMortonCodes<Vec3>(points_v3, geometry_morton_codes);
 
   // sort by morton codes
-  thrust::sequence(m_build_stream_policy, m_to_internal, m_to_internal + m_count);
+  thrust::sequence(m_build_stream_policy, m_to_internal,
+                   m_to_internal + m_count);
   // sorts both morton_codes and m_to_internal
   thrust::sort_by_key(m_build_stream_policy, geometry_morton_codes,
                       geometry_morton_codes + m_count, m_to_internal);
@@ -378,21 +388,23 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
   uint32_t *binary_parents;
   CUDA_CHECK(cudaMallocAsync(
       &binary_nodes, (leaf_count - 1) * sizeof(BinaryNode), m_build_stream));
-  CUDA_CHECK(cudaMallocAsync(
-      &binary_parents, (2 * leaf_count - 1) * sizeof(uint32_t), m_build_stream));
+  CUDA_CHECK(cudaMallocAsync(&binary_parents,
+                             (2 * leaf_count - 1) * sizeof(uint32_t),
+                             m_build_stream));
   build_binary_topology(leaf_morton_codes, binary_nodes, binary_parents,
                         leaf_count, m_build_stream);
   CUDA_CHECK(cudaFreeAsync(leaf_morton_codes, m_build_stream));
 
-  // initialize the atomic counters to 0
-  uint32_t *atomic_counters;
-  CUDA_CHECK(cudaMallocAsync(&atomic_counters,
-                             (leaf_count - 1) * sizeof(uint32_t), m_build_stream));
-  thrust::fill_n(m_build_stream_policy, atomic_counters, leaf_count - 1, 0);
+  // initialize the atomic weights to 0
+  float *atomic_weights;
+  CUDA_CHECK(cudaMallocAsync(&atomic_weights, (leaf_count - 1) * sizeof(float),
+                             m_build_stream));
+  thrust::fill_n(m_build_stream_policy, atomic_weights, leaf_count - 1, 0.F);
   populate_binary_tree_aabb_and_leaf_coefficients<PointNormal>(
       m_sorted_geometry, m_leaf_coefficients, leaf_count, binary_nodes,
-      m_binary_aabbs, binary_parents, atomic_counters, m_count, m_build_stream);
+      m_binary_aabbs, binary_parents, atomic_weights, m_count, m_build_stream);
   CUDA_CHECK(cudaFreeAsync(binary_parents, m_build_stream));
+  CUDA_CHECK(cudaFreeAsync(atomic_weights, m_build_stream));
 
   // Convert binary LBVH tree into BVH8 tree
   uint32_t *bvh8_work_queue_A;
@@ -400,12 +412,13 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
   uint32_t *bvh8_internal_parent_map;
   uint32_t *global_counter;
   uint32_t *bvh8_leaf_parents;
-  CUDA_CHECK(cudaMallocAsync(&bvh8_work_queue_A,
-                             (leaf_count - 1) * sizeof(uint32_t), m_build_stream));
-  CUDA_CHECK(cudaMallocAsync(&bvh8_work_queue_B,
-                             (leaf_count - 1) * sizeof(uint32_t), m_build_stream));
+  CUDA_CHECK(cudaMallocAsync(
+      &bvh8_work_queue_A, (leaf_count - 1) * sizeof(uint32_t), m_build_stream));
+  CUDA_CHECK(cudaMallocAsync(
+      &bvh8_work_queue_B, (leaf_count - 1) * sizeof(uint32_t), m_build_stream));
   CUDA_CHECK(cudaMallocAsync(&bvh8_internal_parent_map,
-                             max_bvh8_nodes * sizeof(uint32_t), m_build_stream));
+                             max_bvh8_nodes * sizeof(uint32_t),
+                             m_build_stream));
   CUDA_CHECK(
       cudaMallocAsync(&global_counter, 1 * sizeof(uint32_t), m_build_stream));
   CUDA_CHECK(cudaMallocAsync(&bvh8_leaf_parents, leaf_count * sizeof(uint32_t),
@@ -431,7 +444,8 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
   float *tmp_max_distances;
   CUDA_CHECK(cudaMallocAsync(&tmp_max_distances,
                              bvh8_node_count * sizeof(float), m_build_stream));
-  thrust::fill_n(m_build_stream_policy, tmp_max_distances, bvh8_node_count, 0.F);
+  thrust::fill_n(m_build_stream_policy, tmp_max_distances, bvh8_node_count,
+                 0.F);
   compute_max_distances<PointNormal>(
       m_bvh8_nodes, m_sorted_geometry, bvh8_leaf_parents,
       bvh8_internal_parent_map, tmp_max_distances,
@@ -439,7 +453,9 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
   CUDA_CHECK(cudaFreeAsync(tmp_max_distances, m_build_stream));
 
   // populate BVH8 nodes with tailor coefficients using m2m
-  // reset atomic counters to 0
+  // initialize atomic coutners to 0
+  uint32_t *atomic_counters;
+  CUDA_CHECK(cudaMallocAsync(&atomic_counters, (leaf_count-1)*sizeof(uint32_t), m_build_stream));
   thrust::fill_n(m_build_stream_policy, atomic_counters, leaf_count - 1, 0);
   TailorCoefficients *m2m_f32_coefficients;
   CUDA_CHECK(cudaMallocAsync(&m2m_f32_coefficients,
@@ -455,7 +471,8 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
   CUDA_CHECK(cudaFreeAsync(bvh8_internal_parent_map, m_build_stream));
   CUDA_CHECK(cudaFreeAsync(bvh8_leaf_parents, m_build_stream));
 
-  CUDA_CHECK(cudaEventRecord(m_tree_construction_finished_event, m_build_stream));
+  CUDA_CHECK(
+      cudaEventRecord(m_tree_construction_finished_event, m_build_stream));
 }
 
 template <typename T> struct GeometryTraits {
@@ -501,7 +518,8 @@ auto WinderBackend<Geometry>::brute_force(const float *queries,
   CUDA_CHECK(cudaEventDestroy(start));
   CUDA_CHECK(cudaEventDestroy(finish));
 
-  CudaUniquePtr<float> result(winding_numbers, CudaDeleter{reinterpret_cast<size_t>(compute_stream)});
+  CudaUniquePtr<float> result(
+      winding_numbers, CudaDeleter{reinterpret_cast<size_t>(compute_stream)});
   return result;
 }
 
@@ -583,7 +601,8 @@ auto WinderBackend<Geometry>::compute(const float *queries, size_t query_count,
   // free events
   CUDA_CHECK(cudaEventDestroy(start));
   CUDA_CHECK(cudaEventDestroy(finish));
-  CudaUniquePtr<float> result(winding_numbers, CudaDeleter{reinterpret_cast<size_t>(compute_stream)});
+  CudaUniquePtr<float> result(
+      winding_numbers, CudaDeleter{reinterpret_cast<size_t>(compute_stream)});
   return result;
 }
 
@@ -721,8 +740,8 @@ void WinderBackend<Triangle>::solve_for_normals(
 }
 
 __global__ void getTailorCoefficientsKernel(const BVH8Node *nodes,
-                                             TailorCoefficientsBf16 *result,
-                                             uint32_t node_count) {
+                                            TailorCoefficientsBf16 *result,
+                                            uint32_t node_count) {
   uint32_t tid = threadIdx.x + blockIdx.x * blockDim.x;
   if (tid < node_count) {
     const BVH8Node &node = nodes[tid];
@@ -825,8 +844,8 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
   // Calculate execution configuration and launch on the device
   uint32_t block = 128;
   uint32_t grid = (node_count + block - 1) / block;
-  getTailorCoefficientsKernel<<<grid, block>>>(
-      m_bvh8_nodes, d_node_coefficients, node_count);
+  getTailorCoefficientsKernel<<<grid, block>>>(m_bvh8_nodes,
+                                               d_node_coefficients, node_count);
 
   // Catch launch anomalies and wait for execution boundary
   CUDA_CHECK(cudaGetLastError());

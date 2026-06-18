@@ -95,6 +95,26 @@ struct AABB {
     // It has to be set seperately
     return result;
   }
+  __host__ __device__ __forceinline__ static auto
+  merge_weighted(const AABB &a, const AABB &b, const float a_weight,
+                 const float b_weight) -> AABB {
+    AABB result;
+    result.min = Vec3{fminf(a.min.x, b.min.x), fminf(a.min.y, b.min.y),
+                      fminf(a.min.z, b.min.z)};
+    result.max = Vec3{fmaxf(a.max.x, b.max.x), fmaxf(a.max.y, b.max.y),
+                      fmaxf(a.max.z, b.max.z)};
+
+    float total_weight = a_weight + b_weight;
+    float a_factor = total_weight > 0.F ? (a_weight / total_weight) : 0.5F;
+    float b_factor = total_weight > 0.F ? (b_weight / total_weight) : 0.5F;
+
+    Vec3 com_a = a.center_of_mass.get(a.min, a.diagonal());
+    Vec3 com_b = b.center_of_mass.get(b.min, b.diagonal());
+    Vec3 com_new = com_a * a_factor + com_b * b_factor;
+
+    result.center_of_mass.set(com_new, result.min, 1.F / result.diagonal());
+    return result;
+  }
 };
 
 __host__ __device__ __forceinline__ auto Vec3::get_aabb() const -> AABB {

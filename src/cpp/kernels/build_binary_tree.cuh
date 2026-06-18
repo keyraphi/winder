@@ -28,5 +28,5 @@ void populate_binary_tree_aabb_and_leaf_coefficients(
     const float *__restrict__ sorted_geometry,
     TailorCoefficientsBf16 *leaf_coefficients, uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
-    const uint32_t *binary_parents, uint32_t *atomic_counters,
+    const uint32_t *binary_parents, float *atomic_weights,
     uint32_t point_count, const cudaStream_t &stream = 0);

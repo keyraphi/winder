@@ -55,10 +55,11 @@ __global__ void __launch_bounds__(256)
 }
 
 void gather_point_normals_soa(const float *__restrict__ points,
-                             const float *__restrict__ normals,
-                             const uint32_t *__restrict__ indices,
-                             float *__restrict__ out_geometry,
-                             const uint32_t count, const cudaStream_t &stream) {
+                              const float *__restrict__ normals,
+                              const uint32_t *__restrict__ indices,
+                              float *__restrict__ out_geometry,
+                              const uint32_t count,
+                              const cudaStream_t &stream) {
   if (count < 1) {
     return;
   }
@@ -115,7 +116,8 @@ void gather_triangles_soa(const float *__restrict__ input_triangles,
   CUDA_CHECK(cudaGetLastError());
 }
 
-// Longest Common Prefix for 63-bit code[i] and code[j] with 32-bit index tiebreaker
+// Longest Common Prefix for 63-bit code[i] and code[j] with 32-bit index
+// tiebreaker
 __device__ inline auto delta_with_tiebreaker(int i, int j,
                                              const uint64_t *__restrict__ codes,
                                              int codes_len) -> int {
@@ -253,8 +255,8 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
     const SoAView<Geometry> sorted_geometry,
     TailorCoefficientsBf16 *leaf_coefficients, const uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
-    const uint32_t *binary_parents, uint32_t *atomic_counters,
-    const uint32_t geometry_count) {
+    const uint32_t *binary_parents, 
+    float *atomic_weights, const uint32_t geometry_count) {
   uint32_t geometry_idx = threadIdx.x + blockIdx.x * blockDim.x;
   uint32_t leaf_idx = geometry_idx / 32;
   if (leaf_idx >= leaf_count)
@@ -269,16 +271,21 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
   bool is_thread_active = geometry_idx < geometry_count;
   AABB geometry_aabb;
   Vec3 center_of_mass;
+  float weight = 0.F;
   if (is_thread_active) {
     geometry_aabb = geometry.get_aabb();
     center_of_mass = geometry.centroid();
+    weight = geometry.get_weight();
   } else {
     geometry_aabb.min = Vec3{1e38F, 1e38F, 1e38F};
     geometry_aabb.max = Vec3{-1e38F, -1e38F, -1e38F};
     center_of_mass = Vec3{0.F, 0.F, 0.F};
+    weight = 0.F;
   }
   Vec3 &p_min = geometry_aabb.min;
   Vec3 &p_max = geometry_aabb.max;
+  Vec3 weighted_com = center_of_mass * weight;
+
 #pragma unroll
   for (int offset = 16; offset > 0; offset /= 2) {
     p_min.x = fminf(p_min.x, __shfl_xor_sync(0xFFFFFFFF, p_min.x, offset));
@@ -289,38 +296,47 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
     p_max.y = fmaxf(p_max.y, __shfl_xor_sync(0xFFFFFFFF, p_max.y, offset));
     p_max.z = fmaxf(p_max.z, __shfl_xor_sync(0xFFFFFFFF, p_max.z, offset));
 
-    center_of_mass.x += __shfl_xor_sync(0xFFFFFFFF, center_of_mass.x, offset);
-    center_of_mass.y += __shfl_xor_sync(0xFFFFFFFF, center_of_mass.y, offset);
-    center_of_mass.z += __shfl_xor_sync(0xFFFFFFFF, center_of_mass.z, offset);
+    weighted_com.x += __shfl_xor_sync(0xFFFFFFFF, weighted_com.x, offset);
+    weighted_com.y += __shfl_xor_sync(0xFFFFFFFF, weighted_com.y, offset);
+    weighted_com.z += __shfl_xor_sync(0xFFFFFFFF, weighted_com.z, offset);
+
+    weight += __shfl_xor_sync(0xFFFFFFFF, weight, offset);
   }
-  // compute center of mass
-  uint32_t geo_count_in_leaf = min(32U, geometry_count - (leaf_idx * 32U));
-  float inv_geo_count_in_leaf = 1.F / (float)geo_count_in_leaf;
-  center_of_mass *= inv_geo_count_in_leaf;
+  // compute center of mass for leaf
+  center_of_mass =
+      weight >= 0.F ? (weighted_com / weight) : Vec3{0.F, 0.F, 0.F};
   // find max distance of center of mass to any element inside
-  float dist_to_com = (geometry.centroid() - center_of_mass).length();
+  float dist_to_com =
+      is_thread_active ? geometry.max_distance_to(center_of_mass) : 0.F;
 #pragma unroll
   for (int offset = 16; offset > 0; offset /= 2) {
     dist_to_com =
         fmaxf(dist_to_com, __shfl_xor_sync(0xFFFFFFFF, dist_to_com, offset));
   }
-  // write aggregated AABB for leaf
-  binary_aabbs[leaf_idx + leaf_count - 1].min = p_min;
-  binary_aabbs[leaf_idx + leaf_count - 1].max = p_max;
+
+  uint32_t leaf_node_idx = leaf_idx + leaf_count - 1;
   Vec3 diagonal = p_max - p_min;
-  Vec3 inv_extend = 1.F / diagonal;
-  float inv_diagonal_length = diagonal.inv_length();
-  binary_aabbs[leaf_idx + leaf_count - 1].center_of_mass.set(center_of_mass,
-                                                             p_min, inv_extend);
-  binary_aabbs[leaf_idx + leaf_count - 1].center_of_mass.setMaxDistance(
-      dist_to_com, inv_diagonal_length);
-  leaf_coefficients[leaf_idx].center_of_mass.set(center_of_mass, p_min,
-                                                 inv_extend);
-  leaf_coefficients[leaf_idx].center_of_mass.setMaxDistance(
-      dist_to_com, inv_diagonal_length);
+
+  // write aggregated AABB for leaf (only lane 0)
+  if (lane_id == 0) {
+    binary_aabbs[leaf_idx + leaf_count - 1].min = p_min;
+    binary_aabbs[leaf_idx + leaf_count - 1].max = p_max;
+
+    Vec3 inv_extend = 1.F / diagonal;
+    float inv_diagonal_length = diagonal.inv_length();
+    binary_aabbs[leaf_idx + leaf_count - 1].center_of_mass.set(
+        center_of_mass, p_min, inv_extend);
+    binary_aabbs[leaf_idx + leaf_count - 1].center_of_mass.setMaxDistance(
+        dist_to_com, inv_diagonal_length);
+    leaf_coefficients[leaf_idx].center_of_mass.set(center_of_mass, p_min,
+                                                   inv_extend);
+    leaf_coefficients[leaf_idx].center_of_mass.setMaxDistance(
+        dist_to_com, inv_diagonal_length);
+  }
 
   // Make sure the quantized center of mask is the actual position for which we
   // compute the tailor coefficients
+  __syncwarp();
   center_of_mass =
       leaf_coefficients[leaf_idx].center_of_mass.get(p_min, diagonal);
 
@@ -381,8 +397,10 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
   // propagate the aabbs to the inner nodes (binary_aabbs)
   // lane 0 handles the Leaf-to-Root Race
   if (lane_id == 0) {
+    // prevent stall for degenerate leafs
+    float my_weight = (weight == 0.F) ? 1e-10 : weight;
 
-    uint32_t current_idx = leaf_idx + leaf_count - 1;
+    uint32_t current_idx = leaf_node_idx;
     uint32_t current_parent_idx = binary_parents[current_idx];
     // If this leaf's parent is the root marker, we are done.
     if (current_parent_idx == 0xFFFFFFFF) {
@@ -393,33 +411,32 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
     cuda::atomic_thread_fence(cuda::memory_order_seq_cst,
                               cuda::thread_scope_device);
     // get number of elements in other child of current parent
-    uint32_t geo_count_other_child =
-        atomicAdd(&atomic_counters[current_parent_idx], geo_count_in_leaf);
-    if (geo_count_other_child == 0) {
+    float other_weight =
+        atomicAdd(&atomic_weights[current_parent_idx], my_weight);
+    if (other_weight == 0.F) {
       return; // this subtree arrived first and is done
     }
-    uint32_t geo_count_my_child = geo_count_in_leaf;
+    // The thread that arrived here has both weights in registers
     while (current_parent_idx != 0xFFFFFFFF) {
       BinaryNode parent_node = binary_nodes[current_parent_idx];
 
-      uint32_t geo_count_left_child;
-      uint32_t geo_count_right_child;
+      float weight_left;
+      float weight_right;
       // find out if my leaf is left or right
       if (parent_node.left_child == current_idx) {
         // I am the left child
-        geo_count_left_child = geo_count_my_child;
-        geo_count_right_child = geo_count_other_child;
+        weight_left = my_weight;
+        weight_right = other_weight;
       } else {
         // I am the right child
-        geo_count_left_child = geo_count_other_child;
-        geo_count_right_child = geo_count_my_child;
+        weight_left = other_weight;
+        weight_right = my_weight;
       }
 
       // merge child aabbs
-      binary_aabbs[current_parent_idx] =
-          AABB::merge(binary_aabbs[parent_node.left_child],
-                      binary_aabbs[parent_node.right_child],
-                      geo_count_left_child, geo_count_right_child);
+      binary_aabbs[current_parent_idx] = AABB::merge_weighted(
+          binary_aabbs[parent_node.left_child],
+          binary_aabbs[parent_node.right_child], weight_left, weight_right);
       // make sure that aabb has been written before the counter is incremented
       __threadfence();
 
@@ -428,12 +445,11 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
       if (next_parent == 0xFFFFFFFF) {
         break;
       }
-      geo_count_my_child += geo_count_other_child; // new count for this node
-      geo_count_other_child =
-          atomicAdd(&atomic_counters[next_parent],
-                    geo_count_my_child); // count from other node
-      if (geo_count_other_child == 0) {
-        break;
+      // the combined weight becomes the new weight for this threads future race
+      my_weight = weight_left + weight_right;
+      other_weight = atomicAdd(&atomic_weights[next_parent], my_weight);
+      if (other_weight == 0.F) {
+        break; // Thread arrived first at next level, let other thread finish it
       }
       current_idx = current_parent_idx;
       current_parent_idx = next_parent;
@@ -446,7 +462,7 @@ void populate_binary_tree_aabb_and_leaf_coefficients(
     const float *__restrict__ sorted_geometry,
     TailorCoefficientsBf16 *leaf_coefficients, const uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
-    const uint32_t *binary_parents, uint32_t *atomic_counters,
+    const uint32_t *binary_parents, float *atomic_counters,
     const uint32_t geometry_count, const cudaStream_t &stream) {
   if (geometry_count == 0) {
     return;
@@ -467,12 +483,12 @@ template void populate_binary_tree_aabb_and_leaf_coefficients<PointNormal>(
     const float *__restrict__ sorted_geometry,
     TailorCoefficientsBf16 *leaf_coefficients, uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
-    const uint32_t *binary_parents, uint32_t *atomic_counters,
+    const uint32_t *binary_parents, float *atomic_counters,
     uint32_t geometry_count, const cudaStream_t &stream);
 
 template void populate_binary_tree_aabb_and_leaf_coefficients<Triangle>(
     const float *__restrict__ sorted_geometry,
     TailorCoefficientsBf16 *leaf_coefficients, uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
-    const uint32_t *binary_parents, uint32_t *atomic_counters,
+    const uint32_t *binary_parents, float *atomic_counters,
     uint32_t geometry_count, const cudaStream_t &stream);
