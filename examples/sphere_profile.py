@@ -207,6 +207,7 @@ def main():
     for _ in tqdm(range(args.evaluation_rounds), desc="Eval. Repetitions"):
         winding_number_grid = engine.compute(queries, beta=args.beta, stream=torch.cuda.current_stream().cuda_stream)
 
+    torch.cuda.synchronize()
 
 if __name__ == "__main__":
     main()

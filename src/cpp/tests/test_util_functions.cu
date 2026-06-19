@@ -1,5 +1,6 @@
 #include "aabb.h"
 #include "binary_node.h"
+#include "bvh8.h"
 #include "center_of_mass.h"
 #include "geometry.h"
 #include "kernels/build_binary_tree.cuh"
@@ -27,6 +28,7 @@ TEST(Sizes, AABB) {
   EXPECT_EQ(sizeof(AABB8BitApprox), 6);
 }
 TEST(Sizes, BinaryNode) { EXPECT_EQ(sizeof(BinaryNode), 8); }
+TEST(Sizes, BVH8Node) { EXPECT_EQ(sizeof(BVH8Node), 128); }
 TEST(Sizes, TailorCoefficients) {
   EXPECT_EQ(sizeof(TailorCoefficientsQuantized), 44);
   EXPECT_EQ(sizeof(TailorCoefficientsF16), 64);
