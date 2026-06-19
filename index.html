@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="author" content="Raphael Braun">
     <title> Winder: Ultra-Fast GPU Winding Numbers</title>
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <script>
@@ -45,15 +45,19 @@
       }
     </style>
 </head>
-<body class="bg-slate-50 text-slate-800 academic-font antialiased">
 
-    <header class="bg-gradient-to-b from-slate-900 to-slate-800 text-white pt-16 pb-12 px-4 shadow-md">
+<body class="bg-slate-50 text-slate-800 academic-font antialiased">
+  <header class="bg-gradient-to-b from-slate-900 to-slate-800 text-white pt-16 pb-12 px-4 shadow-md">
         <div class="max-w-5xl mx-auto text-center">
             <span class="bg-cyan-500 text-slate-900 text-xs font-bold uppercase tracking-widest px-3 py-1 rounded-full">Technical Report</span>
             <h1 class="text-4xl md:text-5xl font-extrabold mt-4 mb-3 tracking-tight">Winder</h1>
-            <p class="text-xl md:text-2xl text-slate-300 font-light max-w-3xl mx-auto mb-8">
+            <p class="text-xl md:text-2xl text-slate-300 font-light max-w-3xl mx-auto mb-4">
                 A Library for Fully Differentiable Fast Winding Number Fields on GPU
             </p>
+            
+            <div class="text-sm md:text-base text-slate-400 font-medium mb-8">
+                By <span class="text-white font-semibold hover:text-cyan-400 transition-colors duration-200">Raphael Braun</span>
+            </div>
 
             <div class="flex flex-wrap justify-center items-center gap-y-2 gap-x-4 text-sm mb-8 text-slate-300 font-medium">
                 <span class="flex items-center gap-1.5">🛠️ Point Clouds &amp; Triangle Soups</span>
@@ -701,14 +705,17 @@
                                     <div class="mt-1 w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0"></div>
                                     <div class="flex-1">
                                         <p class="text-sm font-semibold text-slate-800">Reference Implementation (Brute-Force)</p>
-                                        <p class="text-xs text-slate-500 mt-0.5">Fully functional, templated codebase supporting both point clouds and triangles. Serves as the exact numerical verification baseline for all accelerated tracking paths.</p>
+                                        <p class="text-xs text-slate-500 mt-0.5">Fully functional, templated codebase supporting both point clouds and
+                                          triangles. Serves as the exact numerical verification baseline for all accelerated tracking paths.</p>
                                     </div>
                                 </div>
                                 <div class="flex items-start gap-3 py-2 pt-3">
                                     <div class="mt-1 w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0"></div>
                                     <div class="flex-1">
                                         <p class="text-sm font-semibold text-slate-800">Tree-Accelerated Production Kernels (BVH8)</p>
-                                        <p class="text-xs text-slate-500 mt-0.5">Highly unified, template-driven pipelines for point clouds and triangles running on an 8-way bounding volume hierarchy. Structural divergences are isolated strictly to the offline tree construction routines. Mesh inputs undergo an automated conversion pass to triangle arrays prior to evaluation.</p>
+                                        <p class="text-xs text-slate-500 mt-0.5">Highly unified, template-driven pipelines for point clouds and triangles
+                                          running on an 8-way bounding volume hierarchy. Structural divergences are isolated strictly to the offline tree
+                                          construction routines. Mesh inputs undergo an automated conversion pass to triangle arrays prior to evaluation.</p>
                                     </div>
                                 </div>
                             </div>
@@ -724,14 +731,17 @@
                                     <div class="mt-1 w-2 h-2 rounded-full bg-amber-400 flex-shrink-0"></div>
                                     <div class="flex-1">
                                         <p class="text-sm font-semibold text-slate-800">Theoretical Adjoint Framework</p>
-                                        <p class="text-xs text-slate-500 mt-0.5">The mathematical formulation for reverse-mode automatic differentiation via multi-order query moments is established. Adjoint structures map uniformly across all primitive geometries.</p>
+                                        <p class="text-xs text-slate-500 mt-0.5">The mathematical formulation for reverse-mode automatic differentiation via
+                                          multi-order query moments is established. Adjoint structures map uniformly across all primitive geometries.</p>
                                     </div>
                                 </div>
                                 <div class="flex items-start gap-3 py-2 pt-3">
                                     <div class="mt-1 w-2 h-2 rounded-full bg-slate-300 flex-shrink-0"></div>
                                     <div class="flex-1">
                                         <p class="text-sm font-semibold text-slate-700">Kernel Architecture Design</p>
-                                        <p class="text-xs text-slate-400 mt-0.5">Currently planning the underlying implementation details for parallel backpropagation. Active tasks focus on determining optimal memory layouts and contraction logic for the dynamic query-tree caching system.</p>
+                                        <p class="text-xs text-slate-400 mt-0.5">Currently planning the underlying implementation details for parallel
+                                          backpropagation. Active tasks focus on determining optimal memory layouts and contraction logic for the dynamic
+                                          query-tree caching system.</p>
                                     </div>
                                 </div>
                             </div>
@@ -750,7 +760,7 @@
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              <a target="_blank" href="https://github.com/keyraphi/winder/blob/db3a58d56cadde1e68aa933e545d79f92fa7656f/src/cpp/winder_cuda.cu#L224-L260">
+              <a target="_blank" href="https://github.com/keyraphi/winder/blob/1838361a153b0657e03cfdd469c44a9ae8b7d21a/src/cpp/winder_cuda.cu#L224-L263">
                 <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
                     <div class="text-cyan-400 text-lg mb-2 font-mono">⚡ Morton-Encoded LBVH</div>
                     <p class="text-sm text-slate-300 leading-relaxed">
@@ -759,7 +769,7 @@
                     </p>
                 </div>
               </a>
-              <a target="_blank" href="https://github.com/keyraphi/winder/blob/db3a58d56cadde1e68aa933e545d79f92fa7656f/src/cpp/kernels/binary2bvh8.cu#L26-L231">
+              <a target="_blank" href="https://github.com/keyraphi/winder/blob/1838361a153b0657e03cfdd469c44a9ae8b7d21a/src/cpp/kernels/binary2bvh8.cu#L26-L231">
                 <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
                     <div class="text-cyan-400 text-lg mb-2 font-mono">🌿 Wide BVH8 Generation</div>
                     <p class="text-sm text-slate-300 leading-relaxed">
@@ -767,7 +777,7 @@
                     </p>
                 </div>
               </a>
-              <a target="_blank" href="https://github.com/keyraphi/winder/blob/db3a58d56cadde1e68aa933e545d79f92fa7656f/src/cpp/kernels/bvh8_m2m.cu#L22-L185">
+              <a target="_blank" href="https://github.com/keyraphi/winder/blob/1838361a153b0657e03cfdd469c44a9ae8b7d21a/src/cpp/kernels/bvh8_m2m.cu#L22-L185">
                 <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
                     <div class="text-cyan-400 text-lg mb-2 font-mono">🌲 Bottom-Up M2M Layers</div>
                     <p class="text-sm text-slate-300 leading-relaxed">
@@ -775,7 +785,7 @@
                     </p>
                 </div>
               </a>
-              <a target="_blank" href="https://github.com/keyraphi/winder/blob/db3a58d56cadde1e68aa933e545d79f92fa7656f/src/cpp/tailor_coefficients.h">
+              <a target="_blank" href="https://github.com/keyraphi/winder/blob/1838361a153b0657e03cfdd469c44a9ae8b7d21a/src/cpp/tailor_coefficients.h">
                 <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
                     <div class="text-cyan-400 text-lg mb-2 font-mono">📦 128-Byte Quantized Nodes</div>
                     <p class="text-sm text-slate-300 leading-relaxed">
@@ -783,15 +793,16 @@
                     </p>
                 </div>
               </a>
-              <a target="_blank" href="https://github.com/keyraphi/winder/blob/db3a58d56cadde1e68aa933e545d79f92fa7656f/src/cpp/kernels/node_approx.cuh">
+              <a target="_blank" href="https://github.com/keyraphi/winder/blob/1838361a153b0657e03cfdd469c44a9ae8b7d21a/src/cpp/kernels/node_approx.cuh">
                 <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
                     <div class="text-cyan-400 text-lg mb-2 font-mono">🔢 Dual-Precision Tracks</div>
                     <p class="text-sm text-slate-300 leading-relaxed">
-                        Alternates dynamically between high-speed <code>float16</code> math operations for distant far-field approximations and robust <code>float32</code> compute tracks for high-precision near-field intersections.
+                        Alternates dynamically between high-speed <code>float16</code> math operations for distant far-field approximations and
+                        detailed <code>float32</code> compute tracks for high-precision in the near-field.
                     </p>
                 </div>
               </a>
-              <a target="_blank" href="https://github.com/keyraphi/winder/blob/db3a58d56cadde1e68aa933e545d79f92fa7656f/src/cpp/kernels/traversal.cu#L62-L288">
+              <a target="_blank" href="https://github.com/keyraphi/winder/blob/1838361a153b0657e03cfdd469c44a9ae8b7d21a/src/cpp/kernels/traversal.cu#L62-L288">
                 <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
                     <div class="text-cyan-400 text-lg mb-2 font-mono">🤝 Cooperative Kernels</div>
                     <p class="text-sm text-slate-300 leading-relaxed">
@@ -821,11 +832,6 @@
             <li>
                 <strong class="text-slate-900">Winder:</strong> Our production pipeline, evaluating highly optimized
                 accelerated tracking steps across an 8-way bounding volume hierarchy.
-            </li>
-            <li>
-                <strong class="text-slate-900">Winder float16:</strong> 
-                Results from the float16 branch. The main branch currently still uses bfloat16, which leads to more quantization noise and thus higher errors.
-                This branch will be merged to main later because the results are better.
             </li>
             <li>
                 <strong class="text-slate-900">PyTorch:</strong> A raw reference implementation utilizing optimized
@@ -981,7 +987,6 @@
                 const engineMethodMap = {
                     'brute_force': 'brute_force',
                     'winder': 'winder_fwn',
-                    'winder_float16': 'winder_float16',
                     'torch': 'pytorch_ref',
                     'igl': 'libigl',
                     'fast_dipole_sums': 'fast_dipole'
@@ -1136,35 +1141,31 @@
             let errorSeriesData = [];
 
             if (modeType === "mesh") {
-                targetCategories = ['Brute Force (GT)', 'PyTorch', 'LibIGL (CPU)', 'Winder float16', 'Winder'];
+                targetCategories = ['Brute Force (GT)', 'PyTorch', 'LibIGL (CPU)', 'Winder'];
                 timeSeriesData = [
                     resolveTimeValue(datasetMetrics, 'brute_force'),
                     resolveTimeValue(datasetMetrics, 'pytorch_ref'),
                     resolveTimeValue(datasetMetrics, 'libigl'),
-                    resolveTimeValue(datasetMetrics, 'winder_float16'),
                     resolveTimeValue(datasetMetrics, 'winder_fwn')
                 ];
                 errorSeriesData = [
                     datasetMetrics.brute_force?.rmse || 0,
                     datasetMetrics.pytorch_ref?.rmse || 0,
                     datasetMetrics.libigl?.rmse || 0,
-                    datasetMetrics.winder_float16?.rmse || 0,
                     datasetMetrics.winder_fwn?.rmse || 0
                 ];
             } else {
-                targetCategories = ['Brute Force (GT)', 'PyTorch', 'Fast Dipole Sums', 'Winder float16', 'Winder'];
+                targetCategories = ['Brute Force (GT)', 'PyTorch', 'Fast Dipole Sums', 'Winder'];
                 timeSeriesData = [
                     resolveTimeValue(datasetMetrics, 'brute_force'),
                     resolveTimeValue(datasetMetrics, 'pytorch_ref'),
                     resolveTimeValue(datasetMetrics, 'fast_dipole'),
-                    resolveTimeValue(datasetMetrics, 'winder_float16'),
                     resolveTimeValue(datasetMetrics, 'winder_fwn')
                 ];
                 errorSeriesData = [
                     datasetMetrics.brute_force?.rmse || 0,
                     datasetMetrics.pytorch_ref?.rmse || 0,
                     datasetMetrics.fast_dipole?.rmse || 0,
-                    datasetMetrics.winder_float16?.rmse || 0,
                     datasetMetrics.winder_fwn?.rmse || 0
                 ];
             }
@@ -1226,14 +1227,12 @@
                     { key: 'brute_force', name: 'Brute Force (GT)', color: '#64748b' },
                     { key: 'pytorch_ref', name: 'PyTorch', color: '#0ea5e9' },
                     { key: 'libigl', name: 'LibIGL (CPU)', color: '#a855f7' },
-                    { key: 'winder_float16', name: 'Winder float16', color: '#eab308' },
                     { key: 'winder_fwn', name: 'Winder', color: '#10b981' }
                   ]
                 : [
                     { key: 'brute_force', name: 'Brute Force (GT)', color: '#64748b' },
                     { key: 'pytorch_ref', name: 'PyTorch', color: '#0ea5e9' },
                     { key: 'fast_dipole', name: 'Fast Dipole Sums', color: '#ec4899' },
-                    { key: 'winder_float16', name: 'Winder float16', color: '#eab308' },
                     { key: 'winder_fwn', name: 'Winder', color: '#10b981' }
                   ];
 
@@ -1397,7 +1396,6 @@
             }
 
             localMediaTracks.push(
-                { name: "Winder float16", file: `${chosenModel}_winder_float16.mp4` },
                 { name: "Winder", file: `${chosenModel}_winder.mp4` }
             );
 
