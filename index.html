@@ -54,7 +54,7 @@
             <p class="text-xl md:text-2xl text-slate-300 font-light max-w-3xl mx-auto mb-4">
                 A Library for Fully Differentiable Fast Winding Number Fields on GPU
             </p>
-            
+
             <div class="text-sm md:text-base text-slate-400 font-medium mb-8">
                 By <span class="text-white font-semibold hover:text-cyan-400 transition-colors duration-200">Raphael Braun</span>
             </div>
@@ -71,7 +71,7 @@
                 </span>
                 <span class="text-slate-600 hidden sm:inline">•</span>
                 <span class="flex items-center gap-1.5">
-                    <span class="text-emerald-400">🔄</span> Symmetric Dual-Traversal Gradients
+                    <span class="text-emerald-400">🔄</span> Full Partial Derivatives
                 </span>
                 <span class="text-slate-600 hidden sm:inline">•</span>
                 <span class="flex items-center gap-1.5">
@@ -93,150 +93,189 @@
 
     <main class="max-w-5xl mx-auto px-4 py-12 space-y-16">
       <section class="bg-white p-8 rounded-xl shadow-xs border border-slate-200/80">
-            <h2 class="text-2xl font-bold border-b border-slate-200 pb-3 mb-4 text-slate-900 flex items-center gap-2">
-                <span class="text-cyan-600">01.</span>Winding Numbers: Introduction &amp; Topological Foundations
-            </h2>
-            <div class="prose prose-slate max-w-none text-slate-600 leading-relaxed space-y-4">
-                <p>
-                    Determining whether a query coordinate is inside or outside an arbitrary
-                    geometric shell is a foundational requirement in geometric processing, 3D computer vision, and physical simulations.
-                    This is straightforward for watertight, perfectly clean manifold topologies. However, raw real-world data
-                    presents severe challenges, often appearing as fractured triangle soups, open boundaries, or raw unorganized point arrays.
-                </p>
-                <p>
-                  To resolve this ambiguity, the <strong>Generalized Winding Number</strong> framework maps spatial points to a
-                  continuous volumetric field. Rather than enforcing strict binary boundaries, it evaluates the solid angle subtended by
-                  the surface primitives relative to the evaluation site $x \in \mathbb{R}^3$. For any continuous, closed manifold surface
-                  $\mathcal{M}$, the continuous winding field evaluator calculates precisely $1$ inside the core container and $0$ outside:
-                </p>
-                <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
-                    $$\mathcal{W}(x) = \frac{1}{4\pi} \iint_{\mathcal{M}} \frac{(p - x) \cdot n(p)}{\|p - x\|^3} \, dA(p)$$
+    <h2 class="text-2xl font-bold border-b border-slate-200 pb-3 mb-6 text-slate-900 flex items-center gap-2">
+        <span class="text-cyan-600">01.</span>Winding Numbers: Introduction &amp; Topological Foundations
+    </h2>
+
+    <div class="mb-10 bg-gradient-to-r from-slate-50 to-cyan-50/30 p-6 rounded-xl border border-slate-200/60">
+        <h3 class="text-lg font-bold text-slate-900 mb-2 flex items-center gap-2">
+            🧭 The Inside-Outside Dilemma: A Story of Broken Geometry
+        </h3>
+        <div class="text-slate-600 text-sm md:text-base space-y-4 leading-relaxed">
+            <p>
+                Imagine you are slicing a 3D model for a 3D printer, rendering a complex video game asset, or training a neural network
+                to understand 3D shapes. Your first, most fundamental question is always:
+                <span class="text-slate-900 font-semibold">"Is this point inside the object, or outside in empty air?"</span>
+            </p>
+            <p>
+                If your 3D model is perfect, watertight, and sterile, this is easy. You cast a ray from your query point; if it crosses
+                the mesh boundary an odd number of times, you're inside. But the real world doesn't give us perfect data. Real-world 3D
+                data - whether harvested from raw LiDAR scans, chaotic CAD conversions, or unoptimized triangle meshes - it is inherently
+                <strong>broken</strong>. It is full of cracks, missing patches, self-intersections, and unorganized point clouds.
+            </p>
+            <p>
+                Classical ray-casting fails catastrophically here. A single microscopic hole acts like a puncture in a tire—the ray
+                "leaks" out, causing issues when you least expect them.
+            </p>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 my-4 pt-2">
+                <div class="bg-white p-4 rounded-lg border border-slate-200 shadow-xs">
+                    <span class="font-bold text-rose-600 text-xs uppercase tracking-wider block mb-1">❌ Classical Boundaries</span>
+                    <p class="text-xs text-slate-500">Asks: <em>"Did I cross a line?"</em> Fragile, binary, and blind to broken geometry. A
+                      single missing triangle breaks the entire algorithm.</p>
                 </div>
-                <p>
-                    Where $x$ is the 3D spatial evaluation query point, $p$ is a integration coordinate lying on the surface geometry
-                    $\mathcal{M}$, $n(p)$ denotes the outward-facing unit normal vector at position $p$, and $dA(p)$ represents the
-                    infinitesimal area element.
-                </p>
-                <p>
-                    When dealing with digital geometry, this continuous formulation ist discretized. For standard <strong>Triangle
-                      Soups</strong> (unoriented, non-manifold, or disconnected meshes), the total winding number at query site $x$ is
-                    evaluated as the sum of signed solid angles $\Omega_t$ subtended by each individual triangle $t$ within the collection
-                    $\mathcal{T}$:
-                </p>
-                <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
-                    $$\mathcal{W}_{\text{mesh}}(x) = \frac{1}{4\pi} \sum_{t \in \mathcal{T}} \Omega_t(x)$$
+                <div class="bg-white p-4 rounded-lg border border-cyan-500/30 bg-cyan-50/10 shadow-xs">
+                    <span class="font-bold text-cyan-600 text-xs uppercase tracking-wider block mb-1">🔮 The Winding Number View</span>
+                    <p class="text-xs text-slate-500">Asks: <em>"How much of the object wraps around me?"</em> Global, continuous, and
+                      completely blind to defects. If 99% of a shape surrounds you, you are 99% inside.</p>
                 </div>
-                <p>
-                    To guarantee numerical stability near triangle edges, vertices, or coplanar configurations, $\Omega_t(x)$ is computed
-                    robustly using the reliable signed solid angle formulation established by <a
-                      href="https://ieeexplore.ieee.org/document/4121581" target="_blank"
-                      class="text-cyan-600 font-medium hover:underline">Van Oosterom and Strackee (1983)</a>. For a triangle with vertex
-                    positions defined relative to the query point as $a = v_1 - x$, $b = v_2 - x$, and $c = v_3 - x$, the solid angle is
-                    computed via:
-                </p>
-                <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
-                    $$\tan\left(\frac{\Omega_t(x)}{2}\right) = \frac{a \cdot (b \times c)}{\|a\|\|b\|\|c\| + (a \cdot b)\|c\| + (b \cdot c)\|a\| + (c \cdot a)\|b\|}$$
-                </div>
-
-              <div class="my-8">
-                  <span class="block text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
-                      <svg class="w-4 h-4 text-cyan-600 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
-                      </svg>
-                      Winding Number Field Representations (Single Triangle)
-                  </span>
-
-                  <div class="flex flex-col md:flex-row gap-4">
-
-                      <div class="flex-1">
-                          <span class="block text-xs font-medium text-slate-500 mb-1.5 px-1">2D Sweeping Planar Slices</span>
-                          <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
-                              <video class="w-full h-full object-cover" autoplay loop muted playsinline>
-                                  <source src="media/single_triangle_slices.mp4" type="video/mp4">
-                                  Your browser does not support HTML5 video loops.
-                              </video>
-                          </div>
-                      </div>
-
-                      <div class="flex-1">
-                          <span class="block text-xs font-medium text-slate-500 mb-1.5 px-1">3D Volumetric Orbital Render</span>
-                          <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
-                              <video class="w-full h-full object-cover" autoplay loop muted playsinline>
-                                  <source src="media/single_triangle.mp4" type="video/mp4">
-                                  Your browser does not support HTML5 video loops.
-                              </video>
-                          </div>
-                      </div>
-
-                  </div>
-
-                  <span class="block text-xs text-slate-500 mt-2.5 italic leading-relaxed">
-                      Figure 2.1: Visualization of the winding number field of a single triangle.
-                      Left: Progressive cross-sectional scans. Right: Path-traced 3D volumetric field.
-                      Note: The field quickly diminishes with distance to the triangle.
-                  </span>
-              </div>
-
-                <p>
-                    For <strong>Point Clouds</strong> lacking explicit connectivity, the surface is treated as a distribution of point
-                    dipoles. The continuous integration reduces to a discrete sum over point samples $i$:
-                </p>
-                <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
-                    $$\mathcal{W}_{\text{points}}(x) = \frac{1}{4\pi} \sum_{i} \frac{(p_i - x) \cdot n_i}{\|p_i - x\|^3} a_i$$
-                </div>
-                <p>
-                    Where $p_i$ represents the 3D spatial position of point sample $i$, $n_i$ represents its orientation unit normal vector,
-                    and $a_i$ denotes the surface area associated with that sample.
-                </p>
-
-              <div class="my-8">
-                  <span class="block text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
-                      <svg class="w-4 h-4 text-cyan-600 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
-                      </svg>
-                      Winding Number Field Representations (Single Dipole)
-                  </span>
-
-                  <div class="flex flex-col md:flex-row gap-4">
-
-                      <div class="flex-1">
-                          <span class="block text-xs font-medium text-slate-500 mb-1.5 px-1">2D Sweeping Planar Slices</span>
-                          <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
-                              <video class="w-full h-full object-cover" autoplay loop muted playsinline>
-                                  <source src="media/single_dipole_slices.mp4" type="video/mp4">
-                                  Your browser does not support HTML5 video loops.
-                              </video>
-                          </div>
-                      </div>
-
-                      <div class="flex-1">
-                          <span class="block text-xs font-medium text-slate-500 mb-1.5 px-1">3D Volumetric Orbital Render</span>
-                          <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
-                              <video class="w-full h-full object-cover" autoplay loop muted playsinline>
-                                  <source src="media/single_dipole.mp4" type="video/mp4">
-                                  Your browser does not support HTML5 video loops.
-                              </video>
-                          </div>
-                      </div>
-                  </div>
-
-                  <span class="block text-xs text-slate-500 mt-2.5 italic leading-relaxed">
-                      Figure 2.1: Visualization of the winding number field of a single dipole.
-                      Left: Progressive cross-sectional scans. Right: Path-traced 3D volumetric field.
-                      Note: The field quickly diminishes with distance to the dipole in the center.
-                  </span>
-              </div>
-
-                <p>
-                    By framing inside-outside segmentation through continuous integration, this formulation is highly resilient to
-                    topological defects, self-intersections, and structural holes. This mathematical foundation allows researchers to
-                    evaluate unstructured data pipelines safely, as highlighted in the seminal work on <a
-                      href="https://dl.acm.org/doi/10.1145/2461912.2461916" target="_blank"
-                      class="text-cyan-600 font-medium hover:underline">Robust Inside-Outside Segmentation using Generalized Winding Numbers
-                      (Jacobson et al., 2013)</a>.
-                </p>
             </div>
-        </section>
+
+            <p>
+            This is where the seminal work of <a href="https://dl.acm.org/doi/10.1145/2461912.2461916" target="_blank"
+              class="text-cyan-600 font-medium hover:underline">Robust Inside-Outside Segmentation using Generalized Winding Numbers
+              (Jacobson et al., 2013)</a> steps in. Instead of a brittle binary test, it treats your
+            3D shape as a gravitational-like field. It aggregates the perspective of every single surface element in a
+            smooth, continuous field.
+            </p>
+            <p>
+                <span class="text-slate-900 font-semibold">Winder fully unlocks the beauty of this representation</span> for large scale
+                GPU optimizations. By adapting fast winding number algorithms for GPU and extending them to the partial derivatives Winder provides fully
+                differentiable, millisecond-level winding fields on raw, broken datasets on scale. Here is how that math actually unrolls.
+            </p>
+        </div>
+    </div>
+
+    <div class="prose prose-slate max-w-none text-slate-600 leading-relaxed space-y-4">
+        <h3 class="text-md font-bold uppercase tracking-wider text-slate-400 mt-8 mb-2">The Continuous Formulation</h3>
+        <p>
+            For any continuous, closed manifold surface $\mathcal{M}$, the continuous winding field maps any spatial location
+            to a continuous scalar field $\mathbb{R}^3 \rightarrow \mathbb{R}$, calculating precisely $1$ for any point enclosed by the manifold and $0$ outside it:
+        </p>
+        <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
+            $$\mathcal{W}(x) = \frac{1}{4\pi} \iint_{\mathcal{M}} \frac{(p - x) \cdot n(p)}{\|p - x\|^3} \, dA(p)$$
+        </div>
+        <p>
+            Where $x$ is the 3D query point, $p$ is an integration coordinate lying on the continuous surface geometry $\mathcal{M}$, $n(p)$
+            denotes the outward-facing unit normal vector at position $p$, and $dA(p)$ represents the infinitesimal area element.
+        </p>
+
+        <h3 class="text-md font-bold uppercase tracking-wider text-slate-400 mt-8 mb-2">Discretization: Triangle Soups</h3>
+        <p>
+            When dealing with digital geometry, this continuous formulation is discretized. For standard <strong>Triangle
+              Soups</strong> (any set of triangles, connected or not), the total winding number at query $x$ is evaluated as
+            the sum of signed solid angles $\Omega_t$ subtended by each individual triangle $t$ within the triangle collection $\mathcal{T}$:
+        </p>
+        <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
+          $$\begin{align}\mathcal{W}_{\text{mesh}}(x) &= \frac{1}{4\pi} \sum_{t \in \mathcal{T}} \Omega_t(x)\end{align}$$
+        </div>
+        <p>
+            To guarantee numerical stability near triangle edges, vertices, or coplanar configurations, $\Omega_t(x)$ is computed
+            robustly using the reliable signed solid angle formulation established by <a
+              href="https://ieeexplore.ieee.org/document/4121581" target="_blank"
+              class="text-cyan-600 font-medium hover:underline">Van Oosterom and Strackee (1983)</a>. For a triangle with vertex
+            positions defined relative to the query point as $a = v_1 - x$, $b = v_2 - x$, and $c = v_3 - x$, the solid angle is
+            computed via:
+        </p>
+        <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
+          $$\tan\left(\frac{\Omega_t(x)}{2}\right) = \frac{a \cdot (b \times c)}{\|a\|\|b\|\|c\| + (a \cdot b)\|c\| + (b \cdot
+          c)\|a\| + (c \cdot a)\|b\|}$$
+        </div>
+        <p>
+          With this we can compute the winding field for any triangle mesh. As an example we show the winding number field of a single triangle in the following video.
+        </p>
+
+        <div class="my-8">
+            <span class="block text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
+                <svg class="w-4 h-4 text-cyan-600 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                </svg>
+                Winding Number Field Representations (Single Triangle)
+            </span>
+
+            <div class="flex flex-col md:flex-row gap-4">
+                <div class="flex-1">
+                    <span class="block text-xs font-medium text-slate-500 mb-1.5 px-1">2D Sweeping Planar Slices</span>
+                    <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
+                        <video class="w-full h-full object-cover" autoplay loop muted playsinline>
+                            <source src="media/single_triangle_slices.mp4" type="video/mp4">
+                            Your browser does not support HTML5 video loops.
+                        </video>
+                    </div>
+                </div>
+
+                <div class="flex-1">
+                    <span class="block text-xs font-medium text-slate-500 mb-1.5 px-1">3D Volumetric Orbital Render</span>
+                    <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
+                        <video class="w-full h-full object-cover" autoplay loop muted playsinline>
+                            <source src="media/single_triangle.mp4" type="video/mp4">
+                            Your browser does not support HTML5 video loops.
+                        </video>
+                    </div>
+                </div>
+            </div>
+            <span class="block text-xs text-slate-500 mt-2.5 italic leading-relaxed">
+                Figure 2.1: Visualization of the winding number field of a single triangle. Green tones are positive values, red tones negative. Left: Progressive cross-sectional scans.
+                Right: Path-traced 3D volumetric field. Note how the field smoothly transitions and diminishes with distance.
+            </span>
+        </div>
+
+        <h3 class="text-md font-bold uppercase tracking-wider text-slate-400 mt-8 mb-2">Discretization: Point Clouds</h3>
+        <p>
+            For <strong>Point Clouds</strong> lacking explicit connectivity, the surface is treated as a distribution of oriented
+            points. The continuous integration reduces to a discrete sum:
+        </p>
+        <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
+            $$\mathcal{W}_{\text{points}}(x) = \frac{1}{4\pi} \sum_{i} \frac{(p_i - x) \cdot n_i}{\|p_i - x\|^3} a_i$$
+        </div>
+        <p>
+            Where $p_i$ represents the 3D spatial position of point sample $i$, $n_i$ represents its orientation unit normal vector,
+            and $a_i$ denotes the Voronoi surface area associated with that point.
+            This is sometimes called point dipole method as the winding field of the point samples is mathematically equivalent
+            to the electrostatic potential of electric dipoles. The area $a_i$ maps to the magnitude of the electric dipole
+            moment.
+
+        </p>
+        <p>
+          With this formula we now can compute the winding field for any oriented point cloud with known surface areas per point. As example we show a single dipole in the following video.
+        </p>
+
+        <div class="my-8">
+            <span class="block text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
+                <svg class="w-4 h-4 text-cyan-600 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                </svg>
+                Winding Number Field Representations (Single Dipole)
+            </span>
+
+            <div class="flex flex-col md:flex-row gap-4">
+                <div class="flex-1">
+                    <span class="block text-xs font-medium text-slate-500 mb-1.5 px-1">2D Sweeping Planar Slices</span>
+                    <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
+                        <video class="w-full h-full object-cover" autoplay loop muted playsinline>
+                            <source src="media/single_dipole_slices.mp4" type="video/mp4">
+                            Your browser does not support HTML5 video loops.
+                        </video>
+                    </div>
+                </div>
+
+                <div class="flex-1">
+                    <span class="block text-xs font-medium text-slate-500 mb-1.5 px-1">3D Volumetric Orbital Render</span>
+                    <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
+                        <video class="w-full h-full object-cover" autoplay loop muted playsinline>
+                            <source src="media/single_dipole.mp4" type="video/mp4">
+                            Your browser does not support HTML5 video loops.
+                        </video>
+                    </div>
+                </div>
+            </div>
+            <span class="block text-xs text-slate-500 mt-2.5 italic leading-relaxed">
+                Figure 2.2: Visualization of the winding number field of a single dipole. Green tones are positive values, red tones
+                negative. Left: Progressive cross-sectional scans. Right: Path-traced 3D volumetric field.
+            </span>
+        </div>
+    </div>
+</section>
 
 <section class="bg-white p-8 rounded-xl shadow-xs border border-slate-200/80">
             <h2 class="text-2xl font-bold border-b border-slate-200 pb-3 mb-4 text-slate-900 flex items-center gap-2">
@@ -249,44 +288,40 @@
                     Evaluating the exact discrete winding number formula requires computing the signed solid angle or dipole potential
                     between every single query location and every surface primitive. This means computing the winding numbers for $M$ query points and
                     $N$ geometric source primitives has a computational complexity of
-                    $\mathcal{O}(N\cdot M)$. With $M$ and $N$ goint into the millions for real world use cases this computational complexity
+                    $\mathcal{O}(N M)$. With $M$ and $N$ goint into the millions for real world use cases this computational complexity
                     turns into a serious bottleneck in any pipeline.
                 </p>
                 <p>
                     To mitigate this, <a href="https://dl.acm.org/doi/10.1145/2461912.2461916" target="_blank"
-                      class="text-cyan-600 font-medium hover:underline">Jacobson et al. (2013)</a> leverages a bounding volume hierarchy
-                    (BVH) to group together manifold sub parts of the mesh. However, this method's algorithmic performance is highly
+                      class="text-cyan-600 font-medium hover:underline">Jacobson et al. (2013)</a> already suggested using a bounding volume hierarchy
+                    (BVH) to group together manifold sub parts of a mesh. However, this method's algorithmic performance is highly
                     dependent on clean, continuous mesh connectivity. When confronted with unoriented triangle soups, disconnected
                     components, or broken geometry boundaries, their traversal can break down under worst-case inputs, degrading directly back to a
-                    brute-force $\mathcal{O}(nm)$ summation loop. This limitation makes large-scale processing of raw, non-manifold
-                    assets highly inefficient.
+                    brute-force $\mathcal{O}(NM)$ summation loop. This limitation makes large-scale processing of raw, non-manifold
+                    assets a gamble.
                 </p>
 
                 <h3 class="text-lg font-semibold text-slate-800 mt-6 mb-1">2. The Fast Winding Numbers Approximation</h3>
                 <p>
-                    To resolve this scaling wall, <a href="https://dl.acm.org/doi/10.1145/3197517.3201337" target="_blank"
+                    <a href="https://dl.acm.org/doi/10.1145/3197517.3201337" target="_blank"
                       class="text-cyan-600 font-medium hover:underline">Barill et al. (2018)</a> introduced the <strong>Fast Winding
-                      Numbers</strong> framework. This method utilizes the fact that the influence of a geometry elment quickly decays with increasing distance.
-                    The algorithm is a tree based Barnes-Hut algorithm and builds a spatial hierarchy
-                    (such as an octree) to group geometry into hierarchical clusters.
+                      Numbers</strong> framework which solves the complexity issue in an elegant way. This method utilizes the fact that the
+                      influence of a geometry element on the winding number quickly decays with distance - similar to gravity.
+                      Just like large scale gravity simulations their algorithm is a tree based Barnes-Hut algorithm and builds a spatial hierarchy
+                      (such as an octree) to group geometry and their influence on the winding number field into hierarchical clusters.
                 </p>
                 <p>
-                    Instead of computing contribution from individual geometry elements in the far-field, the collective contribution of a
-                    distant cluster is evaluated from its shared center of mass $\tilde{p}$. While the related <a
-                      href="https://github.com/zgimbutas/fmmlib3d" target="_blank" class="text-cyan-600 font-medium hover:underline">Fast
-                      Multipole Method (FMM)</a>
-                    can achieve $\mathcal{O}(M)$ scaling, Barill et al. demonstrated that FMM incurs highly prohibitive precomputation
-                    overhead and relies on strict structural distributions that raw surface point distributions rarely satisfy.
-                </p>
-                <p>
-                The core mechanic of the <strong>Fast Winding Numbers</strong> approach lies in approximating the far field cluster
-                nodes with a truncated <strong>Taylor series expansion</strong> of the Laplace Green's function
-                derivatives, evaluated with respect to node's center of mass $\tilde{p}$.
+                    Instead of computing contribution from all geometry elements for all queries, the collective contribution of
+                    distant clusters is evaluated from their center of mass $\tilde{p}$.
+                    <strong>Fast Winding Numbers</strong> approximates the far field clusters
+                    with a truncated <strong>Taylor series expansion</strong> of the Laplace Green's function
+                    derivatives, evaluated with respect to node's center of mass $\tilde{p}$.
                 </p>
 
                 <h4 class="text-sm font-bold text-slate-700 tracking-wide uppercase mt-4">Point Cloud Expansion Formulation</h4>
                 <p>
-                    For a node containing a cluster of $K$ area-weighted point dipoles, Barill et al. approximate the collective winding
+                    For a node containing a cluster of $K$ area-weighted point dipoles, <a href="https://dl.acm.org/doi/10.1145/3197517.3201337" target="_blank"
+                      class="text-cyan-600 font-medium hover:underline">Barill et al. (2018)</a> approximate the collective winding
                     number $\tilde{w}$ at an evaluation query coordinate $q$ via the following expansion:
                 </p>
                 <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
@@ -300,12 +335,13 @@
                     is the position of point sample $i$, $\hat{n}_i$ is its oriented unit normal, and $a_i$ is its localized area weight.
                     The terms $\nabla G$, $\nabla^2 G$, and $\nabla^3 G$ represent the gradient (a vector), the Hessian (a symmetric
                     two-tensor), and the third-derivative (a three-tensor) of the standard fundamental Green's function for the Laplace
-                    equation, evaluated between the query point and the center of mass.
+                    equation, evaluated between the query point and the center of mass. Their formulation is given in the appendix of <a href="https://dl.acm.org/doi/10.1145/3197517.3201337" target="_blank"
+                      class="text-cyan-600 font-medium hover:underline">Barill et al. (2018)</a>.
                 </p>
                 <p>
                     The structural coefficients grouped inside the parentheses depend entirely on internal node positions relative to
-                    $\tilde{p}$. They are independent of the query position $q$, meaning they can be precomputed once during tree
-                    construction and cached inside each non-empty node.
+                    $\tilde{p}$. They are independent of the query position $q$, meaning they can be precomputed for each cluster during
+                    tree construction and cached inside each node.
                 </p>
 
                 <h4 class="text-sm font-bold text-slate-700 tracking-wide uppercase mt-6">Triangle Soup Expansion Formulation</h4>
@@ -326,7 +362,23 @@
                     node. The first coefficient maps out the total area-weighted normal across the grouped geometry, projecting the
                     intuition that a distant cluster of triangles can be approximated as a single, representative larger primitive.
                     Crucially, all three of these continuous spatial integrals possess exact, numerically stable closed-form expressions for
-                    triangles.
+                    triangles which are also given in the appendix of <a href="https://dl.acm.org/doi/10.1145/3197517.3201337" target="_blank"
+                      class="text-cyan-600 font-medium hover:underline">Barill et al. (2018)</a>.
+                </p>
+
+                <h4 class="text-sm font-bold text-slate-700 tracking-wide uppercase mt-6">"Far Field" definition</h4>
+                <p>
+                  To compute the winding number of a set of queries the constructed tree is traversed by all queries. The entire contribution of
+                  branches that are identified as "Far Field" are computed using the tailor expansion shown above with the coefficients stored in the current node.
+                  To determine that for a given query $q$ a node is in the far field each node stores its center of mass $\tilde{p}$ and the maximum distance $\tilde{r}$ of
+                  any contained geometry element to that center of mass.
+                  The sub-tree represented by the node is considered "Far Field" w.r.t. $q$ if:
+                </p>
+                <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
+                  $$\|q-\tilde{r}\|_2 < \beta\cdot\tilde{r}$$
+                </div>
+                <p>
+                  $\beta$ is a hyper parameter that can be set by the user to tune how aggressive the algorithm approximates sub-trees. Larger $\beta$ lead to preciser, but slower results.
                 </p>
 
                 <h4 class="text-sm font-bold text-slate-700 tracking-wide uppercase mt-6">Asymptotic Complexity Mapping</h4>
@@ -338,7 +390,7 @@
                 <p>
                     Evaluating a $p$-th order Taylor expansion adds a localized tensor processing complexity scaling at $\mathcal{O}(3^p)$
                     operations per evaluated node. Assuming a well-formed tree structure, the total amortized complexity encompassing both
-                    the structural precomputations and far-field evaluations across $n$ queries on a dataset of $m$ geometric primitives
+                    the structural precomputations and far-field evaluations across $M$ queries on a dataset of $N$ geometric primitives
                     drops to:
                 </p>
                 <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
@@ -347,9 +399,9 @@
                 <p>
                 This log-linear complexity allows the <strong>Fast Winding Numbers</strong> formulation to maintain high processing
                 speeds when evaluating massive meshes, unoriented point clouds, and raw geometric soups containing millions of
-                elements.
+                elements. <strong>Winder</strong> uses this elegant formulation and ports it to GPU with massively parallel tree
+                construction and traversal algorithms.
                 </p>
-
             </div>
         </section>
 
@@ -376,19 +428,19 @@
                 <h3 class="text-lg font-semibold text-slate-800 mt-6 mb-1">2. Analysis of Existing Frameworks</h3>
                 <p>
                     While several contemporary works leverage this global differentiability, they remain constrained by architectural
-                    bottlenecks or specialized application silos:
+                    bottlenecks or specialized use cases:
                 </p>
-                
+
                 <ul class="list-disc list-inside space-y-4 text-sm text-slate-600 pl-2">
                     <li>
-                        <strong>Winding Clearness:</strong> The framework introduced by 
-                        <a href="https://www.sciencedirect.com/science/article/pii/S0010448525000910" target="_blank"
+                        <strong>Winding Clearness:</strong> The framework introduced by
+                        <a href="https://arxiv.org/abs/2401.13639" target="_blank"
                           class="text-cyan-600 font-medium hover:underline">Xiao et al.</a> uses the field's global boundary behavior to denoise
                         point clouds. However, its implementation relies on a dense linear least-squares solver (<code>torch.lsqr</code>) to
-                        calculate area-scaled normals. This approach is computationally expensive and introduces a severe memory footprint,
-                        capping its viability to small datasets of a few thousand points. Furthermore, because point coordinate translations
-                        introduce non-linearities into the potential formulation, this linear system cannot optimize actual point positions—it
-                        is strictly limited to orienting normals.
+                        optimize the area-scaled normals. They formulate a dense linear system $Ax=b$ with $A$ having shape $3N\times 3N$, which
+                        is solved once in every single optimization step to derive their loss "winding clearness". The used LU
+                        decomposition has a time complexity of $\mathcal(O)((3N)^3)$ and memory complexity of $\mathcal(O)((3N)^2).
+                        This complexity limits the usefulness of the approach to point clouds with only a couple of thousand points.
                     </li>
                     <li>
                         <strong>Fast Dipole Sums (Chen et al. — Application Silos &amp; Build Overhead):</strong> This method by <a
@@ -401,18 +453,17 @@
                     </li>
                 </ul>
 
-                <h3 class="text-lg font-semibold text-slate-800 mt-6 mb-1">3. A General-Purpose Geometry Kernel</h3>
+                <h3 class="text-lg font-semibold text-slate-800 mt-6 mb-1">3. A General-Purpose Winding Number Field</h3>
                 <p>
                     <code>Winder</code> decouples the differentiable winding field from any specific downstream task or rigid solver
                     constraint. It is built as an application-agnostic, high-performance GPU engine designed to handle
-                    geometric optimization at scale.
+                    any kind of optimization involving winding number fields at scale.
                 </p>
                 <p>
                     By supporting full analytical gradients for point positions, area-scaled normals, and triangle vertices simultaneously,
-                    it ulocks the true potential of winding number fields in optimizations. <code>Winder</code> uses an ultra-fast,
-                    GPU acceleration structure turning the winding field into a
-                    fast, foundational primitive for large-scale graphics and
-                    machine learning pipelines.
+                    it unlocks the true potential of winding number fields in optimizations. <code>Winder</code> uses an ultra-fast,
+                    GPU acceleration structure turning the winding field into a new fundamental primitive and first class citizen in
+                    large-scale graphics and machine learning pipelines.
                 </p>
 
             </div>
@@ -428,36 +479,34 @@
                 <p>
                     Existing compute pipelines treating fast winding numbers rely on offline-computed
                     spatial structures. For instance the <a href="https://dl.acm.org/doi/10.1145/3687914" target="_blank"
-                    class="text-cyan-600 font-medium hover:underline">Dipole Sums</a> implementation establishes a
-                    tight Octree layout. While this minimizes traversal steps, this construction is a bottleneck
-                    (often taking hundreds of seconds) that completely breaks viability for deep learning optimization loops or real-time
-                    dynamic geometry.
+                    class="text-cyan-600 font-medium hover:underline">Dipole Sums</a> implementation uses a
+                    tight Octree layout. In their method the geometry is assumed to be static, so tree construction only happens once.
+                    This construction is allowed to be slow.
                 </p>
                 <p>
                     <code>Winder</code> was designed with an inverted priority in mind: <strong>spatial hierarchy generation must be
-                      virtually free.</strong> Rather than chasing a perfect spatial partition offline, the architecture targets
-                    millisecond, GPU-native tree builds. Everything else - the precision handling, layout design, and
-                    mathematical formulation—is a direct architectural consequence built to exploit this lightning-fast, construction-first
+                      virtually free.</strong> Rather than chasing a perfect static spatial partition offline, winder prioritizes
+                    super fast GPU-optimized spatial partitioning trees for dynamic geometry. Everything else - the precision handling, layout design, and
+                    mathematical formulation - is a direct architectural consequence built to exploit this lightning-fast, construction-first
                     engine baseline.
                 </p>
 
                 <div class="my-6 grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-50 p-6 rounded-xl border border-slate-200">
                     <div class="border-b sm:border-b-0 sm:border-r border-slate-200 pb-4 sm:pb-0 sm:pr-4">
                         <span class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Fast Dipole Sums Build (Octree)</span>
-                        <span class="block text-3xl font-extrabold text-rose-600 mt-1">570.0 <span class="text-xl font-normal text-slate-500">sec</span></span>
-                        <span class="block text-xs text-slate-500 mt-1">Static offline optimization loop</span>
+                        <span class="block text-3xl font-extrabold text-rose-600 mt-1">566.2 <span class="text-xl font-normal text-slate-500">sec</span></span>
+                        <span class="block text-xs text-slate-500 mt-1">Static offline build executed over <strong>5,559,132 points</strong></span>
                     </div>
                     <div class="pt-4 sm:pt-0 sm:pl-4">
-                        <span class="block text-xs font-semibold uppercase tracking-wider text-cyan-600">Winder Build (GPU Parallel LBVH)</span>
-                        <span class="block text-3xl font-extrabold text-emerald-600 mt-1">0.00328 <span class="text-xl font-normal text-slate-500">sec</span></span>
+                        <span class="block text-xs font-semibold uppercase tracking-wider text-cyan-600">Winder Build (GPU Parallel BVH8)</span>
+                        <span class="block text-3xl font-extrabold text-emerald-600 mt-1">0.0145 <span class="text-xl font-normal text-slate-500">sec</span></span>
                         <span class="block text-xs text-slate-500 mt-1">Dynamic on-the-fly execution over <strong>5,559,132 points</strong></span>
                     </div>
                 </div>
                     <span class="text-xs text-slate-500 block mt-2 italic">
-                        Note: This extreme build time for Fast Dipole Sums is largely an artifact of an unparallelized, single-threaded reference implementation rather
+                        Note: This extreme build time for Fast Dipole Sums is largely an artifact of the single-threaded implementation rather
                         than an inherent topological limitation of Octrees. Indeed, the original Fast Winding Numbers framework demonstrates a
-                        significantly more performant tree-building routine. However, it underscores a systemic architectural risk: prioritizing
-                        downstream traversal density at the cost of sequential upstream construction bottlenecks.
+                        significantly more performant tree-building routine. However, it underscores the build-centric focus of Winder.
                     </span>
 
                 <h3 class="text-lg font-semibold text-slate-800 mt-6 mb-1">2. Warp-Cooperative Leaf Design &amp; Spatial Penalties</h3>
@@ -465,49 +514,50 @@
                     To achieve this millisecond build speed, <code>Winder</code> utilizes a parallel <a
                       href="https://ieeexplore.ieee.org/document/8781571/" target="_blank"
                       class="text-cyan-600 font-medium hover:underline">Bounding Volume Hierarchy
-                      (LBVH)</a> converted into a wide 8-ary structure (<strong>BVH8</strong>). To ensure tree generation scales flawlessly
-                    inside parallel GPU sorting kernels, the leaf capacity is strictly locked to exactly <strong>32 primitives</strong>.
+                      (LBVH)</a>. It utilizes a clever trick of formulating a BVH as a radix tree on the Morton order of the underlying
+                      geometry. The resulting binary tree is then
+                      converted into a more traversal friendly, wide 8-ary structure (<strong>BVH8</strong>), where each node has up to 8 children.
                 </p>
                 <p>
-                    This leaf size choice is a deliberate hardware play. Because an NVIDIA GPU warp consists of exactly 32 execution
+                    The tree is getting even more shallow because every leaf node contains 32 geometry primitives.
+                    This leaf size choice is a deliberate hardware play. Because NVIDIA GPU warps consists of exactly 32 execution
                     lanes, a 32-element leaf structure unlocks massive "warp magic":
                 </p>
                 <ul class="list-disc list-inside space-y-2 text-sm text-slate-600 pl-2">
                     <li><strong>Zero Intra-Warp Divergence:</strong> Whole warps cooperatively traverse down the tree and unroll leaf
                       evaluations simultaneously, completely bypassing execution lane stalls.</li>
                     <li><strong>Hardware Registries &amp; Shuffles:</strong> Internal evaluation components utilize lightning-fast
-                      register-level data shuffling (`__shfl_sync`), mitigating costly localized VRAM and shared memory round trips.</li>
+                      register-level data shuffling (<code>__shfl_sync</code>), mitigating costly localized VRAM and shared memory round trips.</li>
                 </ul>
                 <blockquote>
                     <p class="text-xs text-slate-500 bg-slate-50 p-3 rounded-lg border-l-4 border-amber-500/70">
-                        <strong>The Structural Penalty:</strong> Locking leaf sizes to 32 items to maximize build speed forces a trade-off in
-                        spatial efficiency. In regions with highly sparse geometry, these leaves can become spatially oversized and loose,
-                        failing to bound the underlying points as tightly as an offline-built Octree would.
+                        <strong>The Structural Penalty:</strong> Locking leaf sizes to 32 items to maximize build speed forces a trade-off:
+                        In regions with sparse geometry, leaves can become oversized and loose,
+                        failing to bound the underlying points as tightly as an offline-built Octree would. This can also be seen in the video with
+                        the video below with the big green leaf boxes.
                     </p>
                 </blockquote>
 
                 <h3 class="text-lg font-semibold text-slate-800 mt-6 mb-1">3. Compounding Speed: Compensating via Hardware Quantization</h3>
                 <p>
-                    Because the spatial bounding structure is more loose to favor ultra-fast generation, the evaluation pass can face
-                    a slightly higher computational workload. <code>Winder</code> counteracts this penalty not by making the
-                    boxes tighter and with them the construction slower, but by making the evaluation blisteringly fast
-                    through extreme hardware co-design:
+                    Because the spatial bounding structure is more loose to favor ultra-fast generation, the evaluation pass may face
+                    a slightly higher computational workload. <code>Winder</code> accepts this structural penalty, but does everything to make
+                    the traversal blisteringly fast through extreme hardware co-design:
                 </p>
                 <ul class="list-disc list-inside space-y-3 text-sm text-slate-600 pl-2">
-                    <li><strong>Second-Order Taylor Expansions:</strong> Because the 32-primitive leaf footprint delays the onset of
-                      far-field clustering, the engine naturally evaluates more interactions exactly rather than approximating them. Where
-                      hierarchical approximations are triggered, <code>Winder</code> uses a second-order Taylor series. While the
-                      library's downstream quantization keeps its absolute precision below the pure <code>float32</code> second-order
-                      baseline of original <em>Fast Winding Numbers</em>, it provides a tighter mathematical fidelity profile
-                      than zero-order dipole frameworks.</li>
 
                     <li><strong>float16 Far-Field Math:</strong> All calculations in the far-field are done in the
                       <code>float16</code> floating-point format, leading to high computational throughput.</li>
 
-                    <li><strong>Bit-Packed Mantissas &amp; 128-Byte Cache Alignment:</strong> Tree node coefficients are aggressively bit-packed
+                    <li><strong>Bit-Packed Mantissas &amp; 128-Byte Cache Alignment:</strong> The cached tailor coefficients are aggressively bit-packed
                       down to a custom 11-bit mantissa format with shared exponents, while spatial metadata—such as the cluster center of mass and localized
-                      bounding radii—are compressed to an 8-bit format. This strictly constrains the entire BVH8 node payload to exactly <strong>128 bytes</strong>,
+                      bounding radii—are compressed to an 8-bit format. This strictly constrains the cooperatively traversed BVH8 node payload to exactly <strong>128 bytes</strong>,
                       perfectly matching the native L2 cache line transaction size of modern NVIDIA GPUs to guarantee maximum memory bandwidth utilization.</li>
+
+                    <li><strong>Second-Order Taylor Expansions:</strong> Winder uses second-order Taylor approximations in the far field.
+                      Note: The precision of winder is still lower compared to the <code>float32</code>
+                      second-order baseline of the original <em>Fast Winding Numbers</em> due to
+                      the quantization and <code>float16</code> computations.</li>
                 </ul>
 
                 <div class="my-8">
@@ -953,7 +1003,7 @@
         function parseCSVText(text) {
             const lines = text.trim().split("\n");
             if (lines.length === 0) return [];
-            
+
             const headers = lines[0].split(",").map(h => h.trim());
             return lines.slice(1).map(line => {
                 const values = line.split(",");
@@ -1259,7 +1309,7 @@
 
             Highcharts.chart('scalingChart', {
                 chart: { type: 'line', backgroundColor: '#f8fafc' },
-                title: { text: 'Compoute Time', style: { fontSize: '14px', fontWeight: 'bold', color: '#0f172a' } },
+                title: { text: 'Compute Time Metric (selection down below)', style: { fontSize: '14px', fontWeight: 'bold', color: '#0f172a' } },
                 subtitle: { text: `Compute time dependent on asset size` },
                 xAxis: {
                     type: 'logarithmic',
@@ -1295,7 +1345,7 @@
                 const structuralCoordinates = globalModelsList.map(model => {
                     const data = model.metrics[engine.key];
                     if (!data || !data.build_time || data.build_time <= 0) return null;
-                    
+
                     const numericX = parseElementCount(model.elements);
                     return [numericX, data.build_time];
                 }).filter(coord => coord !== null);
