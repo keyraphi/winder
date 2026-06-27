@@ -7,6 +7,7 @@
 #include <concepts>
 #include <cstdint>
 #include <cstdlib>
+#include <cuda_fp16.h>
 #include <cuda_runtime_api.h>
 #include <format>
 #include <math.h>
@@ -58,7 +59,6 @@ struct Triangle {
     AABB result;
     result.min = min;
     result.max = max;
-    Vec3 diagonal = max - min;
     Vec3 c = centroid();
 
     float d0 = (v0 - c).length2();
@@ -67,8 +67,8 @@ struct Triangle {
     float max_dist_sq = fmaxf(d0, fmaxf(d1, d2));
     float max_dist = sqrtf(max_dist_sq);
 
-    result.center_of_mass.set(c, min, 1.F / diagonal);
-    result.center_of_mass.setMaxDistance(max_dist, diagonal.inv_length());
+    result.center_of_mass = c;
+    result.max_distance = __float2half(max_dist);
     return result;
   }
 
@@ -78,8 +78,7 @@ struct Triangle {
     Vec3 e2 = v2 - v0;
     Vec3 cp = Vec3{e1.y * e2.z - e1.z * e2.y, e1.z * e2.x - e1.x * e2.z,
                    e1.x * e2.y - e1.y * e2.x};
-    return 0.5F *
-           sqrtf(cp.x * cp.x + cp.y * cp.y + cp.z * cp.z);
+    return 0.5F * sqrtf(cp.x * cp.x + cp.y * cp.y + cp.z * cp.z);
   }
   __host__ __device__ __forceinline__ auto
   max_distance_to(const Vec3 &pos) const -> float {

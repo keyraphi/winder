@@ -13,6 +13,7 @@
 #include <cub/util_type.cuh>
 #include <cuda/atomic>
 #include <cuda_device_runtime_api.h>
+#include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
 #include <device_atomic_functions.h>
@@ -255,8 +256,8 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
     const SoAView<Geometry> sorted_geometry,
     TailorCoefficientsF16 *leaf_coefficients, const uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
-    const uint32_t *binary_parents, 
-    float *atomic_weights, const uint32_t geometry_count) {
+    const uint32_t *binary_parents, float *atomic_weights,
+    const uint32_t geometry_count) {
   uint32_t geometry_idx = threadIdx.x + blockIdx.x * blockDim.x;
   uint32_t leaf_idx = geometry_idx / 32;
   if (leaf_idx >= leaf_count)
@@ -282,8 +283,8 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
     center_of_mass = Vec3{0.F, 0.F, 0.F};
     weight = 0.F;
   }
-  Vec3 &p_min = geometry_aabb.min;
-  Vec3 &p_max = geometry_aabb.max;
+  Vec3_f16 &p_min = geometry_aabb.min;
+  Vec3_f16 &p_max = geometry_aabb.max;
   Vec3 weighted_com = center_of_mass * weight;
 
 #pragma unroll
@@ -315,30 +316,16 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
   }
 
   uint32_t leaf_node_idx = leaf_idx + leaf_count - 1;
-  Vec3 diagonal = p_max - p_min;
 
   // write aggregated AABB for leaf (only lane 0)
   if (lane_id == 0) {
     binary_aabbs[leaf_idx + leaf_count - 1].min = p_min;
     binary_aabbs[leaf_idx + leaf_count - 1].max = p_max;
 
-    Vec3 inv_extend = 1.F / diagonal;
-    float inv_diagonal_length = diagonal.inv_length();
-    binary_aabbs[leaf_idx + leaf_count - 1].center_of_mass.set(
-        center_of_mass, p_min, inv_extend);
-    binary_aabbs[leaf_idx + leaf_count - 1].center_of_mass.setMaxDistance(
-        dist_to_com, inv_diagonal_length);
-    leaf_coefficients[leaf_idx].center_of_mass.set(center_of_mass, p_min,
-                                                   inv_extend);
-    leaf_coefficients[leaf_idx].center_of_mass.setMaxDistance(
-        dist_to_com, inv_diagonal_length);
+    binary_aabbs[leaf_idx + leaf_count - 1].center_of_mass = center_of_mass;
+    binary_aabbs[leaf_idx + leaf_count - 1].max_distance =
+        __float2half(dist_to_com);
   }
-
-  // Make sure the quantized center of mask is the actual position for which we
-  // compute the tailor coefficients
-  __syncwarp();
-  center_of_mass =
-      leaf_coefficients[leaf_idx].center_of_mass.get(p_min, diagonal);
 
   // Compute tailor coefficients
   Vec3 zero_order;

@@ -1,5 +1,4 @@
 #pragma once
-#include "center_of_mass.h"
 #include "kernels/common.cuh"
 #include "vec3.h"
 #include <cmath>
@@ -7,63 +6,38 @@
 #include <cuda_runtime_api.h>
 #include <sys/types.h>
 #include <vector_types.h>
+#include <cuda_fp16.h>
 
-struct AABB;
 
-// 6 Byte
-struct AABB8BitApprox {
-  uint8_t qmin[3]; // quantized min offset
-  uint8_t qmax[3]; // quantized max offset
-
-  __host__ __device__ __forceinline__ static auto
-  quantize_aabb(const AABB &aabb, const Vec3 &parent_min,
-                const Vec3 &parent_inv_extend) -> AABB8BitApprox;
-};
-
+// 26 byte (compiler will align it to 28 byte)
 struct AABB {
-  Vec3 min;
-  Vec3 max;
+  Vec3_f16 min; // 6 byte
+  Vec3_f16 max; // 6 byte
 
-  CenterOfMass_quantized center_of_mass;
+  Vec3 center_of_mass;  // 12 byte
+  half max_distance;  // 2 byte
+
 
   // factory for empty AABB
   static __host__ __device__ __forceinline__ auto empty() -> AABB {
     AABB result;
-    result.min = Vec3{INFINITY, INFINITY, INFINITY};
-    result.max = Vec3{-INFINITY, -INFINITY, -INFINITY};
+    result.min = Vec3_f16{INFINITY, INFINITY, INFINITY};
+    result.max = Vec3_f16{-INFINITY, -INFINITY, -INFINITY};
     return result;
   }
 
-  // Note: no center of mass!
-  __host__ __device__ __forceinline__ static auto
-  from_approximation(const AABB &parent, const AABB8BitApprox &approx) -> AABB {
-    Vec3 extent = parent.diagonal();
-    constexpr float s = 1.0F / 255.0F;
-
-    AABB result;
-    result.min =
-        parent.min + (Vec3{(float)approx.qmin[0], (float)approx.qmin[1],
-                           (float)approx.qmin[2]} *
-                      s * extent);
-    result.max =
-        parent.min + (Vec3{(float)approx.qmax[0], (float)approx.qmax[1],
-                           (float)approx.qmax[2]} *
-                      s * extent);
-    return result;
+  __host__ __device__ __forceinline__ auto geometryc_center() const -> Vec3_f16 {
+    return {(min.x + max.x) * __float2half(0.5F), (min.y + max.y) * __float2half(0.5F),
+            (min.z + max.z) * __float2half(0.5F)};
   }
 
-  __host__ __device__ __forceinline__ auto geometryc_center() const -> Vec3 {
-    return {(min.x + max.x) * 0.5F, (min.y + max.y) * 0.5F,
-            (min.z + max.z) * 0.5F};
-  }
-
-  __host__ __device__ __forceinline__ auto diagonal() const -> Vec3 {
+  __host__ __device__ __forceinline__ auto diagonal() const -> Vec3_f16 {
     return max - min;
   }
 
   // radius = half-diagonal of the box
   __host__ __device__ __forceinline__ auto radius_sq() const -> float {
-    return diagonal().length2() * 0.25F;
+    return diagonal().length2() * __float2half(0.25F);
   }
 
   // radius = half-diagonal of the box
@@ -77,19 +51,19 @@ struct AABB {
         const uint32_t b_element_count = 1) -> AABB {
     AABB result;
 
-    result.min = Vec3{fminf(a.min.x, b.min.x), fminf(a.min.y, b.min.y),
-                      fminf(a.min.z, b.min.z)};
-    result.max = Vec3{fmaxf(a.max.x, b.max.x), fmaxf(a.max.y, b.max.y),
-                      fmaxf(a.max.z, b.max.z)};
+    result.min = Vec3_f16{__hmin(a.min.x, b.min.x), __hmin(a.min.y, b.min.y),
+                      __hmin(a.min.z, b.min.z)};
+    result.max = Vec3_f16{__hmax(a.max.x, b.max.x), __hmax(a.max.y, b.max.y),
+                      __hmax(a.max.z, b.max.z)};
     // compute new center of mass
     uint32_t total_element_count = a_element_count + b_element_count;
     float a_factor = (float)a_element_count / (float)total_element_count;
     float b_factor = (float)b_element_count / (float)total_element_count;
-    Vec3 com_a = a.center_of_mass.get(a.min, a.diagonal());
-    Vec3 com_b = b.center_of_mass.get(b.min, b.diagonal());
+    Vec3 com_a = a.center_of_mass;
+    Vec3 com_b = b.center_of_mass;
     Vec3 com_new = com_a * a_factor + com_b * b_factor;
 
-    result.center_of_mass.set(com_new, result.min, 1.F / result.diagonal());
+    result.center_of_mass = com_new;
 
     // Max distance can not be merged
     // It has to be set seperately
@@ -99,48 +73,29 @@ struct AABB {
   merge_weighted(const AABB &a, const AABB &b, const float a_weight,
                  const float b_weight) -> AABB {
     AABB result;
-    result.min = Vec3{fminf(a.min.x, b.min.x), fminf(a.min.y, b.min.y),
-                      fminf(a.min.z, b.min.z)};
-    result.max = Vec3{fmaxf(a.max.x, b.max.x), fmaxf(a.max.y, b.max.y),
-                      fmaxf(a.max.z, b.max.z)};
+    result.min = Vec3_f16{__hmin(a.min.x, b.min.x), __hmin(a.min.y, b.min.y),
+                      __hmin(a.min.z, b.min.z)};
+    result.max = Vec3_f16{__hmax(a.max.x, b.max.x), __hmax(a.max.y, b.max.y),
+                      __hmax(a.max.z, b.max.z)};
 
     float total_weight = a_weight + b_weight;
     float a_factor = total_weight > 0.F ? (a_weight / total_weight) : 0.5F;
     float b_factor = total_weight > 0.F ? (b_weight / total_weight) : 0.5F;
 
-    Vec3 com_a = a.center_of_mass.get(a.min, a.diagonal());
-    Vec3 com_b = b.center_of_mass.get(b.min, b.diagonal());
+    Vec3 com_a = a.center_of_mass;
+    Vec3 com_b = b.center_of_mass;
     Vec3 com_new = com_a * a_factor + com_b * b_factor;
 
-    result.center_of_mass.set(com_new, result.min, 1.F / result.diagonal());
+    result.center_of_mass = com_new;
     return result;
   }
 };
 
 __host__ __device__ __forceinline__ auto Vec3::get_aabb() const -> AABB {
   AABB result;
-  result.min = *this;
-  result.max = *this;
-  result.center_of_mass.set(*this, *this, Vec3{INFINITY, INFINITY, INFINITY});
-  result.center_of_mass.setMaxDistance(0.F, 0.F);
-  return result;
-}
-
-__host__ __device__ __forceinline__ auto
-AABB8BitApprox::quantize_aabb(const AABB &aabb, const Vec3 &parent_min,
-                              const Vec3 &parent_inv_extend) -> AABB8BitApprox {
-  AABB8BitApprox result;
-  result.qmin[0] =
-      quantize_value(aabb.min.x, parent_min.x, parent_inv_extend.x);
-  result.qmin[1] =
-      quantize_value(aabb.min.y, parent_min.y, parent_inv_extend.y);
-  result.qmin[2] =
-      quantize_value(aabb.min.z, parent_min.z, parent_inv_extend.z);
-  result.qmax[0] =
-      quantize_value(aabb.max.x, parent_min.x, parent_inv_extend.x);
-  result.qmax[1] =
-      quantize_value(aabb.max.y, parent_min.y, parent_inv_extend.y);
-  result.qmax[2] =
-      quantize_value(aabb.max.z, parent_min.z, parent_inv_extend.z);
+  result.min = Vec3_f16::from_float(*this);
+  result.max = Vec3_f16::from_float(*this);
+  result.center_of_mass = *this;
+  result.max_distance = 0.F;
   return result;
 }

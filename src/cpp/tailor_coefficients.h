@@ -1,6 +1,5 @@
 #pragma once
 
-#include "center_of_mass.h"
 #include "mat3x3.h"
 #include "tensor3.h"
 #include "vec3.h"
@@ -38,13 +37,11 @@ struct TailorCoefficientsQuantized {
 };
 
 // For leaf nodes
-// 64 byte
-struct TailorCoefficientsF16 {
+// 60 byte
+struct alignas(64) TailorCoefficientsF16 {
   Vec3_f16 zero_order;
   Mat3x3_f16 first_order;
   Tensor3_f16_compressed second_order;
-  // 60 bytes
-  CenterOfMass_quantized center_of_mass; // 4 bytes
 };
 
 // For m2m

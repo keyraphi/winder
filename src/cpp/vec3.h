@@ -1,7 +1,7 @@
 #pragma once
 #include "mat3x3.h"
 #include <cmath>
-#include <cuda_bf16.h>
+#include <cuda_fp16.h>
 #include <cuda_runtime_api.h>
 #include <vector_types.h>
 
@@ -31,7 +31,7 @@ struct Vec3_f16 {
     return {x * s, y * s, z * s};
   }
 
-  __device__ __forceinline__ auto length2() const -> half;
+  __host__ __device__ __forceinline__ auto length2() const -> half;
   __device__ __forceinline__ auto length() const -> half;
 
   __host__ __device__ __forceinline__ auto
@@ -183,17 +183,18 @@ __host__ __device__ __forceinline__ auto operator*(const float n, const Vec3 &v)
 __host__ __device__ __forceinline__ auto Vec3_f16::from_float(const Vec3 &v)
     -> Vec3_f16 {
   Vec3_f16 result;
-  result.x = v.x;
-  result.y = v.y;
-  result.z = v.z;
+  result.x = __float2half(v.x);
+  result.y = __float2half(v.y);
+  result.z = __float2half(v.z);
   return result;
+}
+
+__host__ __device__ __forceinline__ auto Vec3_f16::length2() const -> half {
+  return x * x + y * y + z * z;
 }
 
 // only for cuda compiler:
 #ifdef __CUDACC__
-__device__ __forceinline__ auto Vec3_f16::length2() const -> half {
-  return x * x + y * y + z * z;
-}
 __device__ __forceinline__ auto Vec3_f16::length() const -> half {
   return hsqrt(length2());
 }

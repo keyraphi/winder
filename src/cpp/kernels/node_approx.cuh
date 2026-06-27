@@ -4,36 +4,13 @@
 #include "tailor_coefficients.h"
 #include "tensor3.h"
 #include "vec3.h"
-
-// For leaf we don't have the center of mass or the max_distance
-// We can still make conservative assumptions based on the aabb.
-// If in doubt we don't approximate.
-__device__ __forceinline__ auto
-should_leaf_node_be_approximated(const Vec3 &query, const AABB &leaf_aabb,
-                                 const float beta_2) -> bool {
-  // Conservative assumption:
-  // center of mass is at the aabb corner with the greatest distance.
-  float dx =
-      fmaxf(0.F, fmaxf(leaf_aabb.min.x - query.x, query.x - leaf_aabb.max.x));
-  float dy =
-      fmaxf(0.F, fmaxf(leaf_aabb.min.y - query.y, query.y - leaf_aabb.max.y));
-  float dz =
-      fmaxf(0.F, fmaxf(leaf_aabb.min.z - query.z, query.z - leaf_aabb.max.z));
-  float dist_sq_to_box_corner = dx * dx + dy * dy + dz * dz;
-
-  // The maximum possible radius within an AABB relative to ANY center of mass
-  // is the full diagonal of the box.
-  float max_possible_R_sq = leaf_aabb.diagonal().length2();
-
-  return dist_sq_to_box_corner > max_possible_R_sq * beta_2;
-}
+#include <cuda_fp16.h>
 
 __device__ __forceinline__ auto
-should_inner_node_be_approximated(const Vec3 &query, const AABB &aabb,
+should_node_be_approximated(const Vec3 &query, const AABB &aabb,
                                   const float beta_2) -> bool {
-  float max_distance_to_center =
-      aabb.center_of_mass.getMaxDistance(aabb.diagonal().length());
-  Vec3 com = aabb.center_of_mass.get(aabb.min, aabb.diagonal());
+  float max_distance_to_center = __half2float(aabb.max_distance);
+  Vec3 com = aabb.center_of_mass;
   float dist_query_to_com2 = (query - com).length2();
   return dist_query_to_com2 >
          max_distance_to_center * max_distance_to_center * beta_2;
@@ -49,12 +26,12 @@ __device__ __forceinline__ auto to_bits(const half f16) -> short {
   return result;
 }
 
-
 /**
- * @brief Computes the unscaled Zero-Order Taylor contraction for the Winding Number.
+ * @brief Computes the unscaled Zero-Order Taylor contraction for the Winding
+ * Number.
  *
- * This calculates the directional projection of the zero-order multipole coefficient 
- * (area-weighted normal) along the unit displacement vector r_hat.
+ * This calculates the directional projection of the zero-order multipole
+ * coefficient (area-weighted normal) along the unit displacement vector r_hat.
  *
  * Mathematical formulation:
  * Contraction = coeff * r_hat
@@ -63,7 +40,8 @@ __device__ __forceinline__ auto to_bits(const half f16) -> short {
  * Contribution = Contraction * [1 / (4 * pi * ||r||^2)]
  *
  * @param coeff The zero-order multipole coefficient vector.
- * @param r_hat Normalized unit displacement vector pointing from query to the cluster center (||r_hat|| = 1).
+ * @param r_hat Normalized unit displacement vector pointing from query to the
+ * cluster center (||r_hat|| = 1).
  * @return Unscaled contraction scalar evaluated in float16 precision.
  */
 __device__ __forceinline__ auto
@@ -82,24 +60,26 @@ computeZeroOrderContribution(const Vec3_f16 &coeff, const Vec3_f16 &r_hat)
   return __half2float(result);
 }
 
-
 /**
- * @brief Computes the unscaled First-Order Taylor contraction for the Winding Number.
+ * @brief Computes the unscaled First-Order Taylor contraction for the Winding
+ * Number.
  *
- * Computes the Frobenius inner product (double contraction) between the first-order 
- * multipole coefficient tensor C (rank 2) and the scale-invariant field gradient component.
+ * Computes the Frobenius inner product (double contraction) between the
+ * first-order multipole coefficient tensor C (rank 2) and the scale-invariant
+ * field gradient component.
  *
  * Mathematical formulation:
  * Contraction = C : G_hat = trace(C) - 3 * sum_{i,j} (C_ij * r_hat_i * r_hat_j)
  *
- * where the normalized, unitless field gradient tensor component G_hat is defined as:
- * G_hat = I - 3 * (r_hat x r_hat)
+ * where the normalized, unitless field gradient tensor component G_hat is
+ * defined as: G_hat = I - 3 * (r_hat x r_hat)
  *
  * The complete physical contribution is reconstructed by the caller via:
  * Contribution = Contraction * [1 / (4 * pi * ||r||^3)]
  *
  * @param C The first-order rank-2 multipole coefficient tensor.
- * @param r_hat Normalized unit displacement vector pointing from query to the cluster center (||r_hat|| = 1).
+ * @param r_hat Normalized unit displacement vector pointing from query to the
+ * cluster center (||r_hat|| = 1).
  * @return Unscaled contraction scalar evaluated in float16 precision.
  */
 __device__ __forceinline__ auto
@@ -141,26 +121,32 @@ computeFirstOrderContribution(const Mat3x3_f16 &C, const Vec3_f16 &r_hat)
 }
 
 /**
- * @brief Computes the unscaled Second-Order Taylor contraction for the Winding Number.
+ * @brief Computes the unscaled Second-Order Taylor contraction for the Winding
+ * Number.
  *
- * Performs a full contraction between the compressed second-order multipole coefficient 
- * tensor C (rank 3) and the scale-invariant third-order field gradient component.
+ * Performs a full contraction between the compressed second-order multipole
+ * coefficient tensor C (rank 3) and the scale-invariant third-order field
+ * gradient component.
  *
  * Mathematical formulation:
- * Contraction = C :: G_hat = 15 * sum_{i,j,k} (C_ijk * r_hat_i * r_hat_j * r_hat_k) - 3 * (V · r_hat)
+ * Contraction = C :: G_hat = 15 * sum_{i,j,k} (C_ijk * r_hat_i * r_hat_j *
+ * r_hat_k) - 3 * (V · r_hat)
  *
  * where:
  * - G_hat_ijk = 15 * (r_hat_i * r_hat_j * r_hat_k) - 3 * (r_hat x I)_sym
  * - V is the partial vector-trace of the tensor C, where V_i = sum_j (C_ijj)
- * - (r_hat x I)_sym isolates Kronecker delta matches: (r_hat_i * delta_jk + r_hat_j * delta_ik + r_hat_k * delta_ij)
+ * - (r_hat x I)_sym isolates Kronecker delta matches: (r_hat_i * delta_jk +
+ * r_hat_j * delta_ik + r_hat_k * delta_ij)
  *
- * Symmetries in the expansion reduce the 27-term tensor contraction to 18 unique terms 
- * unpacked directly from the layout matrix. The complete physical contribution is 
- * reconstructed by the caller via:
- * Contribution = Contraction * [1 / (4 * pi * ||r||^4)]
+ * Symmetries in the expansion reduce the 27-term tensor contraction to 18
+ * unique terms unpacked directly from the layout matrix. The complete physical
+ * contribution is reconstructed by the caller via: Contribution = Contraction *
+ * [1 / (4 * pi * ||r||^4)]
  *
- * @param C The second-order rank-3 multipole coefficient tensor stored in symmetric compressed format.
- * @param r_hat Normalized unit displacement vector pointing from query to the cluster center (||r_hat|| = 1).
+ * @param C The second-order rank-3 multipole coefficient tensor stored in
+ * symmetric compressed format.
+ * @param r_hat Normalized unit displacement vector pointing from query to the
+ * cluster center (||r_hat|| = 1).
  * @return Unscaled contraction scalar evaluated in float16 precision.
  */
 __device__ __forceinline__ auto
@@ -238,7 +224,7 @@ __device__ __forceinline__ auto compute_node_approximation(
   Vec3 r = center_of_mass - query;
   float inv_norm_r = r.inv_length();
 
-  // Work a unit vectorfor float16 math 
+  // Work a unit vectorfor float16 math
   Vec3_f16 r_hat_f16 = Vec3_f16::from_float(r * inv_norm_r);
 
   float inv_norm_r2 = inv_norm_r * inv_norm_r;
