@@ -34,36 +34,29 @@ __device__ __forceinline__ auto warp_reduce_add_xor(float val) -> float {
 template <typename T>
 __device__ __forceinline__ void
 load_shared_cooperative(T *shared_dst, const T *global_src, uint32_t lane_id) {
-  // Treat the structure as an array of uint32_t
-  // BVH8Node is 128 bytes = 32 x 4 bytes. Perfect mapping for 32 threads.
   static_assert(sizeof(T) % 4 == 0, "Structure must be 4-byte aligned size");
-  const uint32_t words = sizeof(T) / 4;
+  constexpr uint32_t words = sizeof(T) / 4;
 
   auto *dst_u32 = reinterpret_cast<uint32_t *>(shared_dst);
   const auto *src_u32 = reinterpret_cast<const uint32_t *>(global_src);
 
-  // If structure is exactly 128 bytes
-  if (words == 32) {
-    dst_u32[lane_id] = src_u32[lane_id];
-  }
-  // TailorCoefficientsF16
-  if (words == 16) {
+  if constexpr (words == 16) { // TailorCoefficientsF16 (64 bytes)
     if (lane_id < 16) {
       dst_u32[lane_id] = src_u32[lane_id];
     }
   }
-  // If structure is 32 bytes (BVH8Node, LeafPointers)
-  else if (words == 8) {
+  else if constexpr (words == 8) { // BVH8Node / LeafPointers (32 bytes)
     if (lane_id < 8) {
       dst_u32[lane_id] = src_u32[lane_id];
     }
-  } else {
-    // Generic fallback
+  }
+  else { // Generic fallback
     for (uint32_t i = lane_id; i < words; i += 32) {
       dst_u32[i] = src_u32[i];
     }
   }
 }
+
 
 template <IsGeometry Geometry>
 __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
@@ -88,7 +81,7 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
   // Each warp has its own shared traversal stack.
   __shared__ uint32_t shared_stack[4][64];
   __shared__ BVH8Node current_node_cache[4];
-  __shared__ TailorCoefficientsF16 current_tailor_coefficinets_cache[4];
+  __shared__ TailorCoefficientsF16 current_tailor_coefficients_cache[4];
   __shared__ LeafPointers shared_leaf_ptrs[4];
   uint32_t warp_tile_base;
 
@@ -173,14 +166,14 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
           __ballot_sync(0xFFFFFFFF, need_tailor_coefficients);
       if (load_tailor_coefficients_mask > 0) {
         load_shared_cooperative<TailorCoefficientsF16>(
-            &current_tailor_coefficinets_cache[warp_id],
+            &current_tailor_coefficients_cache[warp_id],
             node_coefficients + current_node_idx, lane_id);
         __syncwarp();
       }
       if (need_tailor_coefficients) {
         // tailor_coefficients dequantization
         TailorCoefficientsF16 &current_node_coefficients =
-            current_tailor_coefficinets_cache[warp_id];
+            current_tailor_coefficients_cache[warp_id];
         // Zero Order
         Vec3_f16 zero_order_coeff = current_node_coefficients.zero_order;
         // First Order
@@ -227,13 +220,22 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
         if (child_type == ChildType::LEAF) {
           uint32_t leaf_idx = shared_leaf_ptrs[warp_id].indices[child_idx];
           AABB child_aabb = leaf_aabbs[leaf_idx];
-          bool is_detail_eval_needed = true;
-          if (is_still_active &&
-              should_node_be_approximated(my_query, child_aabb, beta_2)) {
-            TailorCoefficientsF16 current_leaf_coefficients;
+
+          bool need_tailor_coefficients =
+              is_still_active &
+              should_node_be_approximated(my_query, child_aabb, beta_2);
+          uint32_t load_tailor_coefficients_mask =
+              __ballot_sync(0xFFFFFFFF, need_tailor_coefficients);
+          if (load_tailor_coefficients_mask > 0) {
             load_shared_cooperative<TailorCoefficientsF16>(
-                &current_leaf_coefficients, leaf_coefficients + leaf_idx,
-                lane_id);
+                &current_tailor_coefficients_cache[warp_id],
+                leaf_coefficients + leaf_idx, lane_id);
+            __syncwarp();
+          }
+          bool is_detail_eval_needed = true;
+          if (need_tailor_coefficients) {
+            const TailorCoefficientsF16 &current_leaf_coefficients =
+                current_tailor_coefficients_cache[warp_id];
             const Vec3 leaf_center_of_mass = child_aabb.center_of_mass;
             float approx_contribution = compute_node_approximation(
                 my_query, leaf_center_of_mass,

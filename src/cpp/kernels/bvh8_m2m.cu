@@ -23,8 +23,9 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
     BVH8Node *nodes, const uint32_t *internal_parent_map,
     const AABB *leaf_aabbs, const TailorCoefficientsF16 *leaf_coefficients,
     const uint32_t *leaf_parents, const LeafPointers *leaf_pointers,
-    TailorCoefficients *m2m_f32_coefficients, const uint32_t leaf_count,
-    uint32_t *atomic_counters) {
+    TailorCoefficientsF16 *node_tailor_coefficients,
+    TailorCoefficients *m2m_f32_coefficients, const uint32_t *nodes_child_count,
+    const uint32_t leaf_count, uint32_t *atomic_counters) {
 
   uint32_t leaf_idx = threadIdx.x + blockIdx.x * blockDim.x;
   if (leaf_idx >= leaf_count) {
@@ -36,8 +37,7 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
   while (current_node_idx != 0xFFFFFFFF) {
     BVH8Node node = nodes[current_node_idx];
     // race to the top
-    uint32_t expected_children =
-        node.tailor_coefficients.get_expected_children();
+    const uint32_t expected_children = nodes_child_count[current_node_idx];
 
     if (atomicAdd(&atomic_counters[current_node_idx], 1) <
         expected_children - 1) {
@@ -45,8 +45,7 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
     }
 
     // only one thread for current node survives
-    Vec3 parent_center = node.parent_aabb.center_of_mass.get(
-        node.parent_aabb.min, node.parent_aabb.diagonal());
+    Vec3 parent_center = node._aabb_com;
 
     Vec3 zero_order = {0.F, 0.F, 0.F};
     Mat3x3 first_order = {0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F};
@@ -65,16 +64,14 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
       if (node.getChildMeta(i) == ChildType::LEAF) {
         uint32_t leaf_idx = leaf_pointers[current_node_idx].indices[i];
         const AABB &leaf_aabb = leaf_aabbs[leaf_idx];
-        child_center =
-            leaf_aabb.center_of_mass.get(leaf_aabb.min, leaf_aabb.diagonal());
+        child_center = leaf_aabb.center_of_mass;
         child_coefficients =
             TailorCoefficients::from_f16(leaf_coefficients[leaf_idx]);
       } else {
         uint32_t child_idx = node.child_base + internal_child_count;
         internal_child_count++;
         BVH8Node child_node = nodes[child_idx];
-        child_center = child_node.parent_aabb.center_of_mass.get(
-            child_node.parent_aabb.min, child_node.parent_aabb.diagonal());
+        child_center = child_node._aabb_com;
 
         // Load the float32 coefficients (no quantization happened here)
         child_coefficients = m2m_f32_coefficients[child_idx];
@@ -170,10 +167,10 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
           child_second.data[17] + shift_vector.z * child_first.data[8] +
           0.5F * shift_vector.z * shift_vector.z * zero_child.z;
     }
-    // store accumulated coefficients in current node (quantized)
-    node.tailor_coefficients.set_tailor_coefficients(zero_order, first_order,
-                                                     second_order);
-    nodes[current_node_idx] = node;
+    // store accumulated coefficients
+    node_tailor_coefficients[current_node_idx].zero_order = zero_order;
+    node_tailor_coefficients[current_node_idx].first_order = first_order;
+    node_tailor_coefficients[current_node_idx].second_order = second_order;
     // store accumulated in m2m_f32_coefficients (full resolution)
     m2m_f32_coefficients[current_node_idx] =
         TailorCoefficients{zero_order, first_order, second_order};

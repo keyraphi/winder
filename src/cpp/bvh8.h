@@ -1,6 +1,7 @@
 #pragma once
 #include "aabb.h"
 #include "vec3.h"
+#include <__clang_cuda_runtime_wrapper.h>
 #include <cuda_fp16.h>
 #include <cstdint>
 
@@ -27,6 +28,13 @@ struct alignas(32) BVH8Node {
       .center_of_mass=_aabb_com,
       .max_distance=_aabb_max_dist
     };
+  }
+
+  __host__ __device__ __forceinline__ auto setAABB(const AABB &aabb) -> void {
+    _aabb_min = aabb.min;
+    _aabb_max = aabb.max;
+    _aabb_com = aabb.center_of_mass;
+    _aabb_max_dist = aabb.max_distance;
   }
 
   __host__ __device__ __forceinline__ auto

@@ -139,14 +139,11 @@ convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
 
       BVH8Node out_node;
       AABB parent_aabb = params.binary_aabbs[my_binary_idx];
-      out_node.parent_aabb = parent_aabb;
+      out_node.setAABB(parent_aabb);
       out_node.child_base = my_child_base;
 
       // AABB Quantization & Writing out the BVH8Node
-      Vec3 parent_min = parent_aabb.min;
-      // Note: can be inf - doesn't matter because of implementation of
-      // quantize_aabb
-      Vec3 parent_inv_ext = 1.F / (parent_aabb.max - parent_aabb.min);
+      Vec3_f16 parent_min = parent_aabb.min;
 
       int internal_found = 0;
       uint32_t my_leaf_indices[8];
@@ -157,12 +154,6 @@ convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
           uint32_t binary_child_idx = children[i];
           bool is_child_leaf =
               BinaryNode::is_leaf(binary_child_idx, params.leaf_count);
-
-          // Quantize Child AABB
-          AABB child_box = params.binary_aabbs[binary_child_idx];
-
-          out_node.child_aabb_approx[i] = AABB8BitApprox::quantize_aabb(
-              child_box, parent_min, parent_inv_ext);
 
           if (is_child_leaf) {
             out_node.setChildMeta(i, ChildType::LEAF);
@@ -195,7 +186,7 @@ convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
       }
 
       // let the inner nodes know how many childs they have
-      out_node.tailor_coefficients.set_expected_children(child_count);
+      params.nodes_child_count[bvh8_idx] = child_count;
 
       // Coalesced Writes
       params.bvh8_nodes[bvh8_idx] = out_node;

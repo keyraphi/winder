@@ -157,17 +157,17 @@ struct Vec3 {
   }
 
   __host__ __device__ __forceinline__ auto operator=(const Vec3_f16 &v) {
-    x = v.x;
-    y = v.y;
-    z = v.z;
+    x = __half2float(v.x);
+    y = __half2float(v.y);
+    z = __half2float(v.z);
   }
 };
 
 __host__ __device__ __forceinline__ auto Vec3_f16::operator=(const Vec3 &v)
     -> Vec3_f16 {
-  x = v.x;
-  y = v.y;
-  z = v.z;
+  x = __float2half(v.x);
+  y = __float2half(v.y);
+  z = __float2half(v.z);
   return *this;
 }
 
