@@ -185,13 +185,16 @@ void compute_internal_tailor_coefficients_m2m(
     BVH8Node *nodes, const uint32_t *internal_parent_map,
     const AABB *leaf_aabbs, const TailorCoefficientsF16 *leaf_coefficients,
     const uint32_t *leaf_parents, const LeafPointers *leaf_pointers,
-    TailorCoefficients *m2m_f32_coefficients, const uint32_t leaf_count,
-    uint32_t *atomic_counters, const cudaStream_t &stream) {
+    TailorCoefficientsF16 *node_tailor_coefficients,
+    TailorCoefficients *m2m_f32_coefficients, const uint32_t *nodes_child_count,
+    const uint32_t leaf_count, uint32_t *atomic_counters,
+    const cudaStream_t &stream) {
   uint32_t threads = 256;
   uint32_t blocks = (leaf_count + threads - 1) / threads;
   compute_internal_tailor_coefficients_m2m_kernel<<<blocks, threads, 0,
                                                     stream>>>(
       nodes, internal_parent_map, leaf_aabbs, leaf_coefficients, leaf_parents,
-      leaf_pointers, m2m_f32_coefficients, leaf_count, atomic_counters);
+      leaf_pointers, node_tailor_coefficients, m2m_f32_coefficients,
+      nodes_child_count, leaf_count, atomic_counters);
   CUDA_CHECK(cudaGetLastError());
 }

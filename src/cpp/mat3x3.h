@@ -25,14 +25,14 @@ struct Mat3x3 {
   from_f16(const Mat3x3_f16 &m) -> Mat3x3 {
     Mat3x3 result;
     for (int i = 0; i < 9; i++) {
-      result.data[i] = m.data[i];
+      result.data[i] = __half2float(m.data[i]);
     }
     return result;
   }
 
   __host__ __device__ __forceinline__ auto operator=(const Mat3x3_f16 &m) {
     for (int i = 0; i < 9; i++) {
-      data[i] = m.data[i];
+      data[i] = __half2float(m.data[i]);
     }
   }
   __host__ __device__ __forceinline__ Mat3x3 &operator+=(const Mat3x3 &m) {
@@ -52,7 +52,6 @@ struct Mat3x3 {
     }
     return result;
   }
-
 };
 
 __host__ __device__ __forceinline__ auto operator*(const float n,
@@ -64,7 +63,7 @@ __host__ __device__ __forceinline__ auto
 Mat3x3_f16::from_float(const Mat3x3 &m) -> Mat3x3_f16 {
   Mat3x3_f16 result;
   for (int i = 0; i < 9; i++) {
-    result.data[i] = m.data[i];
+    result.data[i] = __float2half(m.data[i]);
   }
   return result;
 }
@@ -73,7 +72,7 @@ __host__ __device__ __forceinline__ auto Mat3x3_f16::operator=(const Mat3x3 &m)
     -> Mat3x3_f16 {
 
   for (int i = 0; i < 9; i++) {
-    data[i] = m.data[i];
+    data[i] = __float2half(m.data[i]);
   }
   return *this;
 }

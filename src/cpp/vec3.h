@@ -62,9 +62,9 @@ struct Vec3 {
   __host__ __device__ __forceinline__ static auto from_f16(const Vec3_f16 &v)
       -> Vec3 {
     Vec3 result;
-    result.x = v.x;
-    result.y = v.y;
-    result.z = v.z;
+    result.x = __half2float(v.x);
+    result.y = __half2float(v.y);
+    result.z = __half2float(v.z);
     return result;
   }
 

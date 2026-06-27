@@ -288,8 +288,8 @@ __global__ void __launch_bounds__(128) compute_exact_max_distances_kernel(
 
     float exact_dist = 0.F;
     if (current_node_idx != 0xFFFFFFFF) {
-      AABB aabb = nodes[current_node_idx].parent_aabb;
-      Vec3 com = aabb.center_of_mass.get(aabb.min, aabb.diagonal());
+      AABB aabb = nodes[current_node_idx].getAABB();
+      Vec3 com = aabb.center_of_mass;
       exact_dist = my_geometry.max_distance_to(com);
     }
 
@@ -335,9 +335,7 @@ quantize_bvh8_distances_kernel(BVH8Node *nodes,
   uint32_t node_idx = threadIdx.x + blockIdx.x * blockDim.x;
 
   if (node_idx < bvh8_node_count) {
-    AABB &aabb = nodes[node_idx].parent_aabb;
-    aabb.center_of_mass.setMaxDistance(tmp_max_distances[node_idx],
-                                       aabb.diagonal().inv_length());
+    nodes[node_idx]._aabb_max_dist = tmp_max_distances[node_idx];
   }
 }
 

@@ -79,14 +79,14 @@ struct Tensor3_compressed {
   from_f16(const Tensor3_f16_compressed &t) -> Tensor3_compressed {
     Tensor3_compressed result;
     for (int i = 0; i < 18; ++i) {
-      result.data[i] = t.data[i];
+      result.data[i] = __half2float(t.data[i]);
     }
     return result;
   }
   __host__ __device__ __forceinline__ auto
   operator=(const Tensor3_f16_compressed &t) {
     for (int i = 0; i < 18; ++i) {
-      data[i] = t.data[i];
+      data[i] = __half2float(t.data[i]);
     }
   }
 
@@ -135,7 +135,7 @@ __host__ __device__ __forceinline__ static auto
 from_float(const Tensor3_compressed &t) -> Tensor3_f16_compressed {
   Tensor3_f16_compressed result;
   for (int i = 0; i < 18; ++i) {
-    result.data[i] = t.data[i];
+    result.data[i] = __float2half(t.data[i]);
   }
   return result;
 }
@@ -144,7 +144,7 @@ __host__ __device__ __forceinline__ auto
 Tensor3_f16_compressed::operator=(const Tensor3_compressed &t)
     -> Tensor3_f16_compressed {
   for (int i = 0; i < 18; ++i) {
-    data[i] = t.data[i];
+    data[i] = __float2half(t.data[i]);
   }
   return *this;
 }
@@ -154,7 +154,7 @@ Tensor3_f16_compressed::from_float(const Tensor3_compressed &t)
     -> Tensor3_f16_compressed {
   Tensor3_f16_compressed result;
   for (int i = 0; i < 18; ++i) {
-    result.data[i] = t.data[i];
+    result.data[i] = __float2half(t.data[i]);
   }
   return result;
 }

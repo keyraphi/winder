@@ -1,7 +1,6 @@
 #pragma once
 #include "aabb.h"
 #include "vec3.h"
-#include <__clang_cuda_runtime_wrapper.h>
 #include <cuda_fp16.h>
 #include <cstdint>
 

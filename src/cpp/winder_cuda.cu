@@ -164,7 +164,7 @@ template <IsPrimitiveGeometry PrimitiveGeometry> struct GeometryToMorton {
 
   __device__ auto operator()(const PrimitiveGeometry &g) const -> uint64_t {
     const float scale = d_scene_params.scale;
-    const Vec3 min_p = d_scene_params.bounds.min;
+    const Vec3 min_p = Vec3::from_f16(d_scene_params.bounds.min);
     // Scale to range [0, 1]
     const Vec3 geometry_center = g.centroid();
     float tx = (geometry_center.x - min_p.x) * scale;
@@ -197,7 +197,7 @@ auto WinderBackend<Geometry>::initializeMortonCodes(
       thrust::reduce(m_build_stream_policy, aabb_transform,
                      aabb_transform + m_count, AABB::empty(), MergeAABB{});
   // create morton codes for each primitive
-  Vec3 extent = scene_bounds.max - scene_bounds.min;
+  Vec3 extent = Vec3::from_f16(scene_bounds.diagonal());
   float max_dim = fmaxf(extent.x, fmaxf(extent.y, extent.z));
   float scale = (max_dim > 1e-9F) ? 1.F / max_dim : 0.F;
 
