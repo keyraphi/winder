@@ -5,6 +5,7 @@
 #include "tensor3.h"
 #include "vec3.h"
 #include <cuda_fp16.h>
+#include <cuda_bf16.h>
 
 __device__ __forceinline__ auto
 should_node_be_approximated(const Vec3 &query, const AABB &aabb,
@@ -150,77 +151,88 @@ computeFirstOrderContribution(const Mat3x3_f16 &C, const Vec3_f16 &r_hat)
  * @return Unscaled contraction scalar evaluated in float16 precision.
  */
 __device__ __forceinline__ auto
-computeSecondOrderContribution(const Tensor3_f16_compressed &C,
-                               const Vec3_f16 &r_hat) -> float {
-  const half two = __float2half(2.0f);
+computeSecondOrderContribution(const Tensor3_bf16_compressed &C,
+                               const Vec3_f16 &r_hat_f16) -> float {
+  const __nv_bfloat16 two = __float2bfloat16(2.0f);
 
-  // Vector Trace V
-  half vx = __hadd(__hadd(C.data[0], C.data[4]), C.data[8]);
-  half vy = __hadd(__hadd(C.data[3], C.data[10]), C.data[14]);
-  half vz = __hadd(__hadd(C.data[6], C.data[13]), C.data[17]);
+  // Vector Trace V1 
+  __nv_bfloat16 v1x = __hadd(__hadd(C.data[0], C.data[4]), C.data[8]);
+  __nv_bfloat16 v1y = __hadd(__hadd(C.data[3], C.data[10]), C.data[14]);
+  __nv_bfloat16 v1z = __hadd(__hadd(C.data[6], C.data[13]), C.data[17]);
 
-  // V dot r_hat
-  half v_dot_r = __hadd(__hadd(__hmul(vx, r_hat.x), __hmul(vy, r_hat.y)),
-                        __hmul(vz, r_hat.z));
+  // Vector Trace V2 
+  __nv_bfloat16 v2x = __hadd(__hadd(C.data[0], C.data[9]), C.data[15]);
+  __nv_bfloat16 v2y = __hadd(__hadd(C.data[1], C.data[10]), C.data[16]);
+  __nv_bfloat16 v2z = __hadd(__hadd(C.data[2], C.data[11]), C.data[17]);
+
+  Vec3_bf16 r_hat = Vec3_bf16::from_f16(r_hat_f16);
+  
+  // V1 dot r_hat
+  __nv_bfloat16 v1_dot_r = __hadd(__hadd(__hmul(v1x, r_hat.x), __hmul(v1y, r_hat.y)),
+                                  __hmul(v1z, r_hat.z));
+  // V2 dot r_hat
+  __nv_bfloat16 v2_dot_r = __hadd(__hadd(__hmul(v2x, r_hat.x), __hmul(v2y, r_hat.y)),
+                                  __hmul(v2z, r_hat.z));
 
   // Pre-calculate baseline quadratic components
-  half r_xx = __hmul(r_hat.x, r_hat.x);
-  half r_yy = __hmul(r_hat.y, r_hat.y);
-  half r_zz = __hmul(r_hat.z, r_hat.z);
-  half r_xy = __hmul(r_hat.x, r_hat.y);
-  half r_xz = __hmul(r_hat.x, r_hat.z);
-  half r_yz = __hmul(r_hat.y, r_hat.z);
+  __nv_bfloat16 r_xx = __hmul(r_hat.x, r_hat.x);
+  __nv_bfloat16 r_yy = __hmul(r_hat.y, r_hat.y);
+  __nv_bfloat16 r_zz = __hmul(r_hat.z, r_hat.z);
+  __nv_bfloat16 r_xy = __hmul(r_hat.x, r_hat.y);
+  __nv_bfloat16 r_xz = __hmul(r_hat.x, r_hat.z);
+  __nv_bfloat16 r_yz = __hmul(r_hat.y, r_hat.z);
 
-  half2 accumulator =
-      __hmul2(__halves2half2(C.data[0], C.data[1]),
-              __halves2half2(__hmul(r_xx, r_hat.x), __hmul(r_xx, r_hat.y)));
+  __nv_bfloat162 accumulator =
+      __hmul2(__halves2bfloat162(C.data[0], C.data[1]),
+              __halves2bfloat162(__hmul(r_xx, r_hat.x), __hmul(r_xx, r_hat.y)));
   accumulator = __hfma2(
-      __halves2half2(C.data[2], C.data[3]),
-      __halves2half2(__hmul(r_xx, r_hat.z), __hmul(__hmul(r_xy, r_hat.x), two)),
+      __halves2bfloat162(C.data[2], C.data[3]),
+      __halves2bfloat162(__hmul(r_xx, r_hat.z), __hmul(__hmul(r_xy, r_hat.x), two)),
       accumulator);
-  accumulator = __hfma2(__halves2half2(C.data[4], C.data[5]),
-                        __halves2half2(__hmul(__hmul(r_xy, r_hat.y), two),
+  accumulator = __hfma2(__halves2bfloat162(C.data[4], C.data[5]),
+                        __halves2bfloat162(__hmul(__hmul(r_xy, r_hat.y), two),
                                        __hmul(__hmul(r_xz, r_hat.y), two)),
                         accumulator);
-  accumulator = __hfma2(__halves2half2(C.data[6], C.data[7]),
-                        __halves2half2(__hmul(__hmul(r_xz, r_hat.x), two),
+  accumulator = __hfma2(__halves2bfloat162(C.data[6], C.data[7]),
+                        __halves2bfloat162(__hmul(__hmul(r_xz, r_hat.x), two),
                                        __hmul(__hmul(r_yz, r_hat.x), two)),
                         accumulator);
   accumulator = __hfma2(
-      __halves2half2(C.data[8], C.data[9]),
-      __halves2half2(__hmul(__hmul(r_xz, r_hat.z), two), __hmul(r_yy, r_hat.x)),
+      __halves2bfloat162(C.data[8], C.data[9]),
+      __halves2bfloat162(__hmul(__hmul(r_xz, r_hat.z), two), __hmul(r_yy, r_hat.x)),
       accumulator);
   accumulator =
-      __hfma2(__halves2half2(C.data[10], C.data[11]),
-              __halves2half2(__hmul(r_yy, r_hat.y), __hmul(r_yy, r_hat.z)),
+      __hfma2(__halves2bfloat162(C.data[10], C.data[11]),
+              __halves2bfloat162(__hmul(r_yy, r_hat.y), __hmul(r_yy, r_hat.z)),
               accumulator);
-  accumulator = __hfma2(__halves2half2(C.data[12], C.data[13]),
-                        __halves2half2(__hmul(__hmul(r_yz, r_hat.x), two),
+  accumulator = __hfma2(__halves2bfloat162(C.data[12], C.data[13]),
+                        __halves2bfloat162(__hmul(__hmul(r_yz, r_hat.x), two),
                                        __hmul(__hmul(r_yz, r_hat.y), two)),
                         accumulator);
   accumulator = __hfma2(
-      __halves2half2(C.data[14], C.data[15]),
-      __halves2half2(__hmul(__hmul(r_yz, r_hat.z), two), __hmul(r_zz, r_hat.x)),
+      __halves2bfloat162(C.data[14], C.data[15]),
+      __halves2bfloat162(__hmul(__hmul(r_yz, r_hat.z), two), __hmul(r_zz, r_hat.x)),
       accumulator);
   accumulator =
-      __hfma2(__halves2half2(C.data[16], C.data[17]),
-              __halves2half2(__hmul(r_zz, r_hat.y), __hmul(r_zz, r_hat.z)),
+      __hfma2(__halves2bfloat162(C.data[16], C.data[17]),
+              __halves2bfloat162(__hmul(r_zz, r_hat.y), __hmul(r_zz, r_hat.z)),
               accumulator);
 
-  half result = __hadd(__low2half(accumulator), __high2half(accumulator));
+  __nv_bfloat16 result = __hadd(__low2bfloat16(accumulator), __high2bfloat16(accumulator));
 
-  // Apply final balanced weights: (15 * tensor_part) - (3 * vector_part)
-  result = __hmul(result, __float2half(15.0f));
-  half v_part = __hmul(v_dot_r, __float2half(3.0f));
+  // Apply final balanced weights: (15 * tensor_part) - (6 * V1 * r_hat + 3 * V2 * r_hat)
+  result = __hmul(result, __float2bfloat16(15.0F));
+  __nv_bfloat16 v_part = __hfma(v1_dot_r, __float2bfloat16(6.0F), 
+                                __hmul(v2_dot_r, __float2bfloat16(3.0F)));
   result = __hsub(result, v_part);
 
-  return __half2float(result);
+  return __bfloat162float(result);
 }
 
 __device__ __forceinline__ auto compute_node_approximation(
     const Vec3 &query, const Vec3 &center_of_mass,
     const Vec3_f16 &zero_order_coeff, const Mat3x3_f16 &first_order_coeff,
-    const Tensor3_f16_compressed &second_order_coeff) -> float {
+    const Tensor3_bf16_compressed &second_order_coeff) -> float {
   Vec3 r = center_of_mass - query;
   float inv_norm_r = r.inv_length();
 

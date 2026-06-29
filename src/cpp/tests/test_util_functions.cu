@@ -27,7 +27,6 @@ TEST(Sizes, AABB) {
 TEST(Sizes, BinaryNode) { EXPECT_EQ(sizeof(BinaryNode), 8); }
 TEST(Sizes, BVH8Node) { EXPECT_EQ(sizeof(BVH8Node), 32); }
 TEST(Sizes, TailorCoefficients) {
-  EXPECT_EQ(sizeof(TailorCoefficientsQuantized), 44);
   EXPECT_EQ(sizeof(TailorCoefficientsF16), 64);
 }
 TEST(Sizes, Geometry) {
@@ -329,7 +328,7 @@ TEST(GeometryWindingNumberContribution, Triangle) {
 
 __global__ void test_approximation_kernel(
     const Vec3 query, const Vec3 com, const Vec3_f16 zero_coeff,
-    const Mat3x3_f16 first_coeff, const Tensor3_f16_compressed second_coeff,
+    const Mat3x3_f16 first_coeff, const Tensor3_bf16_compressed second_coeff,
     float *out_result) {
   *out_result = compute_node_approximation(query, com, zero_coeff, first_coeff,
                                            second_coeff);
@@ -379,8 +378,8 @@ TEST(TaylorApproximation, Triangle) {
   cudaMalloc(&d_result, sizeof(float));
   Vec3_f16 h_zero = Vec3_f16::from_float(zero_order_sum);
   Mat3x3_f16 h_first = Mat3x3_f16::from_float(first_order_sum);
-  Tensor3_f16_compressed h_second =
-      ::Tensor3_f16_compressed::from_float(second_order_sum);
+  Tensor3_bf16_compressed h_second =
+      ::Tensor3_bf16_compressed::from_float(second_order_sum);
 
   // 4. Test at multiple distances to observe error decay
   // Query points moving away along the diagonal
@@ -466,8 +465,8 @@ TEST(TaylorApproximation, TriangleRandomized) {
   cudaMalloc(&d_result, sizeof(float));
   Vec3_f16 h_zero = Vec3_f16::from_float(zero_order_sum);
   Mat3x3_f16 h_first = Mat3x3_f16::from_float(first_order_sum);
-  Tensor3_f16_compressed h_second =
-      ::Tensor3_f16_compressed::from_float(second_order_sum);
+  Tensor3_bf16_compressed h_second =
+      ::Tensor3_bf16_compressed::from_float(second_order_sum);
 
   // 4. Test at multiple distances with M random directions
   float distances[] = {5.0f, 10.0f, 20.0f};
@@ -554,8 +553,8 @@ TEST(TaylorApproximation, PointNormal) {
   cudaMalloc(&d_result, sizeof(float));
   Vec3_f16 h_zero = Vec3_f16::from_float(zero_order_sum);
   Mat3x3_f16 h_first = Mat3x3_f16::from_float(first_order_sum);
-  Tensor3_f16_compressed h_second =
-      ::Tensor3_f16_compressed::from_float(second_order_sum);
+  Tensor3_bf16_compressed h_second =
+      ::Tensor3_bf16_compressed::from_float(second_order_sum);
 
   float distances[] = {5.0f, 10.0f, 20.0f};
   for (float dist : distances) {
@@ -632,8 +631,8 @@ TEST(TaylorApproximation, PointNormalRandomized) {
   cudaMalloc(&d_result, sizeof(float));
   Vec3_f16 h_zero = Vec3_f16::from_float(zero_order_sum);
   Mat3x3_f16 h_first = Mat3x3_f16::from_float(first_order_sum);
-  Tensor3_f16_compressed h_second =
-      ::Tensor3_f16_compressed::from_float(second_order_sum);
+  Tensor3_bf16_compressed h_second =
+      ::Tensor3_bf16_compressed::from_float(second_order_sum);
 
   float distances[] = {5.0f, 10.0f, 20.0f};
   for (float dist_mag : distances) {

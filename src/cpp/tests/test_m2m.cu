@@ -165,11 +165,23 @@ TEST(M2M, AllOrdersQuantizationAware) {
   auto get_fp16_tol = [](float ref_val) {
     float abs_ref = std::abs(ref_val);
     
-    // 1. Relative error tracking (approx 0.05% of the value)
-    float rel_err = abs_ref * 5e-4f; 
+    // Relative error tracking (approx 0.05% of the value)
+    float rel_err = abs_ref * 5e-4F; 
     
-    // 2. Absolute floor to handle near-zero/subnormal values (accounting for FTZ)
-    float abs_floor = 6.5e-5f; 
+    // Absolute floor to handle near-zero/subnormal values (accounting for FTZ)
+    float abs_floor = 6.5e-5F; 
+    
+    return rel_err + abs_floor;
+  };
+  // Helper lambda to calculate BF16-safe tolerance
+  auto get_bf16_tol = [](float ref_val) {
+    float abs_ref = std::abs(ref_val);
+    
+    // Relative error tracking (approx 0.4% of the value for 7-bit mantissa)
+    float rel_err = abs_ref * 4e-3F; 
+    
+    // Absolute floor to handle near-zero/subnormal values (accounting for FTZ)
+    float abs_floor = 1.2e-38F; 
     
     return rel_err + abs_floor;
   };
@@ -190,7 +202,7 @@ TEST(M2M, AllOrdersQuantizationAware) {
 
   // Verify Second Order
   for (int i = 0; i < 18; ++i) {
-    float tol = get_fp16_tol(ref_second.data[i]);
+    float tol = get_bf16_tol(ref_second.data[i]);
     EXPECT_NEAR(unpacked_h.second_order.data[i], ref_second.data[i], tol);
   }
 }

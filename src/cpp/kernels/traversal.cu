@@ -179,7 +179,7 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
         // First Order
         Mat3x3_f16 first_order_coeff = current_node_coefficients.first_order;
         // Second order
-        Tensor3_f16_compressed second_order_coeff =
+        Tensor3_bf16_compressed second_order_coeff =
             current_node_coefficients.second_order;
 
         AABB parent_aabb = current_node.getAABB();
