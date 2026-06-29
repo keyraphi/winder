@@ -75,7 +75,7 @@
                 </span>
                 <span class="text-slate-600 hidden sm:inline">•</span>
                 <span class="flex items-center gap-1.5">
-                    <span class="text-amber-400">💾</span> Quantized float16 Hardware Co-Design
+                    <span class="text-amber-400">💾</span> Mixed Precision for Max Speed
                 </span>
             </div>
 
@@ -547,17 +547,16 @@
                 <ul class="list-disc list-inside space-y-3 text-sm text-slate-600 pl-2">
 
                     <li><strong>float16 Far-Field Math:</strong> All calculations in the far-field are done in the
-                      <code>float16</code> floating-point format, leading to high computational throughput.</li>
+                      <code>float16</code> or <code>bfloat16</code> floating-point format, leading to high computational throughput.</li>
 
-                    <li><strong>Bit-Packed Mantissas &amp; 128-Byte Cache Alignment:</strong> The cached tailor coefficients are aggressively bit-packed
-                      down to a custom 11-bit mantissa format with shared exponents, while spatial metadata—such as the cluster center of mass and localized
-                      bounding radii—are compressed to an 8-bit format. This strictly constrains the cooperatively traversed BVH8 node payload to exactly <strong>128 bytes</strong>,
-                      perfectly matching the native L2 cache line transaction size of modern NVIDIA GPUs to guarantee maximum memory bandwidth utilization.</li>
+                    <li><strong>Cache Alignment:</strong> Super slim 32-byte BVH8 nodes and the 64 byte tailor coefficients,
+                      are loaded cooperatively by entire warps. They are perfectly aligned to L2 cache lines to guarantee maximum memory
+                      bandwidth utilization.</li>
 
                     <li><strong>Second-Order Taylor Expansions:</strong> Winder uses second-order Taylor approximations in the far field.
-                      Note: The precision of winder is still lower compared to the <code>float32</code>
+                      Note: The precision of winder is still slightly lower compared to the <code>float32</code>
                       second-order baseline of the original <em>Fast Winding Numbers</em> due to
-                      the quantization and <code>float16</code> computations.</li>
+                      the lower precision <code>float16</code> and <code>bfloat16</code> computations.</li>
                 </ul>
 
                 <div class="my-8">
@@ -847,7 +846,7 @@
                 <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
                     <div class="text-cyan-400 text-lg mb-2 font-mono">🔢 Dual-Precision Tracks</div>
                     <p class="text-sm text-slate-300 leading-relaxed">
-                        Alternates dynamically between high-speed <code>float16</code> math operations for distant far-field approximations and
+                    Alternates dynamically between high-speed <code>float16</code> and <code>bfloat16</code> math operations for distant far-field approximations and
                         detailed <code>float32</code> compute tracks for high-precision in the near-field.
                     </p>
                 </div>
