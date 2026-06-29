@@ -7,7 +7,7 @@
 #include <driver_types.h>
 
 template <IsGeometry Geometry> struct ComputeWindingNumbersParams {
-  const SoAView<Vec3> sorted_queries;
+  const Vec3 *queries;
   const uint32_t *sort_indirections;
   const BVH8Node *bvh8_nodes;
   const LeafPointers *bvh8_leaf_pointers;

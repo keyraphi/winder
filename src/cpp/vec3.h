@@ -1,13 +1,12 @@
 #pragma once
 #include "mat3x3.h"
 #include <cmath>
-#include <cstdint>
 #include <cuda_fp16.h>
 #include <cuda_runtime_api.h>
 #include <vector_types.h>
-#include "kernels/common.cuh"
 
 struct Vec3;
+struct AABB;
 
 struct Vec3_f16 {
   half x, y, z;
@@ -27,7 +26,8 @@ struct Vec3_f16 {
       -> Vec3_f16 {
     return {x * b.x, y * b.y, z * b.z};
   }
-  __host__ __device__ __forceinline__ auto operator*(half s) const -> Vec3_f16 {
+  __host__ __device__ __forceinline__ auto operator*(half s) const
+      -> Vec3_f16 {
     return {x * s, y * s, z * s};
   }
 
@@ -52,10 +52,9 @@ struct Vec3_f16 {
     return m;
   }
 
-  __host__ __device__ __forceinline__ auto operator=(const Vec3 &v) -> Vec3_f16;
+  __host__ __device__ __forceinline__ auto operator=(const Vec3 &v)
+      -> Vec3_f16;
 };
-
-struct AABB;
 
 struct Vec3 {
   float x, y, z;
@@ -67,16 +66,6 @@ struct Vec3 {
     result.y = __half2float(v.y);
     result.z = __half2float(v.z);
     return result;
-  }
-
-  __host__ __device__ __forceinline__ static auto
-  load(const SoAView<Vec3> &view, uint32_t idx, uint32_t count) -> Vec3 {
-    if (idx < count) {
-      return {.x = view.base_ptr[0 * view.stride + idx],
-              .y = view.base_ptr[1 * view.stride + idx],
-              .z = view.base_ptr[2 * view.stride + idx]};
-    }
-    return {0.F, 0.F, 0.F};
   }
 
   __host__ __device__ __forceinline__ auto dot(const Vec3 &v) const {

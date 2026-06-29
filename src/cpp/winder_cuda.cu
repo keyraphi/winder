@@ -556,29 +556,6 @@ auto WinderBackend<Geometry>::brute_force(const float *queries,
   return result;
 }
 
-__global__ void gather_vec3_soq_kernel(const float *__restrict__ vec3_aso,
-                                       const uint32_t *__restrict__ indices,
-                                       float *__restrict__ out_vec3_soa,
-                                       const uint32_t count) {
-  const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx >= count) {
-    return;
-  }
-  const uint32_t src_idx = indices[idx];
-  const float *vec3_src_ptr = vec3_aso + static_cast<size_t>(src_idx) * 3;
-
-  // batch reads together
-  float values[3];
-  values[0] = vec3_src_ptr[0];
-  values[1] = vec3_src_ptr[1];
-  values[2] = vec3_src_ptr[2];
-
-  // write into soa coalesced
-  out_vec3_soa[idx] = values[0];
-  out_vec3_soa[count + idx] = values[1];
-  out_vec3_soa[2 * count + idx] = values[2];
-}
-
 template <IsGeometry Geometry>
 auto WinderBackend<Geometry>::compute(const float *queries, size_t query_count,
                                       float beta, float epsilon,
@@ -616,16 +593,6 @@ auto WinderBackend<Geometry>::compute(const float *queries, size_t query_count,
                    queries_to_internal + query_count);
   thrust::sort_by_key(compute_stream_policy, queries_morton,
                       queries_morton + query_count, queries_to_internal);
-  // TODO worth?
-  // materialize sorted queries as SoA
-  float *sorted_queries;
-  CUDA_CHECK(cudaMallocAsync(&sorted_queries, query_count * sizeof(Vec3),
-                             compute_stream));
-  uint32_t threads = 256;
-  uint32_t block = (query_count + threads - 1) / threads;
-  gather_vec3_soq_kernel<<<block, threads, 0, compute_stream>>>(
-      queries, queries_to_internal, sorted_queries, query_count);
-  // TODO worth?
 
   // free morton code memory
   CUDA_CHECK(cudaFreeAsync(queries_morton, compute_stream));
@@ -647,7 +614,7 @@ auto WinderBackend<Geometry>::compute(const float *queries, size_t query_count,
   CUDA_CHECK(
       cudaMallocAsync(&global_counter, sizeof(uint32_t), compute_stream));
   ComputeWindingNumbersParams<Geometry> params{
-      SoAView<Vec3>{sorted_queries, query_count},
+      queries_vec3,
       queries_to_internal,
       m_bvh8_nodes,
       m_bvh8_leaf_pointers,
@@ -663,7 +630,6 @@ auto WinderBackend<Geometry>::compute(const float *queries, size_t query_count,
       epsilon};
   compute_winding_numbers<Geometry>(params, m_device, compute_stream);
   // free temporary memory
-  CUDA_CHECK(cudaFreeAsync(sorted_queries, compute_stream));
   CUDA_CHECK(cudaFreeAsync(queries_to_internal, compute_stream));
   CUDA_CHECK(cudaFreeAsync(global_counter, compute_stream));
 
