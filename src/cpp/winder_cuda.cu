@@ -100,6 +100,9 @@ template <IsGeometry Geometry> WinderBackend<Geometry>::~WinderBackend() {
   if (m_bvh8_nodes) {
     CUDA_CHECK(cudaFreeAsync(m_bvh8_nodes, m_build_stream));
   }
+  if (m_tailor_coefficients) {
+    CUDA_CHECK(cudaFreeAsync(m_tailor_coefficients, m_build_stream));
+  }
   if (m_leaf_coefficients) {
     CUDA_CHECK(cudaFreeAsync(m_leaf_coefficients, m_build_stream));
   }
@@ -139,6 +142,9 @@ WinderBackend<Geometry>::WinderBackend(size_t size, int device_id)
   CUDA_CHECK(cudaMallocAsync(&m_bvh8_node_count, 1 * sizeof(uint32_t),
                              m_build_stream));
   CUDA_CHECK(cudaMallocAsync(&m_bvh8_nodes, max_bvh8_nodes * sizeof(BVH8Node),
+                             m_build_stream));
+  CUDA_CHECK(cudaMallocAsync(&m_tailor_coefficients,
+                             max_bvh8_nodes * sizeof(TailorCoefficientsF16),
                              m_build_stream));
   CUDA_CHECK(cudaMallocAsync(&m_leaf_coefficients,
                              leaf_count * sizeof(TailorCoefficientsF16),
@@ -279,6 +285,7 @@ void WinderBackend<Triangle>::initialize_triangle_data(const float *triangles) {
   uint32_t *bvh8_internal_parent_map;
   uint32_t *global_counter;
   uint32_t *bvh8_leaf_parents;
+  uint32_t *bvh8_nodes_child_count;
   CUDA_CHECK(cudaMallocAsync(
       &bvh8_work_queue_A, (leaf_count - 1) * sizeof(uint32_t), m_build_stream));
   CUDA_CHECK(cudaMallocAsync(
@@ -290,12 +297,22 @@ void WinderBackend<Triangle>::initialize_triangle_data(const float *triangles) {
       cudaMallocAsync(&global_counter, 1 * sizeof(uint32_t), m_build_stream));
   CUDA_CHECK(cudaMallocAsync(&bvh8_leaf_parents, leaf_count * sizeof(uint32_t),
                              m_build_stream));
+  CUDA_CHECK(cudaMallocAsync(&bvh8_nodes_child_count,
+                             max_bvh8_nodes * sizeof(uint32_t),
+                             m_build_stream));
 
-  ConvertBinary2BVH8Params params{
-      bvh8_work_queue_A,    bvh8_work_queue_B, bvh8_internal_parent_map,
-      global_counter,       leaf_count,        m_binary_aabbs,
-      binary_nodes,         bvh8_leaf_parents, m_bvh8_nodes,
-      m_bvh8_leaf_pointers, m_bvh8_node_count};
+  ConvertBinary2BVH8Params params{bvh8_work_queue_A,
+                                  bvh8_work_queue_B,
+                                  bvh8_internal_parent_map,
+                                  global_counter,
+                                  leaf_count,
+                                  m_binary_aabbs,
+                                  binary_nodes,
+                                  bvh8_nodes_child_count,
+                                  bvh8_leaf_parents,
+                                  m_bvh8_nodes,
+                                  m_bvh8_leaf_pointers,
+                                  m_bvh8_node_count};
   convert_binary_tree_to_bvh8(params, m_device, m_build_stream);
 
   CUDA_CHECK(cudaFreeAsync(bvh8_work_queue_A, m_build_stream));
@@ -320,7 +337,7 @@ void WinderBackend<Triangle>::initialize_triangle_data(const float *triangles) {
   CUDA_CHECK(cudaFreeAsync(tmp_max_distances, m_build_stream));
 
   // populate BVH8 nodes with tailor coefficients using m2m
-  // initialize atomic counters to 0 (TODO: good idea?)
+  // initialize atomic counters to 0
   uint32_t *atomic_counters;
   CUDA_CHECK(cudaMallocAsync(
       &atomic_counters, (leaf_count - 1) * sizeof(uint32_t), m_build_stream));
@@ -332,12 +349,14 @@ void WinderBackend<Triangle>::initialize_triangle_data(const float *triangles) {
   compute_internal_tailor_coefficients_m2m(
       m_bvh8_nodes, bvh8_internal_parent_map, m_binary_aabbs + leaf_count - 1,
       m_leaf_coefficients, bvh8_leaf_parents, m_bvh8_leaf_pointers,
-      m2m_f32_coefficients, leaf_count, atomic_counters, m_build_stream);
+      m_tailor_coefficients, m2m_f32_coefficients, bvh8_nodes_child_count,
+      leaf_count, atomic_counters, m_build_stream);
 
   CUDA_CHECK(cudaFreeAsync(m2m_f32_coefficients, m_build_stream));
   CUDA_CHECK(cudaFreeAsync(atomic_counters, m_build_stream));
   CUDA_CHECK(cudaFreeAsync(bvh8_internal_parent_map, m_build_stream));
   CUDA_CHECK(cudaFreeAsync(bvh8_leaf_parents, m_build_stream));
+  CUDA_CHECK(cudaFreeAsync(bvh8_nodes_child_count, m_build_stream));
 
   CUDA_CHECK(
       cudaEventRecord(m_tree_construction_finished_event, m_build_stream));
@@ -412,6 +431,7 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
   uint32_t *bvh8_internal_parent_map;
   uint32_t *global_counter;
   uint32_t *bvh8_leaf_parents;
+  uint32_t *bvh8_nodes_child_count;
   CUDA_CHECK(cudaMallocAsync(
       &bvh8_work_queue_A, (leaf_count - 1) * sizeof(uint32_t), m_build_stream));
   CUDA_CHECK(cudaMallocAsync(
@@ -423,12 +443,22 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
       cudaMallocAsync(&global_counter, 1 * sizeof(uint32_t), m_build_stream));
   CUDA_CHECK(cudaMallocAsync(&bvh8_leaf_parents, leaf_count * sizeof(uint32_t),
                              m_build_stream));
+  CUDA_CHECK(cudaMallocAsync(&bvh8_nodes_child_count,
+                             max_bvh8_nodes * sizeof(uint32_t),
+                             m_build_stream));
 
-  ConvertBinary2BVH8Params params{
-      bvh8_work_queue_A,    bvh8_work_queue_B, bvh8_internal_parent_map,
-      global_counter,       leaf_count,        m_binary_aabbs,
-      binary_nodes,         bvh8_leaf_parents, m_bvh8_nodes,
-      m_bvh8_leaf_pointers, m_bvh8_node_count};
+  ConvertBinary2BVH8Params params{bvh8_work_queue_A,
+                                  bvh8_work_queue_B,
+                                  bvh8_internal_parent_map,
+                                  global_counter,
+                                  leaf_count,
+                                  m_binary_aabbs,
+                                  binary_nodes,
+                                  bvh8_nodes_child_count,
+                                  bvh8_leaf_parents,
+                                  m_bvh8_nodes,
+                                  m_bvh8_leaf_pointers,
+                                  m_bvh8_node_count};
   convert_binary_tree_to_bvh8(params, m_device, m_build_stream);
 
   CUDA_CHECK(cudaFreeAsync(bvh8_work_queue_A, m_build_stream));
@@ -453,9 +483,10 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
   CUDA_CHECK(cudaFreeAsync(tmp_max_distances, m_build_stream));
 
   // populate BVH8 nodes with tailor coefficients using m2m
-  // initialize atomic coutners to 0
+  // initialize atomic counters to 0
   uint32_t *atomic_counters;
-  CUDA_CHECK(cudaMallocAsync(&atomic_counters, (leaf_count-1)*sizeof(uint32_t), m_build_stream));
+  CUDA_CHECK(cudaMallocAsync(
+      &atomic_counters, (leaf_count - 1) * sizeof(uint32_t), m_build_stream));
   thrust::fill_n(m_build_stream_policy, atomic_counters, leaf_count - 1, 0);
   TailorCoefficients *m2m_f32_coefficients;
   CUDA_CHECK(cudaMallocAsync(&m2m_f32_coefficients,
@@ -464,12 +495,14 @@ void WinderBackend<PointNormal>::initialize_point_data(const float *points,
   compute_internal_tailor_coefficients_m2m(
       m_bvh8_nodes, bvh8_internal_parent_map, m_binary_aabbs + leaf_count - 1,
       m_leaf_coefficients, bvh8_leaf_parents, m_bvh8_leaf_pointers,
-      m2m_f32_coefficients, leaf_count, atomic_counters, m_build_stream);
+      m_tailor_coefficients, m2m_f32_coefficients, bvh8_nodes_child_count,
+      leaf_count, atomic_counters, m_build_stream);
 
   CUDA_CHECK(cudaFreeAsync(m2m_f32_coefficients, m_build_stream));
   CUDA_CHECK(cudaFreeAsync(atomic_counters, m_build_stream));
   CUDA_CHECK(cudaFreeAsync(bvh8_internal_parent_map, m_build_stream));
   CUDA_CHECK(cudaFreeAsync(bvh8_leaf_parents, m_build_stream));
+  CUDA_CHECK(cudaFreeAsync(bvh8_nodes_child_count, m_build_stream));
 
   CUDA_CHECK(
       cudaEventRecord(m_tree_construction_finished_event, m_build_stream));
@@ -576,6 +609,7 @@ auto WinderBackend<Geometry>::compute(const float *queries, size_t query_count,
     // default from 3D Reconstruction with Fast Dipole Sums
     epsilon = 1.F / 250.F;
   }
+  uint32_t leaf_count = (m_count + LEAF_SIZE - 1) / LEAF_SIZE;
   uint32_t *global_counter;
   CUDA_CHECK(
       cudaMallocAsync(&global_counter, sizeof(uint32_t), compute_stream));
@@ -584,7 +618,9 @@ auto WinderBackend<Geometry>::compute(const float *queries, size_t query_count,
       queries_to_internal,
       m_bvh8_nodes,
       m_bvh8_leaf_pointers,
+      m_tailor_coefficients,
       m_leaf_coefficients,
+      m_binary_aabbs + leaf_count - 1,
       SoAView<Geometry>{m_sorted_geometry, m_count},
       (uint32_t)query_count,
       (uint32_t)m_count,
@@ -739,19 +775,6 @@ void WinderBackend<Triangle>::solve_for_normals(
   throw std::runtime_error("solve_for_normals not implemented yet!");
 }
 
-__global__ void getTailorCoefficientsKernel(const BVH8Node *nodes,
-                                             TailorCoefficientsF16 *result,
-                                             uint32_t node_count) {
-  uint32_t tid = threadIdx.x + blockIdx.x * blockDim.x;
-  if (tid < node_count) {
-    const BVH8Node &node = nodes[tid];
-    result[tid].zero_order = node.tailor_coefficients.get_tailor_zero_order();
-    result[tid].first_order = node.tailor_coefficients.get_tailor_first_order();
-    result[tid].second_order =
-        node.tailor_coefficients.get_tailor_second_order();
-  }
-}
-
 template <IsGeometry Geometry>
 auto WinderBackend<Geometry>::dump() const -> std::string {
   // Edge Case 1: No geometry at all
@@ -776,8 +799,7 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
                                     m_count};
 
     AABB leaf_aabb = leaf_aabbs[0];
-    Vec3 leaf_com =
-        leaf_aabb.center_of_mass.get(leaf_aabb.min, leaf_aabb.diagonal());
+    Vec3 leaf_com = leaf_aabb.center_of_mass;
 
     result += "  L0 [shape=none, label=<\n";
     result += "    <TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\" "
@@ -788,12 +810,13 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
         std::format("      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#c8e6c9\"><I>CoM: "
                     "({:.4f}, {:.4f}, {:.4f})</I></TD></TR>\n",
                     leaf_com.x, leaf_com.y, leaf_com.z);
-    result +=
-        std::format("      <TR><TD COLSPAN=\"4\"><FONT POINT-SIZE=\"9\">AABB "
-                    "Min: ({:.3f}, {:.3f}, {:.3f})<BR/>AABB Max: ({:.3f}, "
-                    "{:.3f}, {:.3f})</FONT></TD></TR>\n",
-                    leaf_aabb.min.x, leaf_aabb.min.y, leaf_aabb.min.z,
-                    leaf_aabb.max.x, leaf_aabb.max.y, leaf_aabb.max.z);
+    result += std::format(
+        "      <TR><TD COLSPAN=\"4\"><FONT POINT-SIZE=\"9\">AABB "
+        "Min: ({:.3f}, {:.3f}, {:.3f})<BR/>AABB Max: ({:.3f}, "
+        "{:.3f}, {:.3f})</FONT></TD></TR>\n",
+        __half2float(leaf_aabb.min.x), __half2float(leaf_aabb.min.y),
+        __half2float(leaf_aabb.min.z), __half2float(leaf_aabb.max.x),
+        __half2float(leaf_aabb.max.y), __half2float(leaf_aabb.max.z));
 
     // Append child geometry primitives using SoA view
     for (size_t g_id = 0; g_id < m_count; g_id++) {
@@ -837,28 +860,11 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
                         leaf_count * sizeof(TailorCoefficientsF16),
                         cudaMemcpyDeviceToHost));
 
-  TailorCoefficientsF16 *d_node_coefficients = nullptr;
-  CUDA_CHECK(cudaMalloc(&d_node_coefficients,
-                        sizeof(TailorCoefficientsF16) * node_count));
-
-  // Calculate execution configuration and launch on the device
-  uint32_t block = 128;
-  uint32_t grid = (node_count + block - 1) / block;
-  getTailorCoefficientsKernel<<<grid, block>>>(m_bvh8_nodes,
-                                               d_node_coefficients, node_count);
-
-  // Catch launch anomalies and wait for execution boundary
-  CUDA_CHECK(cudaGetLastError());
-  CUDA_CHECK(cudaDeviceSynchronize());
-
   // Pull unpacked values into your local host stack tracking vector
   std::vector<TailorCoefficientsF16> node_coefficients(node_count);
-  CUDA_CHECK(cudaMemcpy(node_coefficients.data(), d_node_coefficients,
+  CUDA_CHECK(cudaMemcpy(node_coefficients.data(), m_tailor_coefficients,
                         sizeof(TailorCoefficientsF16) * node_count,
                         cudaMemcpyDeviceToHost));
-
-  // Free the temporary GPU allocation
-  CUDA_CHECK(cudaFree(d_node_coefficients));
 
   // Breadth-First Search (BFS) matching your visualization layout
   std::queue<uint32_t> queue;
@@ -872,8 +878,8 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
     const BVH8Node &current_node = bvh8_nodes[current_id];
     TailorCoefficients node_coeff =
         TailorCoefficients::from_f16(node_coefficients[current_id]);
-    AABB aabb = current_node.parent_aabb;
-    Vec3 node_com = aabb.center_of_mass.get(aabb.min, aabb.diagonal());
+    AABB aabb = current_node.getAABB();
+    Vec3 node_com = aabb.center_of_mass;
 
     // 1. Render Internal Node Layout Block
     result += std::format("  N{} [shape=none, label=<\n", current_id);
@@ -891,7 +897,9 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
         "      <TR><TD COLSPAN=\"4\"><FONT POINT-SIZE=\"9\">AABB Min: ({:.3f}, "
         "{:.3f}, {:.3f})<BR/>AABB Max: ({:.3f}, {:.3f}, "
         "{:.3f})</FONT></TD></TR>\n",
-        aabb.min.x, aabb.min.y, aabb.min.z, aabb.max.x, aabb.max.y, aabb.max.z);
+        __half2float(aabb.min.x), __half2float(aabb.min.y),
+        __half2float(aabb.min.z), __half2float(aabb.max.x),
+        __half2float(aabb.max.y), __half2float(aabb.max.z));
 
     // Render Internal Node Taylor Expansion Blocks
     result += std::format(
@@ -946,14 +954,11 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
       }
       case ChildType::LEAF: {
         uint32_t l_id = current_leaf_pointers.indices[child_id];
-        AABB leaf_aabb_approx = AABB::from_approximation(
-            aabb, current_node.child_aabb_approx[child_id]);
         AABB leaf_aabb = leaf_aabbs[l_id];
 
         TailorCoefficients coeff =
             TailorCoefficients::from_f16(leaf_coefficients[l_id]);
-        Vec3 leaf_com = leaf_coefficients[l_id].center_of_mass.get(
-            leaf_aabb.min, leaf_aabb.diagonal());
+        Vec3 leaf_com = leaf_aabb.center_of_mass;
 
         // Render Leaf Block
         result += std::format("  L{} [shape=none, label=<\n", l_id);
@@ -972,15 +977,11 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
         result += std::format(
             "      <TR><TD COLSPAN=\"4\"><FONT POINT-SIZE=\"9\" "
             "COLOR=\"#333333\">"
-            "Approx Min: ({:.2f}, {:.2f}, {:.2f}) Max: ({:.2f}, {:.2f}, "
-            "{:.2f})<BR/>"
-            "True Min: ({:.2f}, {:.2f}, {:.2f}) Max: ({:.2f}, {:.2f}, {:.2f})"
+            "AABB Min: ({:.2f}, {:.2f}, {:.2f}) Max: ({:.2f}, {:.2f}, {:.2f})"
             "</FONT></TD></TR>\n",
-            leaf_aabb_approx.min.x, leaf_aabb_approx.min.y,
-            leaf_aabb_approx.min.z, leaf_aabb_approx.max.x,
-            leaf_aabb_approx.max.y, leaf_aabb_approx.max.z, leaf_aabb.min.x,
-            leaf_aabb.min.y, leaf_aabb.min.z, leaf_aabb.max.x, leaf_aabb.max.y,
-            leaf_aabb.max.z);
+            __half2float(leaf_aabb.min.x), __half2float(leaf_aabb.min.y),
+            __half2float(leaf_aabb.min.z), __half2float(leaf_aabb.max.x),
+            __half2float(leaf_aabb.max.y), __half2float(leaf_aabb.max.z));
 
         // Taylor Expansion Matrix
         result += std::format("      <TR><TD BGCOLOR=\"#c8e6c9\"><B>Zero "

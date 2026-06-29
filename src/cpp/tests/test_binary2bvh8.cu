@@ -69,6 +69,7 @@ TEST(BVH8Conversion, BalancedCollapse) {
   thrust::device_vector<BVH8Node> d_bvh8_nodes(leaf_count);
   thrust::device_vector<LeafPointers> d_leaf_pointers(leaf_count);
   thrust::device_vector<uint32_t> d_bvh8_node_count(1);
+  thrust::device_vector<uint32_t> d_bvh8_nodes_child_count(leaf_count);
 
   ConvertBinary2BVH8Params p{
       thrust::raw_pointer_cast(d_qA.data()),
@@ -78,6 +79,7 @@ TEST(BVH8Conversion, BalancedCollapse) {
       leaf_count,
       thrust::raw_pointer_cast(d_bin_aabbs.data()),
       thrust::raw_pointer_cast(d_bin_nodes.data()),
+      thrust::raw_pointer_cast(d_bvh8_nodes_child_count.data()),
       thrust::raw_pointer_cast(d_leaf_parents.data()),
       thrust::raw_pointer_cast(d_bvh8_nodes.data()),
       thrust::raw_pointer_cast(d_leaf_pointers.data()),
@@ -92,8 +94,8 @@ TEST(BVH8Conversion, BalancedCollapse) {
   BVH8Node root = h_bvh8[0];
 
   // A. Verify Parent AABB
-  EXPECT_FLOAT_EQ(root.parent_aabb.min.x, h_bin_aabbs[0].min.x);
-  EXPECT_FLOAT_EQ(root.parent_aabb.max.z, h_bin_aabbs[0].max.z);
+  EXPECT_FLOAT_EQ(root._aabb_min.x, h_bin_aabbs[0].min.x);
+  EXPECT_FLOAT_EQ(root._aabb_max.z, h_bin_aabbs[0].max.z);
 
   // Verify Child Meta and Leaf Pointers (Order Independent)
   std::vector<uint32_t> found_indices;
@@ -106,22 +108,6 @@ TEST(BVH8Conversion, BalancedCollapse) {
   std::sort(found_indices.begin(), found_indices.end());
   for (int i = 0; i < 8; ++i) {
     EXPECT_EQ(found_indices[i], i) << "Missing raw leaf index " << i;
-  }
-
-  // C. Verify AABB Quantization (Checking all children since we don't know the
-  // order)
-  Vec3 p_min = root.parent_aabb.min;
-  Vec3 p_inv_ext = 255.0f / (root.parent_aabb.max - root.parent_aabb.min);
-
-  for (uint32_t i = 0; i < 8; ++i) {
-    uint32_t leaf_raw_idx = h_leaf_ptrs[0].indices[i];
-    uint32_t binary_idx = leaf_raw_idx + (leaf_count - 1);
-    AABB child_box = h_bin_aabbs[binary_idx];
-
-    EXPECT_EQ(root.child_aabb_approx[i].qmin[0],
-              host_quantize(child_box.min.x, p_min.x, p_inv_ext.x));
-    EXPECT_EQ(root.child_aabb_approx[i].qmax[0],
-              host_quantize(child_box.max.x, p_min.x, p_inv_ext.x));
   }
 
   // D. Verify Child Base
@@ -167,6 +153,7 @@ TEST(BVH8Conversion, UniformLinearLeaves) {
   thrust::device_vector<BVH8Node> d_bvh8_nodes(leaf_count);
   thrust::device_vector<LeafPointers> d_leaf_pointers(leaf_count);
   thrust::device_vector<uint32_t> d_bvh8_node_count(1);
+  thrust::device_vector<uint32_t> d_bvh8_nodes_child_count(leaf_count);
 
   ConvertBinary2BVH8Params p{
       thrust::raw_pointer_cast(d_qA.data()),
@@ -176,6 +163,7 @@ TEST(BVH8Conversion, UniformLinearLeaves) {
       leaf_count,
       thrust::raw_pointer_cast(d_bin_aabbs.data()),
       thrust::raw_pointer_cast(d_bin_nodes.data()),
+      thrust::raw_pointer_cast(d_bvh8_nodes_child_count.data()),
       thrust::raw_pointer_cast(d_leaf_parents.data()),
       thrust::raw_pointer_cast(d_bvh8_nodes.data()),
       thrust::raw_pointer_cast(d_leaf_pointers.data()),
@@ -224,8 +212,8 @@ TEST(BVH8Conversion, UniformLinearLeaves) {
 
   // 4. Verify AABB Chain Logic
   // The root AABB must encompass the entire range [0, 100]
-  EXPECT_FLOAT_EQ(h_bvh8[0].parent_aabb.min.x, 0.0f);
-  EXPECT_FLOAT_EQ(h_bvh8[0].parent_aabb.max.x, 100.0f);
+  EXPECT_NEAR(h_bvh8[0]._aabb_min.x, 0.0f, 1e-5);
+  EXPECT_NEAR(h_bvh8[0]._aabb_max.x, 100.0f, 1e-5);
 }
 
 TEST(BVH8Conversion, NonUniformHeuristic) {
@@ -264,6 +252,7 @@ TEST(BVH8Conversion, NonUniformHeuristic) {
   thrust::device_vector<BVH8Node> d_bvh8_nodes(leaf_count);
   thrust::device_vector<LeafPointers> d_leaf_pointers(leaf_count);
   thrust::device_vector<uint32_t> d_bvh8_node_count(1);
+  thrust::device_vector<uint32_t> d_bvh8_nodes_child_count(leaf_count);
 
   ConvertBinary2BVH8Params p{
       thrust::raw_pointer_cast(d_qA.data()),
@@ -273,6 +262,7 @@ TEST(BVH8Conversion, NonUniformHeuristic) {
       leaf_count,
       thrust::raw_pointer_cast(d_bin_aabbs.data()),
       thrust::raw_pointer_cast(d_bin_nodes.data()),
+      thrust::raw_pointer_cast(d_bvh8_nodes_child_count.data()),
       thrust::raw_pointer_cast(d_leaf_parents.data()),
       thrust::raw_pointer_cast(d_bvh8_nodes.data()),
       thrust::raw_pointer_cast(d_leaf_pointers.data()),
@@ -286,30 +276,7 @@ TEST(BVH8Conversion, NonUniformHeuristic) {
   // Verification: Because Node 1 is much larger than Leaf 0,
   // the root should immediately split Node 1, then Node 2, etc.
   // This ensures child_meta isn't just filled sequentially.
-  EXPECT_GT(h_bvh8[0].parent_aabb.max.x, 0.0f);
-
-  BVH8Node root = h_bvh8[0];
-  Vec3 p_min = root.parent_aabb.min;
-  Vec3 p_max = root.parent_aabb.max;
-  Vec3 p_inv_ext = Vec3{255.0f, 255.0f, 255.0f} / (p_max - p_min);
-
-  // Verify the quantization of Leaf 0 within the Root Node
-  // Leaf 0 is at [0, 1], Root is at [0, 16] (approx, based on your merge)
-  for (int i = 0; i < 8; ++i) {
-    if (root.getChildMeta(i) == ChildType::LEAF) {
-      uint32_t leaf_idx = h_leaf_ptrs[0].indices[i];
-      AABB original_leaf_box = h_bin_aabbs[internal_count + leaf_idx];
-
-      // Manual host-side quantization to compare
-      uint8_t expected_qmin_x = (uint8_t)std::round(
-          (original_leaf_box.min.x - p_min.x) * p_inv_ext.x);
-      uint8_t expected_qmax_x = (uint8_t)std::round(
-          (original_leaf_box.max.x - p_min.x) * p_inv_ext.x);
-
-      EXPECT_EQ(root.child_aabb_approx[i].qmin[0], expected_qmin_x);
-      EXPECT_EQ(root.child_aabb_approx[i].qmax[0], expected_qmax_x);
-    }
-  }
+  EXPECT_GT(__half2float(h_bvh8[0]._aabb_max.x), 0.0f);
 }
 
 TEST(BVH8Conversion, DegeneratePointCluster64) {
@@ -344,6 +311,7 @@ TEST(BVH8Conversion, DegeneratePointCluster64) {
   thrust::device_vector<BVH8Node> d_bvh8_nodes(max_bvh8_nodes);
   thrust::device_vector<LeafPointers> d_leaf_pointers(leaf_count);
   thrust::device_vector<uint32_t> d_bvh8_node_count(1);
+  thrust::device_vector<uint32_t> d_bvh8_nodes_child_count(leaf_count);
 
   ConvertBinary2BVH8Params p{
       thrust::raw_pointer_cast(d_qA.data()),
@@ -353,6 +321,7 @@ TEST(BVH8Conversion, DegeneratePointCluster64) {
       leaf_count,
       thrust::raw_pointer_cast(d_bin_aabbs.data()),
       thrust::raw_pointer_cast(d_bin_nodes.data()),
+      thrust::raw_pointer_cast(d_bvh8_nodes_child_count.data()),
       thrust::raw_pointer_cast(d_leaf_parents.data()),
       thrust::raw_pointer_cast(d_bvh8_nodes.data()),
       thrust::raw_pointer_cast(d_leaf_pointers.data()),
@@ -405,6 +374,7 @@ TEST(BVH8Conversion, SingleLeafBaseCase) {
   thrust::device_vector<BVH8Node> d_bvh8_nodes(0);
   thrust::device_vector<LeafPointers> d_leaf_pointers(0);
   thrust::device_vector<uint32_t> d_bvh8_node_count(1);
+  thrust::device_vector<uint32_t> d_bvh8_nodes_child_count(leaf_count);
 
   ConvertBinary2BVH8Params p{
       thrust::raw_pointer_cast(d_qA.data()),
@@ -414,6 +384,7 @@ TEST(BVH8Conversion, SingleLeafBaseCase) {
       leaf_count,
       thrust::raw_pointer_cast(d_bin_aabbs.data()),
       thrust::raw_pointer_cast(d_bin_nodes.data()),
+      thrust::raw_pointer_cast(d_bvh8_nodes_child_count.data()),
       thrust::raw_pointer_cast(d_leaf_parents.data()),
       thrust::raw_pointer_cast(d_bvh8_nodes.data()),
       thrust::raw_pointer_cast(d_leaf_pointers.data()),

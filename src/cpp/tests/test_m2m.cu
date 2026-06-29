@@ -15,36 +15,8 @@ struct UnpackedTailorCoefficients {
   Vec3 zero_order;
   Mat3x3 first_order;
   Tensor3_compressed second_order;
-  float scale_factor_low;
-  float scale_factor_second;
 };
 
-__global__ void
-get_root_coefficients_kernel(const BVH8Node *nodes,
-                             UnpackedTailorCoefficients *out_data) {
-  uint32_t idx = threadIdx.x + blockIdx.x * blockDim.x;
-  if (idx == 0) {
-    BVH8Node root = nodes[0];
-
-    // 1. Extract scale factors
-    out_data->scale_factor_low =
-        root.tailor_coefficients.get_shared_scale_factor_low();
-    out_data->scale_factor_second =
-        root.tailor_coefficients.get_shared_scale_factor_second();
-
-    // 2. Unpack and dequantize Zero Order
-    Vec3_f16 z_f16 = root.tailor_coefficients.get_tailor_zero_order();
-    out_data->zero_order = Vec3::from_f16(z_f16);
-
-    // 3. Unpack and dequantize First Order
-    // (Assuming you have a matching getter implemented for first order)
-    out_data->first_order = root.tailor_coefficients.get_tailor_first_order();
-
-    // 4. Unpack and dequantize Second Order
-    // (Assuming you have a matching getter implemented for second order)
-    out_data->second_order = root.tailor_coefficients.get_tailor_second_order();
-  }
-}
 
 TEST(M2M, AllOrdersQuantizationAware) {
   const size_t count = 8 * 32 + 1;
@@ -79,8 +51,7 @@ TEST(M2M, AllOrdersQuantizationAware) {
   BVH8Node root_node_h;
   CUDA_CHECK(cudaMemcpy(&root_node_h, backend->m_bvh8_nodes, sizeof(BVH8Node),
                         cudaMemcpyDeviceToHost));
-  Vec3 root_parent_center = root_node_h.parent_aabb.center_of_mass.get(
-      root_node_h.parent_aabb.min, root_node_h.parent_aabb.diagonal());
+  Vec3 root_parent_center = root_node_h._aabb_com;
 
   // 2. Fetch leaf configurations back to host to compute an exact mathematical
   // reference
@@ -104,8 +75,7 @@ TEST(M2M, AllOrdersQuantizationAware) {
                                    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
 
   for (size_t i = 0; i < leaf_count; ++i) {
-    Vec3 leaf_center = leaf_aabbs_h[i].center_of_mass.get(
-        leaf_aabbs_h[i].min, leaf_aabbs_h[i].diagonal());
+    Vec3 leaf_center = leaf_aabbs_h[i].center_of_mass;
     TailorCoefficients child_coefficients =
         TailorCoefficients::from_f16(leaf_coeffs_f16_h[i]);
 
@@ -182,46 +152,45 @@ TEST(M2M, AllOrdersQuantizationAware) {
                            0.5f * shift.z * shift.z * zero_child.z;
   }
 
-  // 4. Run extraction kernel to collect the dequantized GPU results
-  thrust::device_vector<UnpackedTailorCoefficients> unpacked_d(1);
-  get_root_coefficients_kernel<<<1, 1>>>(backend->m_bvh8_nodes,
-                                         unpacked_d.data().get());
+  // download root tailor coefficients
+  TailorCoefficientsF16 root_coeff;
+  cudaMemcpy(&root_coeff, backend->m_tailor_coefficients, sizeof(TailorCoefficientsF16), cudaMemcpyDeviceToHost);
 
-  UnpackedTailorCoefficients unpacked_h = unpacked_d[0];
+  UnpackedTailorCoefficients unpacked_h;
+  unpacked_h.zero_order = root_coeff.zero_order;
+  unpacked_h.first_order = root_coeff.first_order;
+  unpacked_h.second_order = root_coeff.second_order;
 
-  // 5. Establish Quantization Error Bounds
-  // Allow a tiny margin (e.g., 5e-2f) for floating-point accumulation sequence
-  // alterations
-  const float tol_low = (0.5f * unpacked_h.scale_factor_low) + 5e-2f;
-  const float tol_second = (0.5f * unpacked_h.scale_factor_second) + 1e-1f;
-
-  // --- ASSERTIONS ---
-  // Establish Quantization Error Bounds + 1% relative drift margin for float32
-  // tree reassociation
-  const float relative_margin = 0.01f;
-
+  // Helper lambda to calculate FP16-safe tolerance
+  auto get_fp16_tol = [](float ref_val) {
+    float abs_ref = std::abs(ref_val);
+    
+    // 1. Relative error tracking (approx 0.05% of the value)
+    float rel_err = abs_ref * 5e-4f; 
+    
+    // 2. Absolute floor to handle near-zero/subnormal values (accounting for FTZ)
+    float abs_floor = 6.5e-5f; 
+    
+    return rel_err + abs_floor;
+  };
+  
   // Verify Zero Order
   EXPECT_NEAR(unpacked_h.zero_order.x, ref_zero.x,
-              (0.5f * unpacked_h.scale_factor_low) +
-                  (relative_margin * std::abs(ref_zero.x)));
+              get_fp16_tol(ref_zero.x));
   EXPECT_NEAR(unpacked_h.zero_order.y, ref_zero.y,
-              (0.5f * unpacked_h.scale_factor_low) +
-                  (relative_margin * std::abs(ref_zero.y)));
+              get_fp16_tol(ref_zero.y));
   EXPECT_NEAR(unpacked_h.zero_order.z, ref_zero.z,
-              (0.5f * unpacked_h.scale_factor_low) +
-                  (relative_margin * std::abs(ref_zero.z)));
+              get_fp16_tol(ref_zero.z));
 
   // Verify First Order
   for (int i = 0; i < 9; ++i) {
-    float tol = (0.5f * unpacked_h.scale_factor_low) +
-                (relative_margin * std::abs(ref_first.data[i]));
+    float tol = get_fp16_tol(ref_first.data[i]);
     EXPECT_NEAR(unpacked_h.first_order.data[i], ref_first.data[i], tol);
   }
 
   // Verify Second Order
   for (int i = 0; i < 18; ++i) {
-    float tol = (0.5f * unpacked_h.scale_factor_second) +
-                (relative_margin * std::abs(ref_second.data[i]));
+    float tol = get_fp16_tol(ref_second.data[i]);
     EXPECT_NEAR(unpacked_h.second_order.data[i], ref_second.data[i], tol);
   }
 }

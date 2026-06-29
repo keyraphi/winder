@@ -167,10 +167,10 @@ TEST(MortonPipeline, FullSequenceTest) {
   EXPECT_FLOAT_EQ(scene_bounds.max.x, 10.0f);
 
   // --- STEP 2: MORTON GENERATION ---
-  Vec3 extent = scene_bounds.max - scene_bounds.min;
+  Vec3 extent = Vec3::from_f16(scene_bounds.max - scene_bounds.min);
   float max_dim = fmaxf(extent.x, fmaxf(extent.y, extent.z));
   float scale = (max_dim > 1e-9f) ? 1.0f / max_dim : 0.0f;
-  Vec3 min_p = scene_bounds.min;
+  Vec3 min_p = Vec3::from_f16(scene_bounds.min);
 
   thrust::transform(points_begin, points_begin + m_count,
                     m_morton_codes.begin(), MortonTransform{min_p, scale});

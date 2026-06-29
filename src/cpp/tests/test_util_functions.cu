@@ -79,9 +79,9 @@ TEST(AABB, MergeUnbalanced) {
   Vec3 expected_com = (a_com * a_count + b_com * b_count) / (a_count + b_count);
 
   // Error propagation in merge through quantization
-  Vec3 err_a = a.diagonal() / (2.F * 255.F);
-  Vec3 err_b = b.diagonal() / (2.F * 255.F);
-  Vec3 err_merged = merged.diagonal() / (2.F * 255.F);
+  Vec3 err_a = Vec3::from_f16(a.diagonal()) / (2.F * 255.F);
+  Vec3 err_b = Vec3::from_f16(b.diagonal()) / (2.F * 255.F);
+  Vec3 err_merged = Vec3::from_f16(merged.diagonal()) / (2.F * 255.F);
   float a_factor = (float)a_count / (float)(a_count + b_count);
   float b_factor = (float)b_count / (float)(a_count + b_count);
   Vec3 expected_error = (err_a * a_factor) + (err_b * b_factor) + err_merged;

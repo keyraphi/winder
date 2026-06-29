@@ -8,5 +8,8 @@
 void compute_internal_tailor_coefficients_m2m(
     BVH8Node *nodes, const uint32_t *internal_parent_map,
     const AABB *leaf_aabbs, const TailorCoefficientsF16 *leaf_coefficients,
-    const uint32_t *leaf_parents, const LeafPointers *leaf_pointers, TailorCoefficients *m2m_f32_coefficients,
-    uint32_t leaf_count, uint32_t *atomic_counters, const cudaStream_t &stream = 0);
+    const uint32_t *leaf_parents, const LeafPointers *leaf_pointers,
+    TailorCoefficientsF16 *node_tailor_coefficients,
+    TailorCoefficients *m2m_f32_coefficients, const uint32_t *nodes_child_count,
+    uint32_t leaf_count, uint32_t *atomic_counters,
+    const cudaStream_t &stream = 0);
