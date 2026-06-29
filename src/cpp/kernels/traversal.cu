@@ -44,24 +44,20 @@ load_shared_cooperative(T *shared_dst, const T *global_src, uint32_t lane_id) {
     if (lane_id < 16) {
       dst_u32[lane_id] = src_u32[lane_id];
     }
-  }
-  else if constexpr (words == 8) { // BVH8Node / LeafPointers (32 bytes)
+  } else if constexpr (words == 8) { // BVH8Node / LeafPointers (32 bytes)
     if (lane_id < 8) {
       dst_u32[lane_id] = src_u32[lane_id];
     }
-  }
-  else { // Generic fallback
+  } else { // Generic fallback
     for (uint32_t i = lane_id; i < words; i += 32) {
       dst_u32[i] = src_u32[i];
     }
   }
 }
 
-
 template <IsGeometry Geometry>
 __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
-    const Vec3 *__restrict__ queries,
-    const uint32_t *__restrict__ sort_indirections,
+    const SoAView<Vec3> queries, const uint32_t *__restrict__ sort_indirections,
     const BVH8Node *__restrict__ bvh8_nodes,
     const LeafPointers *__restrict__ bvh8_leaf_pointers,
     const TailorCoefficientsF16 *__restrict__ node_coefficients,
@@ -111,8 +107,8 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
       my_required_stack_depth = -1;
     } else {
       // load query with sort indirections
+      my_query = Vec3::load(queries, my_query_idx, query_count);
       original_query_idx = sort_indirections[my_query_idx];
-      my_query = queries[original_query_idx];
     }
     float my_winding_number = 0.F;
 
@@ -308,7 +304,7 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
 
 template <IsGeometry Geometry>
 __global__ void compute_winding_numbers_single_leaf_kernel(
-    const Vec3 *queries, const uint32_t *sort_indirections,
+    const SoAView<Vec3> sorted_queries, const uint32_t *sort_indirections,
     const SoAView<Geometry> sorted_geometry, const uint32_t query_count,
     const uint32_t geometry_count, float *winding_numbers,
     const float inv_epsilon) {
@@ -326,8 +322,7 @@ __global__ void compute_winding_numbers_single_leaf_kernel(
     return;
 
   // Load query
-  uint32_t original_idx = sort_indirections[my_query_idx];
-  Vec3 my_query = queries[original_idx];
+  Vec3 my_query = Vec3::load(sorted_queries, my_query_idx, query_count);
   float my_winding_number = 0.0f;
 
   // Since there is only one leaf, all geometry (1-32 elements)
@@ -340,6 +335,7 @@ __global__ void compute_winding_numbers_single_leaf_kernel(
   }
 
   // Write out results
+  uint32_t original_idx = sort_indirections[my_query_idx];
   winding_numbers[original_idx] = my_winding_number;
 }
 
@@ -358,9 +354,8 @@ void compute_winding_numbers(
     uint32_t blocks = (params.query_count + threads - 1) / threads;
     compute_winding_numbers_single_leaf_kernel<Geometry>
         <<<blocks, threads, 0, stream>>>(
-            params.queries, params.sort_indirections, params.sorted_geometry,
-            params.query_count, params.geometry_count, params.winding_numbers,
-            inv_epsilon);
+            params.sorted_queries, params.sort_indirections, params.sorted_geometry, params.query_count,
+            params.geometry_count, params.winding_numbers, inv_epsilon);
     return;
   }
 
@@ -383,7 +378,7 @@ void compute_winding_numbers(
   int blocks = blocks_per_sm * deviceProp.multiProcessorCount;
 
   compute_winding_numbers_kernel<Geometry><<<blocks, threads, 0, stream>>>(
-      params.queries, params.sort_indirections, params.bvh8_nodes,
+      params.sorted_queries, params.sort_indirections, params.bvh8_nodes,
       params.bvh8_leaf_pointers, params.node_coefficients,
       params.leaf_coefficients, params.leaf_aabbs, params.sorted_geometry,
       params.query_count, params.geometry_count, params.winding_numbers,

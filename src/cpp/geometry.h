@@ -14,10 +14,6 @@
 #include <string>
 #include <vector_types.h>
 
-template <typename T> struct SoAView {
-  const float *base_ptr;
-  size_t stride;
-};
 
 // symmetric 3x3 matrix for tailor coefficient computation
 struct SymMat3x3 {
