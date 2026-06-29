@@ -289,13 +289,13 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
 
 #pragma unroll
   for (int offset = 16; offset > 0; offset /= 2) {
-    p_min.x = fminf(p_min.x, __shfl_xor_sync(0xFFFFFFFF, p_min.x, offset));
-    p_min.y = fminf(p_min.y, __shfl_xor_sync(0xFFFFFFFF, p_min.y, offset));
-    p_min.z = fminf(p_min.z, __shfl_xor_sync(0xFFFFFFFF, p_min.z, offset));
+    p_min.x = __hmin(p_min.x, __shfl_xor_sync(0xFFFFFFFF, p_min.x, offset));
+    p_min.y = __hmin(p_min.y, __shfl_xor_sync(0xFFFFFFFF, p_min.y, offset));
+    p_min.z = __hmin(p_min.z, __shfl_xor_sync(0xFFFFFFFF, p_min.z, offset));
 
-    p_max.x = fmaxf(p_max.x, __shfl_xor_sync(0xFFFFFFFF, p_max.x, offset));
-    p_max.y = fmaxf(p_max.y, __shfl_xor_sync(0xFFFFFFFF, p_max.y, offset));
-    p_max.z = fmaxf(p_max.z, __shfl_xor_sync(0xFFFFFFFF, p_max.z, offset));
+    p_max.x = __hmax(p_max.x, __shfl_xor_sync(0xFFFFFFFF, p_max.x, offset));
+    p_max.y = __hmax(p_max.y, __shfl_xor_sync(0xFFFFFFFF, p_max.y, offset));
+    p_max.z = __hmax(p_max.z, __shfl_xor_sync(0xFFFFFFFF, p_max.z, offset));
 
     weighted_com.x += __shfl_xor_sync(0xFFFFFFFF, weighted_com.x, offset);
     weighted_com.y += __shfl_xor_sync(0xFFFFFFFF, weighted_com.y, offset);
@@ -305,7 +305,7 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
   }
   // compute center of mass for leaf
   center_of_mass =
-      weight >= 0.F ? (weighted_com / weight) : Vec3{0.F, 0.F, 0.F};
+      weight > 0.F ? (weighted_com / weight) : Vec3{0.F, 0.F, 0.F};
   // find max distance of center of mass to any element inside
   float dist_to_com =
       is_thread_active ? geometry.max_distance_to(center_of_mass) : 0.F;
