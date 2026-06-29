@@ -142,9 +142,6 @@ convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
       out_node.setAABB(parent_aabb);
       out_node.child_base = my_child_base;
 
-      // AABB Quantization & Writing out the BVH8Node
-      Vec3_f16 parent_min = parent_aabb.min;
-
       int internal_found = 0;
       uint32_t my_leaf_indices[8];
 
