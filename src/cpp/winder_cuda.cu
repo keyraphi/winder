@@ -775,106 +775,6 @@ void WinderBackend<Triangle>::solve_for_normals(
   throw std::runtime_error("solve_for_normals not implemented yet!");
 }
 
-#include <numeric>
-
-std::string generate_fp16_stats_report(
-    const std::vector<TailorCoefficientsF16> &leaf_coefficients,
-    const std::vector<TailorCoefficientsF16> &node_coefficients) {
-  auto analyze_target = [](const std::vector<TailorCoefficientsF16> &coeffs,
-                           std::string_view label) -> std::string {
-    if (coeffs.empty()) {
-      return std::format("=== {} ===\nNo data elements found in vector.\n\n",
-                         label);
-    }
-
-    // 1. Extract all 18 second-order values into standard floats
-    std::vector<float> values;
-    values.reserve(coeffs.size() * 18);
-    for (const auto &c : coeffs) {
-      for (int i = 0; i < 18; ++i) {
-        values.push_back(static_cast<float>(c.second_order.data[i]));
-      }
-    }
-
-    // Sort to easily calculate min, max, and median
-    std::sort(values.begin(), values.end());
-
-    size_t total_elements = values.size();
-    float min_val = values.front();
-    float max_val = values.back();
-
-    // Use double for accumulation to prevent intermediate float overflow
-    double sum = std::accumulate(values.begin(), values.end(), 0.0);
-    float mean_val = static_cast<float>(sum / total_elements);
-
-    float median_val =
-        (total_elements % 2 == 0)
-            ? (values[total_elements / 2 - 1] + values[total_elements / 2]) *
-                  0.5F
-            : values[total_elements / 2];
-
-    // 2. Build the descriptive text block
-    std::string report = std::format(
-        "========================================================\n");
-    report += std::format(" {} \n", label);
-    report += std::format(
-        "========================================================\n");
-    report += std::format("Total Values Evaluated: {}\n", total_elements);
-    report += std::format("Min value:              {:e}\n", min_val);
-    report += std::format("Max value:              {:e}\n", max_val);
-    report += std::format("Mean average:           {:e}\n", mean_val);
-    report += std::format("Median point:           {:e}\n\n", median_val);
-
-    // 3. Generate 30-bin histogram data
-    const int num_bins = 3000;
-    std::vector<size_t> bins(num_bins, 0);
-    float range = max_val - min_val;
-
-    if (range > 0.0F) {
-      for (float v : values) {
-        int bin_idx = static_cast<int>((v - min_val) / range * num_bins);
-        if (bin_idx >= num_bins)
-          bin_idx = num_bins - 1; // Handle precise edge at max_val
-        bins[bin_idx]++;
-      }
-    } else {
-      bins[0] = total_elements; // All values are identical
-    }
-
-    // Find highest bin count to scale the ASCII visualization bar dynamically
-    size_t max_bin_count = *std::max_element(bins.begin(), bins.end());
-
-    // 4. Format the histogram table
-    report += std::format("{:<24} | {:<10} | {}\n", "Value Interval Range",
-                          "Count", "Distribution Density");
-    report += "--------------------------------------------------------\n";
-
-    for (int i = 0; i < num_bins; ++i) {
-      float bin_start = min_val + (static_cast<float>(i) / num_bins) * range;
-      float bin_end = min_val + (static_cast<float>(i + 1) / num_bins) * range;
-
-      // Generate ASCII bar indicator (scaled up to max 25 characters wide)
-      std::string visual_bar = "";
-      if (max_bin_count > 0 && bins[i] > 0) {
-        size_t bar_length = (bins[i] * 25) / max_bin_count;
-        visual_bar = std::string(std::max(size_t(1), bar_length), '*');
-      }
-
-      report += std::format("[{:>9.2e}, {:>9.2e}) | {:>9} | {}\n", bin_start,
-                            bin_end, bins[i], visual_bar);
-    }
-    report += "--------------------------------------------------------\n\n";
-    return report;
-  };
-
-  std::string complete_report;
-  complete_report +=
-      analyze_target(leaf_coefficients, "LEAF LEVEL SECOND-ORDER COEFFICIENTS");
-  complete_report += analyze_target(node_coefficients,
-                                    "INTERNAL NODE SECOND-ORDER COEFFICIENTS");
-
-  return complete_report;
-}
 
 template <IsGeometry Geometry>
 auto WinderBackend<Geometry>::dump() const -> std::string {
@@ -1141,9 +1041,6 @@ auto WinderBackend<Geometry>::dump() const -> std::string {
   }
 
   result += "}\n";
-  // TODO
-  result = generate_fp16_stats_report(leaf_coefficients, node_coefficients);
-  // END TODO
   return result;
 }
 
