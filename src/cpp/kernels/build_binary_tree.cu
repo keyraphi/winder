@@ -350,7 +350,7 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
   // For that reason second_order also only contains 18 unique values. We don't
   // compute/store duplicates.
   // For inactive threads result is 0 (neutral wrt +)
-  geometry.get_tailor_terms(center_of_mass, is_thread_active, zero_order,
+  geometry.get_taylor_terms(center_of_mass, is_thread_active, zero_order,
                             first_order, second_order);
 
   // aggregate zero order

@@ -98,7 +98,7 @@ struct Triangle {
   __host__ __device__ __forceinline__ auto get_scaled_normal() const -> Vec3;
 
   __host__ __device__ __forceinline__ auto
-  get_tailor_terms(const Vec3 &p_center, bool is_active, Vec3 &zero_order,
+  get_taylor_terms(const Vec3 &p_center, bool is_active, Vec3 &zero_order,
                    Mat3x3 &first_order, Tensor3_compressed &second_order) const
       -> void;
 
@@ -133,7 +133,7 @@ struct PointNormal {
   __host__ __device__ __forceinline__ auto centroid() const -> Vec3;
   __host__ __device__ __forceinline__ auto get_scaled_normal() const -> Vec3;
   __host__ __device__ __forceinline__ auto
-  get_tailor_terms(const Vec3 &p_center, bool is_active, Vec3 &zero_order,
+  get_taylor_terms(const Vec3 &p_center, bool is_active, Vec3 &zero_order,
                    Mat3x3 &first_order, Tensor3_compressed &second_order) const
       -> void;
 
@@ -197,7 +197,7 @@ __host__ __device__ __forceinline__ auto PointNormal::get_scaled_normal() const
 }
 
 __host__ __device__ __forceinline__ auto
-Triangle::get_tailor_terms(const Vec3 &p_center, bool is_active,
+Triangle::get_taylor_terms(const Vec3 &p_center, bool is_active,
                            Vec3 &zero_order, Mat3x3 &first_order,
                            Tensor3_compressed &second_order) const -> void {
   if (is_active) {
@@ -253,7 +253,7 @@ Triangle::get_tailor_terms(const Vec3 &p_center, bool is_active,
 }
 
 __host__ __device__ __forceinline__ auto
-PointNormal::get_tailor_terms(const Vec3 &p_center, bool is_active,
+PointNormal::get_taylor_terms(const Vec3 &p_center, bool is_active,
                               Vec3 &zero_order, Mat3x3 &first_order,
                               Tensor3_compressed &second_order) const -> void {
   if (is_active) {
@@ -395,7 +395,7 @@ concept IsGeometry =
       { g.centroid() } -> std::same_as<Vec3>;
       { g.get_weight() } -> std::same_as<float>;
       { g.max_distance_to(p) } -> std::same_as<float>;
-      { g.get_tailor_terms(p, active, z, m, t) } -> std::same_as<void>;
+      { g.get_taylor_terms(p, active, z, m, t) } -> std::same_as<void>;
       { g.contributionToQuery(p, f) } -> std::same_as<float>;
     };
 

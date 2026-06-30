@@ -121,7 +121,7 @@ __global__ void tailor_terms_kernel(const Geometry *g, const Vec3 *center,
   if (id >= count) {
     return;
   }
-  g[id].get_tailor_terms(center[id], true, zero_order[id], first_order[id],
+  g[id].get_taylor_terms(center[id], true, zero_order[id], first_order[id],
                          second_order[id]);
 }
 
@@ -367,7 +367,7 @@ TEST(TaylorApproximation, Triangle) {
     Vec3 zero_order;
     Mat3x3 first_order;
     Tensor3_compressed second_order;
-    tri.get_tailor_terms(com, true, zero_order, first_order, second_order);
+    tri.get_taylor_terms(com, true, zero_order, first_order, second_order);
 
     zero_order_sum += zero_order;
     first_order_sum += first_order;
@@ -453,7 +453,7 @@ TEST(TaylorApproximation, TriangleRandomized) {
     Vec3 zero_order;
     Mat3x3 first_order;
     Tensor3_compressed second_order;
-    tri.get_tailor_terms(com, true, zero_order, first_order, second_order);
+    tri.get_taylor_terms(com, true, zero_order, first_order, second_order);
 
     zero_order_sum += zero_order;
     first_order_sum += first_order;
@@ -541,7 +541,7 @@ TEST(TaylorApproximation, PointNormal) {
     Vec3 zero_order;
     Mat3x3 first_order;
     Tensor3_compressed second_order;
-    pn.get_tailor_terms(com, true, zero_order, first_order, second_order);
+    pn.get_taylor_terms(com, true, zero_order, first_order, second_order);
 
     zero_order_sum += zero_order;
     first_order_sum += first_order;
@@ -620,7 +620,7 @@ TEST(TaylorApproximation, PointNormalRandomized) {
     Vec3 zero_order;
     Mat3x3 first_order;
     Tensor3_compressed second_order;
-    pn.get_tailor_terms(com, true, zero_order, first_order, second_order);
+    pn.get_taylor_terms(com, true, zero_order, first_order, second_order);
 
     zero_order_sum += zero_order;
     first_order_sum += first_order;
