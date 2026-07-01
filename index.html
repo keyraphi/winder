@@ -75,7 +75,7 @@
                 </span>
                 <span class="text-slate-600 hidden sm:inline">•</span>
                 <span class="flex items-center gap-1.5">
-                    <span class="text-amber-400">💾</span> Mixed Precision for Max Speed
+                    <span class="text-amber-400">💾</span> Optimized for Speed and Flexibility
                 </span>
             </div>
 
@@ -92,59 +92,125 @@
     </header>
 
     <main class="max-w-5xl mx-auto px-4 py-12 space-y-16">
-      <section class="bg-white p-8 rounded-xl shadow-xs border border-slate-200/80">
+    <section class="bg-white p-8 rounded-xl shadow-xs border border-slate-200/80">
     <h2 class="text-2xl font-bold border-b border-slate-200 pb-3 mb-6 text-slate-900 flex items-center gap-2">
-        <span class="text-cyan-600">01.</span>Winding Numbers: Introduction &amp; Topological Foundations
+        <span class="text-cyan-600">01.</span>Winding Numbers: Introduction &amp; Motivation
     </h2>
 
     <div class="mb-10 bg-gradient-to-r from-slate-50 to-cyan-50/30 p-6 rounded-xl border border-slate-200/60">
-        <h3 class="text-lg font-bold text-slate-900 mb-2 flex items-center gap-2">
+        <h3 class="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
             🧭 The Inside-Outside Dilemma: A Story of Broken Geometry
         </h3>
-        <div class="text-slate-600 text-sm md:text-base space-y-4 leading-relaxed">
+        
+        <div class="text-slate-600 text-sm md:text-base space-y-4 leading-relaxed max-w-none mb-8">
             <p>
-                Imagine you are slicing a 3D model for a 3D printer, rendering a complex video game asset, or training a neural network
-                to understand 3D shapes. Your first, most fundamental question is always:
-                <span class="text-slate-900 font-semibold">"Is this point inside the object, or outside in empty air?"</span>
+                Imagine you are slicing a crappy 3D model for a 3D printer, converting a complex video game asset into a signed distance field, or you are training a
+                neural network to understand 3D shapes from real-world 3D scans. All those cases, are so much easier to handle if the 3D representation has a property
+                that every object in the physical world possesses: a closed surface. Even a piece of paper has a front side, a thickness, and a back side.
             </p>
             <p>
-                If your 3D model is perfect, watertight, and sterile, this is easy. You cast a ray from your query point; if it crosses
-                the mesh boundary an odd number of times, you're inside. But the real world doesn't give us perfect data. Real-world 3D
-                data - whether harvested from raw LiDAR scans, chaotic CAD conversions, or unoptimized triangle meshes - it is inherently
-                <strong>broken</strong>. It is full of cracks, missing patches, self-intersections, and unorganized point clouds.
+                Most meshes - even hand-crafted ones - are built to look good when rendered into images, not to be topologically
+                correct. Native 3D scans consist only of disconnected point clouds, which are processed into more or less closed surfaces.
+                The simple question:
+                <span class="text-slate-900 font-semibold">"Is a given point inside the object, or outside in empty air?"</span> can be
+                exceptionally hard to answer reliably.
             </p>
             <p>
-                Classical ray-casting fails catastrophically here. A single microscopic hole acts like a puncture in a tire—the ray
-                "leaks" out, causing issues when you least expect them.
-            </p>
-
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 my-4 pt-2">
-                <div class="bg-white p-4 rounded-lg border border-slate-200 shadow-xs">
-                    <span class="font-bold text-rose-600 text-xs uppercase tracking-wider block mb-1">❌ Classical Boundaries</span>
-                    <p class="text-xs text-slate-500">Asks: <em>"Did I cross a line?"</em> Fragile, binary, and blind to broken geometry. A
-                      single missing triangle breaks the entire algorithm.</p>
-                </div>
-                <div class="bg-white p-4 rounded-lg border border-cyan-500/30 bg-cyan-50/10 shadow-xs">
-                    <span class="font-bold text-cyan-600 text-xs uppercase tracking-wider block mb-1">🔮 The Winding Number View</span>
-                    <p class="text-xs text-slate-500">Asks: <em>"How much of the object wraps around me?"</em> Global, continuous, and
-                      completely blind to defects. If 99% of a shape surrounds you, you are 99% inside.</p>
-                </div>
-            </div>
-
-            <p>
-            This is where the seminal work of <a href="https://dl.acm.org/doi/10.1145/2461912.2461916" target="_blank"
-              class="text-cyan-600 font-medium hover:underline">Robust Inside-Outside Segmentation using Generalized Winding Numbers
-              (Jacobson et al., 2013)</a> steps in. Instead of a brittle binary test, it treats your
-            3D shape as a gravitational-like field. It aggregates the perspective of every single surface element in a
-            smooth, continuous field.
+                If your 3D model is a perfect, watertight (manifold) mesh, this is easy. You cast a ray from your query point; if it crosses
+                the mesh boundary an odd number of times, you're inside. But perfect 3D models are rare. Real-world 3D
+                data—whether harvested from raw LiDAR scans, chaotic CAD conversions, or raw triangle meshes—is inherently
+                <strong>broken</strong>. It is full of cracks, missing patches, self-intersections, and floating geometry.
             </p>
             <p>
-                <span class="text-slate-900 font-semibold">Winder fully unlocks the beauty of this representation</span> for large scale
-                GPU optimizations. By adapting fast winding number algorithms for GPU and extending them to the partial derivatives Winder provides fully
-                differentiable, millisecond-level winding fields on raw, broken datasets on scale. Here is how that math actually unrolls.
+                Classical ray-casting can fail catastrophically with any microscopic topological flaw, completely breaking downstream processing pipelines.
             </p>
         </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start border-t border-slate-200/60 pt-6">
+            
+            <div class="lg:col-span-7 text-slate-600 text-sm md:text-base space-y-4 leading-relaxed">
+                <p>
+                    This is where the seminal work of <a href="https://dl.acm.org/doi/10.1145/2461912.2461916" target="_blank"
+                      class="text-cyan-600 font-medium hover:underline">Robust Inside-Outside Segmentation using Generalized Winding Numbers
+                      (Jacobson et al., 2013)</a> comes in. Instead of a brittle binary test, it treats your
+                    3D shape as a source for a continuous field, similar to how mass acts as a source for gravitational potential fields in physics.
+                    Generalized Winding Numbers aggregate the contribution - or "vote" - of every single surface element into a smooth, continuous field.
+                    Instead of a rigid binary answer, we get a continuous scalar factor tracking how many times the 3D shape wraps around the query point.
+                </p>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4">
+                    <div class="bg-white p-4 rounded-lg border border-slate-200 shadow-xs">
+                        <span class="font-bold text-rose-600 text-xs uppercase tracking-wider block mb-1">❌ Classical Boundaries</span>
+                        <p class="text-xs text-slate-500">Asks: <em>"Did I cross a line?"</em> Fragile, binary, and blind to broken geometry. A
+                          single missing triangle breaks the global spatial state.</p>
+                    </div>
+                    <div class="bg-white p-4 rounded-lg border border-cyan-500/30 bg-cyan-50/10 shadow-xs">
+                        <span class="font-bold text-cyan-600 text-xs uppercase tracking-wider block mb-1">🔮 The Winding Number View</span>
+                        <p class="text-xs text-slate-500">Asks: <em>"How much of the object wraps around me?"</em> Global, continuous, and
+                          robust to defects. If 99% of a shape surrounds you, you are 99% inside.</p>
+                    </div>
+                </div>
+                <p>
+                    For a perfect, watertight surface, a point inside has a winding number of $1$, indicating it is completely
+                    enclosed by geometry, while a point outside has a winding number of $0$.
+                    Remarkably, this formulation remains completely stable when confronting holes, intersecting surfaces, or severe
+                    topological defects.
+                    For instance, due to a missing patch or crack, an interior query point might capture an $80\%$ vote for being inside and
+                    a $20\%$ vote for being outside, yielding a graceful winding number of $0.8$.
+                    Conversely, an exterior point close to that same hole might register a winding number of $0.2$ by getting positive votes for surface
+                    elements visible through the opening. On highly corrupted meshes featuring self-intersections or duplicate faces, the
+                    field accommodates this by naturally producing values going below $0$ or above $1$.
+                </p>
+                <p>
+                    Crucially, away from the boundary geometry, the generalized winding number field is strictly <strong>harmonic</strong>,
+                    meaning it satisfies Laplace's equation ($\nabla^2 \mathcal{W} = 0$). In physical terms, this means the field behaves
+                    like steady-state heat distribution or a gravitational potential: it is as smooth as mathematically possible, completely
+                    devoid of sudden local spikes, maxima, or minima in empty space. It acts as an optimal global interpolator that bridges
+                    topological gaps automatically.
+                </p>
+                <p>
+                    This mathematical elegance elevates the winding field into a powerful, implicit 3D shape representation. Because the
+                    field equation can be queried at any arbitrary coordinate $x \in \mathbb{R}^3$, it possesses <strong>infinite spatial
+                      resolution</strong>, entirely unfettered by voxel grids or discrete memory arrays until evaluation. The true
+                    underlying surface of the shape is elegantly preserved as an <em>iso-surface</em> (a constant-value contour line) slicing
+                    through this continuous volume field, allowing downstream reconstruction algorithms to handle broken
+                    geometry.
+                </p>
+                <p>
+                    <span class="text-slate-900 font-semibold">Winder fully unlocks the beauty of this robust 3D representation</span> for large-scale
+                    GPU optimizations. By adapting the Fast Winding Number algorithm for the GPU and extending it to partial derivatives, Winder provides fully
+                    differentiable, millisecond-level winding fields on raw, broken datasets at scale. Here is how the math actually unrolls.
+                </p>
+            </div>
+
+            <div class="lg:col-span-5 lg:sticky lg:top-6 space-y-3">
+                <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-square shadow-md">
+                    <video 
+                        class="w-full h-full object-cover" 
+                        controls 
+                        preload="metadata"
+                        muted 
+                        playsinline
+                        poster="media/showcase_poster.jpg">
+                        <source src="media/showcase_video.mp4" type="video/mp4">
+                        Your browser does not support HTML5 video streaming.
+                    </video>
+                </div>
+                
+                <div class="mt-6 pt-4 border-t border-slate-200/60 text-xs text-slate-500 italic leading-relaxed">
+                    <strong>Figure 1.1: Generalized Winding Numbers Demonstration.</strong> The video above shows a 2.1M
+                    <a href="https://www.thingiverse.com/thing:3874385" target="_blank" class="text-cyan-600 font-medium hover:underline">
+                      3D printing asset</a> through three geometric states: clean, with high-frequency Gaussian noise, and open
+                    non-manifold topology (holes). <code>Winder</code> was used to computes the winding number field for all three configurations over a
+                    $512^3$ query grid in under 1 second each. The scalar winding number field goes from 0 meaning outside (blue) to 1 meaning inside (green).
+                    Colors in between show regions that are not 100% surrounded by geometry.
+                    We show a marching cubes reconstruction with varying thresholds on the $512^3$ winding number grid to demonstrate the smooth
+                    iso-surfaces inherent to the winding field representation.
+                </div>
+            </div>
+            
+        </div>
     </div>
+
 
     <div class="prose prose-slate max-w-none text-slate-600 leading-relaxed space-y-4">
         <h3 class="text-md font-bold uppercase tracking-wider text-slate-400 mt-8 mb-2">The Continuous Formulation</h3>
