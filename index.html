@@ -405,9 +405,9 @@
                       class="text-cyan-600 font-medium hover:underline">Barill et al. (2018)</a>.
                 </p>
                 <p>
-                    The structural coefficients grouped inside the parentheses depend entirely on internal node positions relative to
-                    $\tilde{p}$. They are independent of the query position $q$, meaning they can be precomputed for each cluster during
-                    tree construction and cached inside each node.
+                    The structural coefficients grouped inside the parentheses are entirely
+                    independent of the query position $q$, meaning they can be precomputed for each cluster during
+                    tree construction and cached inside each node to be used for all queries.
                 </p>
 
                 <h4 class="text-sm font-bold text-slate-700 tracking-wide uppercase mt-6">Triangle Soup Expansion Formulation</h4>
@@ -436,7 +436,7 @@
                 <p>
                   To compute the winding number of a set of queries the constructed tree is traversed by all queries. The entire contribution of
                   branches that are identified as "Far Field" are computed using the tailor expansion shown above with the coefficients stored in the current node.
-                  To determine that for a given query $q$ a node is in the far field each node stores its center of mass $\tilde{p}$ and the maximum distance $\tilde{r}$ of
+                  To determine that for a given query $q$ a node is in the far field, each node stores its center of mass $\tilde{p}$ and the maximum distance $\tilde{r}$ of
                   any contained geometry element to that center of mass.
                   The sub-tree represented by the node is considered "Far Field" w.r.t. $q$ if:
                 </p>
@@ -447,7 +447,7 @@
                   $\beta$ is a hyper parameter that can be set by the user to tune how aggressive the algorithm approximates sub-trees. Larger $\beta$ lead to preciser, but slower results.
                 </p>
 
-                <h4 class="text-sm font-bold text-slate-700 tracking-wide uppercase mt-6">Asymptotic Complexity Mapping</h4>
+                <h4 class="text-sm font-bold text-slate-700 tracking-wide uppercase mt-6">Complexity</h4>
                 <p>
                     The expansion can theoretically be extended to higher orders indefinitely. However Barill eg al. found that, in
                     practice, expanding beyond the second order ($p=2$) yields diminishing accuracy returns relative to the computational
@@ -472,30 +472,44 @@
         </section>
 
         <section class="bg-white p-8 rounded-xl shadow-xs border border-slate-200/80">
-            <h2 class="text-2xl font-bold border-b border-slate-200 pb-3 mb-4 text-slate-900 flex items-center gap-2">
+            <h2 class="text-2xl font-bold border-b border-slate-200 pb-3 mb-6 text-slate-900 flex items-center gap-2">
                 <span class="text-cyan-600">03.</span> Differentiability: Motivation &amp; Bottlenecks in Field-Based Optimization
             </h2>
             <div class="prose prose-slate max-w-none text-slate-600 leading-relaxed space-y-6">
 
-                <h3 class="text-lg font-semibold text-slate-800 mt-2 mb-1">1. Global Gradient Propagation</h3>
-                <p>
-                    The core motivation for constructing a differentiable winding number field stems from its mathematical formulation as a
-                    global summation. Because the winding potential $w(x)$ at any point in space integrates the collective influence of all
-                    primitives, <strong>every single geometry element contributes to the continuous field.</strong>
-                </p>
-                <p>
-                    Unlike signed distance fields or discrete voxel grids—which suffer from localized clipping or zero-gradient dead
-                    zones—the winding number landscape provides an uninterrupted gradient flow. An error or loss metric evaluated at any
-                    arbitrary query position $x$ can be backpropagating directly to every point-normal or triangle vertex in the scene. This
-                    unlocks long-range spatial signals, allowing optimization routines to steer and correct geometry from anywhere in the
-                    field.
-                </p>
+                <div>
+                    <h3 class="text-lg font-semibold text-slate-900 mt-2 mb-2 flex items-center gap-2">
+                        <span>1.</span> Global Gradient Propagation
+                    </h3>
+                    <div class="space-y-4">
+                        <p>
+                            The core motivation for constructing a differentiable winding number field stems from its mathematical formulation as a
+                            global summation. Because the winding potential $\mathcal{W}(x)$ at any point in space integrates the collective influence of all
+                            primitives, <strong>every single geometry element contributes to the continuous field.</strong>
+                        </p>
+                        <p>
+                            Unlike Signed Distance Fields (SDFs) or discrete voxel grids—which suffer from localized clipping, sharp gradient discontinuities, or zero-gradient dead
+                            zones—the winding number landscape provides an uninterrupted, infinitely smooth gradient flow. This is a direct
+                            consequence of its <strong>harmonic nature</strong> away from boundaries: Because the field satisfies $\nabla^2
+                            \mathcal{W} = 0$, it is structurally barred from forming localized coordinate traps, local maxima, or local minima in
+                            empty space.
+                        </p>
+                        <p>
+                            Consequently, an error or loss metric evaluated at any arbitrary query position $x$ can be backpropagated directly to
+                            every point-normal or triangle vertex in the scene. This unlocks long-range spatial signals, allowing optimization
+                            routines to smoothly steer, deform, and correct geometry from anywhere in the field.
+                        </p>
+                    </div>
+                </div>
 
-                <h3 class="text-lg font-semibold text-slate-800 mt-6 mb-1">2. Analysis of Existing Frameworks</h3>
-                <p>
-                    While several contemporary works leverage this global differentiability, they remain constrained by architectural
-                    bottlenecks or specialized use cases:
-                </p>
+                <div class="pt-2">
+                    <h3 class="text-lg font-semibold text-slate-800 mb-3 flex items-center gap-2">
+                        <span>2.</span> Analysis of Existing Frameworks
+                    </h3>
+                    <p class="mb-4">
+                        While several contemporary works leverage this global differentiability, they remain constrained by severe architectural
+                        bottlenecks, lack of structural scaling, or specialized application scenarios:
+                    </p>
 
                 <ul class="list-disc list-inside space-y-4 text-sm text-slate-600 pl-2">
                     <li>
@@ -505,35 +519,49 @@
                         point clouds. However, its implementation relies on a dense linear least-squares solver (<code>torch.lsqr</code>) to
                         optimize the area-scaled normals. They formulate a dense linear system $Ax=b$ with $A$ having shape $3N\times 3N$, which
                         is solved once in every single optimization step to derive their loss "winding clearness". The used LU
-                        decomposition has a time complexity of $\mathcal(O)((3N)^3)$ and memory complexity of $\mathcal(O)((3N)^2).
+                        decomposition has a time complexity of $\mathcal{O}((3N)^3)$ and memory complexity of $\mathcal{O}((3N)^2)$.
                         This complexity limits the usefulness of the approach to point clouds with only a couple of thousand points.
                     </li>
                     <li>
-                        <strong>Fast Dipole Sums (Chen et al. — Application Silos &amp; Build Overhead):</strong> This method by <a
+                        <strong>Fast Dipole Sums:</strong> This method by <a
                           href="https://dl.acm.org/doi/10.1145/3687914" target="_blank" class="text-cyan-600 font-medium hover:underline">Chen
-                          et al.</a> successfully applies differentiable winding queries to an inverse rendering pipeline, introducing a crucial
-                        spatial regularization kernel to smooth out proximity singularities near point sources. However, the system is
-                        hardlocked to its specific neural radiance field use case. It completely lacks gradients for point positions (relying on
+                          et al.</a> successfully applies differentiable fast winding fields to an inverse rendering pipeline, introducing a
+                        spatial regularization kernel to smooth out proximity singularities near points. However, the system is
+                        limited to its specific neural radiance field use case. It completely lacks gradients for point positions (relying on
                         fixed Structure-from-Motion initializations), provides no support for triangle mesh primitives, and suffers from an
-                        unparallelized Octree generation routine with very slow initialization times.
+                        unparallelized Octree generation routine with very slow initialization times. While using the Fast Winding Numbers algorithm
+                        they only use a truncated zero order Taylor approximation for the far field, which reduces precision by an order of magnitude (RMS).
                     </li>
                 </ul>
+                </div>
 
-                <h3 class="text-lg font-semibold text-slate-800 mt-6 mb-1">3. A General-Purpose Winding Number Field</h3>
-                <p>
-                    <code>Winder</code> decouples the differentiable winding field from any specific downstream task or rigid solver
-                    constraint. It is built as an application-agnostic, high-performance GPU engine designed to handle
-                    any kind of optimization involving winding number fields at scale.
-                </p>
-                <p>
-                    By supporting full analytical gradients for point positions, area-scaled normals, and triangle vertices simultaneously,
-                    it unlocks the true potential of winding number fields in optimizations. <code>Winder</code> uses an ultra-fast,
-                    GPU acceleration structure turning the winding field into a new fundamental primitive and first class citizen in
-                    large-scale graphics and machine learning pipelines.
-                </p>
+                <div class="pt-4">
+                    <h3 class="text-lg font-semibold text-slate-800 mb-2 flex items-center gap-2">
+                        <span>3.</span> A General-Purpose Winding Number Field
+                    </h3>
+                    <div class="space-y-4">
+                        <p>
+                            <code>Winder</code> decouples the differentiable winding field from any specific downstream task or rigid solver
+                            constraint. It is engineered as an application-agnostic, high-performance GPU engine designed to handle
+                            any arbitrary optimization routine involving winding number fields at real-world scale.
+                        </p>
+                        <p>
+                            By supporting full, simultaneous analytical gradients for point positions, area-scaled normals, and triangle vertices, <code>Winder</code> fully exposes the continuous landscape of the winding field to modern gradient-based solvers. 
+                        </p>
+                        <p>
+                            Instead of relying on slow CPU trees or crushing dense matrix solvers, <code>Winder</code> computes these complex
+                            derivatives via a highly parallelized, fully differentiable GPU acceleration structure. By lifting classical
+                            complexity constraints, the continuous winding field is transformed from a computationally prohibitive luxury into an
+                            efficient, first-class mathematical primitive ready for large-scale computer vision, physical simulation, and deep
+                            learning pipelines.
+                        </p>
+                    </div>
+                </div>
 
             </div>
         </section>
+
+
 
         <section class="bg-white p-8 rounded-xl shadow-xs border border-slate-200/80">
             <h2 class="text-2xl font-bold border-b border-slate-200 pb-3 mb-4 text-slate-900 flex items-center gap-2">
@@ -561,12 +589,12 @@
                     <div class="border-b sm:border-b-0 sm:border-r border-slate-200 pb-4 sm:pb-0 sm:pr-4">
                         <span class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Fast Dipole Sums Build (Octree)</span>
                         <span class="block text-3xl font-extrabold text-rose-600 mt-1">566.2 <span class="text-xl font-normal text-slate-500">sec</span></span>
-                        <span class="block text-xs text-slate-500 mt-1">Static offline build executed over <strong>5,559,132 points</strong></span>
+                        <span class="block text-xs text-slate-500 mt-1">Static offline build executed over <strong>2,559,132 points</strong></span>
                     </div>
                     <div class="pt-4 sm:pt-0 sm:pl-4">
                         <span class="block text-xs font-semibold uppercase tracking-wider text-cyan-600">Winder Build (GPU Parallel BVH8)</span>
-                        <span class="block text-3xl font-extrabold text-emerald-600 mt-1">0.0145 <span class="text-xl font-normal text-slate-500">sec</span></span>
-                        <span class="block text-xs text-slate-500 mt-1">Dynamic on-the-fly execution over <strong>5,559,132 points</strong></span>
+                        <span class="block text-3xl font-extrabold text-emerald-600 mt-1">0.0132 <span class="text-xl font-normal text-slate-500">sec</span></span>
+                        <span class="block text-xs text-slate-500 mt-1">Online build execution over <strong>2,559,132 points</strong></span>
                     </div>
                 </div>
                     <span class="text-xs text-slate-500 block mt-2 italic">
@@ -580,20 +608,28 @@
                     To achieve this millisecond build speed, <code>Winder</code> utilizes a parallel <a
                       href="https://ieeexplore.ieee.org/document/8781571/" target="_blank"
                       class="text-cyan-600 font-medium hover:underline">Bounding Volume Hierarchy
-                      (LBVH)</a>. It utilizes a clever trick of formulating a BVH as a radix tree on the Morton order of the underlying
-                      geometry. The resulting binary tree is then
-                      converted into a more traversal friendly, wide 8-ary structure (<strong>BVH8</strong>), where each node has up to 8 children.
+                      (LBVH)</a>. The trick is to sort the underlying geometry by the Morton order (Z-order), which can be done with a radix
+                      sort (linear complexity).
+                      The tree structure can be built on top of the sorted geometry in parallel, where each thread evaluates adjacent
+                      primitives to establish node boundaries independently. This avoids expensive top-down spatial partitioning and
+                      guarantees a predictable, linear construction time.
+                      The resulting binary tree is then converted into a more traversal friendly, wide 8-ary structure
+                      (<strong>BVH8</strong>), where each node has up to 8
+                      children. This conversion also runs in O(N) linear time using a single, persistent cooperative kernel pass. By utilizing
+                      fast on-chip shared memory scans to manage thread work-allocation and executing vectorized 32-byte writes, the
+                      implementation minimizes global memory overhead while greedily collapsing the binary levels.
                 </p>
                 <p>
                     The tree is getting even more shallow because every leaf node contains 32 geometry primitives.
                     This leaf size choice is a deliberate hardware play. Because NVIDIA GPU warps consists of exactly 32 execution
-                    lanes, a 32-element leaf structure unlocks massive "warp magic":
+                    lanes, a 32-element leaf structure brings some nice advantages:
                 </p>
                 <ul class="list-disc list-inside space-y-2 text-sm text-slate-600 pl-2">
                     <li><strong>Zero Intra-Warp Divergence:</strong> Whole warps cooperatively traverse down the tree and unroll leaf
                       evaluations simultaneously, completely bypassing execution lane stalls.</li>
                     <li><strong>Hardware Registries &amp; Shuffles:</strong> Internal evaluation components utilize lightning-fast
                       register-level data shuffling (<code>__shfl_sync</code>), mitigating costly localized VRAM and shared memory round trips.</li>
+                    <li><strong>Shared Data:</strong> As all warps cooperatively traverse the tree they can also share- and cooperatively load data from VRAM.</li>
                 </ul>
                 <blockquote>
                     <p class="text-xs text-slate-500 bg-slate-50 p-3 rounded-lg border-l-4 border-amber-500/70">
@@ -601,6 +637,12 @@
                         In regions with sparse geometry, leaves can become oversized and loose,
                         failing to bound the underlying points as tightly as an offline-built Octree would. This can also be seen in the video with
                         the video below with the big green leaf boxes.
+                    </p>
+                    <p class="text-xs text-slate-500 bg-slate-50 p-3 rounded-lg border-l-4 border-amber-500/70">
+                        <strong>The Work Load:</strong> Each thread in a warp is responsible for a different query. Coopertively traversing the
+                        tree forces threads whose queries are not even interested in certain subtrees
+                        to still go along and help other threads, instead of continuing their own work. We empirically found that with morton
+                        sorted queries the cooperation still pays off massively.
                     </p>
                 </blockquote>
 
@@ -613,7 +655,14 @@
                 <ul class="list-disc list-inside space-y-3 text-sm text-slate-600 pl-2">
 
                     <li><strong>float16 Far-Field Math:</strong> All calculations in the far-field are done in the
-                      <code>float16</code> or <code>bfloat16</code> floating-point format, leading to high computational throughput.</li>
+                      <code>float16</code> loating-point format or <code>bfloat16</code> for the second order Taylor contributions, leading to
+                      high computational throughput thanks to 
+                      <a href="https://docs.nvidia.com/cuda/cuda-math-api/cuda_math_api/group__CUDA__MATH____HALF2__ARITHMETIC.html"
+                        target="_blank" class="text-cyan-600 font-medium hover:underline"><code>Half2 Arithmetic Functions</code></a> and
+                      <a href="https://docs.nvidia.com/cuda/cuda-math-api/cuda_math_api/group__CUDA__MATH____BFLOAT162__ARITHMETIC.html"
+                        target="_blank" class="text-cyan-600 font-medium hover:underline">
+                        <code>Bfloat162 Arighmetic Functions</code></a> respectively on modern CUDA GPUs.
+                    </li>
 
                     <li><strong>Cache Alignment:</strong> Super slim 32-byte BVH8 nodes and the 64 byte tailor coefficients,
                       are loaded cooperatively by entire warps. They are perfectly aligned to L2 cache lines to guarantee maximum memory
