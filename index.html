@@ -603,7 +603,7 @@
                         significantly more performant tree-building routine. However, it underscores the build-centric focus of Winder.
                     </span>
 
-                <h3 class="text-lg font-semibold text-slate-800 mt-6 mb-1">2. Warp-Cooperative Leaf Design &amp; Spatial Penalties</h3>
+                <h3 class="text-lg font-semibold text-slate-800 mt-6 mb-1">2. BVH8 and Cooperative Traversal</h3>
                 <p>
                     To achieve this millisecond build speed, <code>Winder</code> utilizes a parallel <a
                       href="https://ieeexplore.ieee.org/document/8781571/" target="_blank"
@@ -646,9 +646,10 @@
                     </p>
                 </blockquote>
 
-                <h3 class="text-lg font-semibold text-slate-800 mt-6 mb-1">3. Compounding Speed: Compensating via Hardware Quantization</h3>
+                <h3 class="text-lg font-semibold text-slate-800 mt-6 mb-1">3. Hardware Co-design</h3>
                 <p>
-                    Because the spatial bounding structure is more loose to favor ultra-fast generation, the evaluation pass may face
+                    Because the spatial bounding structure is more loose and has large leafs to favor ultra-fast generation, the evaluation
+                    pass may face
                     a slightly higher computational workload. <code>Winder</code> accepts this structural penalty, but does everything to make
                     the traversal blisteringly fast through extreme hardware co-design:
                 </p>
@@ -671,7 +672,7 @@
                     <li><strong>Second-Order Taylor Expansions:</strong> Winder uses second-order Taylor approximations in the far field.
                       Note: The precision of winder is still slightly lower compared to the <code>float32</code>
                       second-order baseline of the original <em>Fast Winding Numbers</em> due to
-                      the lower precision <code>float16</code> and <code>bfloat16</code> computations.</li>
+                      the lower precision of <code>float16</code> and <code>bfloat16</code> computations.</li>
                 </ul>
 
                 <div class="my-8">
@@ -682,19 +683,20 @@
                         Real BVH8 visualization for benchy.obj
                     </span>
                     <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video shadow-inner">
-                        <video class="w-full h-full object-cover" autoplay loop muted playsinline>
+                        <video class="w-full h-full object-cover" controls preload="metadata" loop muted playsinline>
                             <source src="media/promotion_video_endless.mp4" type="video/x-matroska">
                             Your browser does not support HTML5 video loops.
                         </video>
                     </div>
                     <span class="block text-xs text-slate-500 mt-1.5 italic">
-                        Figure 4.1: Visualization of the the wide 8-ary BVH8 (purple), and the leafs (green) we get from the morton order. Note the leafs can be quite large where the geometry is sparse.
+                        Figure 4.1: Visualization of the the wide 8-ary BVH8 (purple), and the leafs (green) we get from the morton order. Note
+                        the leafs can be quite large where the geometry is sparse.
                     </span>
                 </div>
 
-              <h3 class="text-lg font-semibold text-slate-800 mt-6 mb-1">4. Dynamic Query-Tree Inversion &amp; Mathematical Backpropagation</h3>
+            <h3 class="text-lg font-semibold text-slate-800 mt-6 mb-1">4. Partial Derivatives</h3>
               <p>
-                  To compute the derivative fields of generalized winding numbers for reverse-mode automatic differentiation, we map an
+                  To compute the partial derivatives of generalized winding numbers for reverse-mode automatic differentiation, we map an
                   incoming scalar adjoint gradient $g_j = \frac{\partial \mathcal{L}}{\partial w(x_j)} \in \mathbb{R}$ at each query
                   position $x_j$ back to the underlying spatial geometry. Depending on the input representation, the analytical vector
                   gradients ($\mathbb{R}^3$) for the three primitive configurations are defined as:
@@ -719,20 +721,96 @@
                   </div>
               </div>
 
+              <h4 class="text-sm font-semibold text-slate-700 mt-4 mb-2">Kernel Definitions</h4>
+              <p>
+                  Where the spatial displacement vector is defined as $r = x_j - p_i$ with magnitude $r = \|r\|$, the analytical forms of the 3D potential field kernels are given by:
+              </p>
+
+              <div class="my-4 bg-slate-50 p-4 rounded-lg border border-slate-200 text-sm space-y-4">
+                  <div>
+                      <span class="text-xs font-mono text-slate-500 block">Free-Space Green's Function Gradient ($\nabla G \in \mathbb{R}^3$):</span>
+                      $$\nabla G(r) = -\frac{r}{4\pi r^3}$$
+                  </div>
+                  <hr class="border-slate-200" />
+                  <div>
+                      <span class="text-xs font-mono text-slate-500 block">Spatial Hessian Matrix ($\mathbf{H}_G \in \mathbb{R}^{3 \times 3}$):</span>
+                      $$\mathbf{H}_G(r) = \frac{1}{4\pi r^5} \left( 3r r^T - r^2 \mathbf{I} \right)$$
+                      <span class="text-xs text-slate-500 mt-1 block">where $\mathbf{I}$ is the $3 \times 3$ identity matrix.</span>
+                  </div>
+                  <hr class="border-slate-200" />
+
+              <span class="text-xs font-mono text-slate-500 block">Triangle Solid Angle Vertex Gradient ($\frac{\partial
+                \Omega_t}{\partial v_k} \in \mathbb{R}^3$):</span>
+              <p class="text-xs text-slate-600 my-1">
+                  For a fixed query point $x_j$, let the relative vertex vectors be $a = v_1 - x_j$, $b = v_2 - x_j$, and $c = v_3 - x_j$,
+                  with corresponding unit vectors $\hat{a} = \frac{a}{\|a\|}$, $\hat{b} = \frac{b}{\|b\|}$, and $\hat{c} =
+                  \frac{c}{\|c\|}$. The solid angle $\Omega_t$ is defined via the Oosterom–Strackee formula mentioned previously:
+              </p>
+              $$N = a \cdot (b \times c)$$
+              $$D = \|a\|\|b\|\|c\| + (a \cdot b)\|c\| + (b \cdot c)\|a\| + (c \cdot a)\|b\|$$
+              $$\Omega_t(x_j) = 2 \arctan \left( \frac{N}{D} \right)$$
+
+              <p class="text-xs text-slate-600 mt-3 mb-1">
+                  Differentiating $\Omega_t$ with respect to each vertex yields the per-query gradient configuration:
+              </p>
+              $$\frac{\partial \Omega_t}{\partial v_k} = 2 \frac{D \frac{\partial N}{\partial v_k} - N \frac{\partial D}{\partial
+              v_k}}{N^2 + D^2} \quad \text{for } k \in \{1, 2, 3\}$$
+
+              <p class="text-xs text-slate-600 mt-3 mb-2">
+                  The explicit intermediate vector derivatives for each vertex $v_k$ are evaluated as follows:
+              </p>
+
+              <div class="overflow-x-auto my-2 border border-slate-200 rounded-md">
+                  <table class="min-w-full divide-y divide-slate-200 text-left text-xs">
+                      <thead class="bg-slate-100 font-mono text-slate-600">
+                          <tr>
+                              <th class="px-3 py-2 w-16">Vertex</th>
+                              <th class="px-3 py-2">Numerator Derivative ($\frac{\partial N}{\partial v_k}$)</th>
+                              <th class="px-3 py-2">Denominator Derivative ($\frac{\partial D}{\partial v_k}$)</th>
+                          </tr>
+                      </thead>
+                      <tbody class="divide-y divide-slate-200 font-mono text-slate-700 bg-white">
+                          <tr>
+                              <td class="px-3 py-2 font-bold font-sans text-slate-900">$v_1$</td>
+                              <td class="px-3 py-2">$b \times c$</td>
+                              <td class="px-3 py-2">$(\|b\|\|c\| + b \cdot c)\hat{a} + \|c\|b + \|b\|c$</td>
+                          </tr>
+                          <tr>
+                              <td class="px-3 py-2 font-bold font-sans text-slate-900">$v_2$</td>
+                              <td class="px-3 py-2">$c \times a$</td>
+                              <td class="px-3 py-2">$(\|c\|\|a\| + c \cdot a)\hat{b} + \|a\|c + \|c\|a$</td>
+                          </tr>
+                          <tr>
+                              <td class="px-3 py-2 font-bold font-sans text-slate-900">$v_3$</td>
+                              <td class="px-3 py-2">$a \times b$</td>
+                              <td class="px-3 py-2">$(\|a\|\|b\| + a \cdot b)\hat{c} + \|b\|a + \|a\|b$</td>
+                          </tr>
+                      </tbody>
+                  </table>
+              </div>
+              <span class="text-[11px] text-slate-500 block italic leading-normal">
+                  Note: These formulations are well-defined everywhere except at singular boundaries (such as directly on the triangle's
+                  edges or vertices) where the denominator vanishes ($|D| < 10^{-12}$). In the forward pass, this condition corresponds to
+                    a boundary discontinuity where a constant value of $0.5$ is returned; consequently, the gradient is explicitly set to
+                    $0$ in this case.
+              </span>
+
               <p>
                   Evaluating these formulations directly requires a dense pairwise computation between all $N$ geometry elements and all
-                  $M$ query points, yielding an unoptimized computational complexity of $\mathcal{O}(NM)$.
+                  $M$ query points, yielding a computational complexity of $\mathcal{O}(NM)$.
               </p>
               <p>
                   However, the underlying field behavior of the backward pass closely mirrors the forward pass. While the forward pass
                   clusters geometry sources because their collective potential field varies smoothly over distance, the backward pass
                   allows us to cluster query points. The adjoint fields, specifically the free-space Green's function gradient $\nabla G$,
-                  its spatial Hessian $\mathbf{H}_G$, and the boundary derivative vector field, are smooth fields that decay rapidly over
-                  space. Consequently, the influence of a distant cluster of query points on any given source primitive is highly
-                  predictable, making it well-suited for a reverse hierarchical approximation scheme.
+                  its spatial Hessian $\mathbf{H}_G$, and the boundary derivative vector field, are smooth fields that decay rapidly with
+                  distance to the query position. Consequently, the influence of a distant cluster of query points on any given source
+                  primitive can be replaced
+                  with a Taylor approximation at the cluster center. This leads to a hierarchical approximation scheme that is very
+                  similar to the Fast Winding Numbers scheme in the forward pass.
               </p>
 
-              <h4 class="text-sm font-bold uppercase tracking-wider text-slate-700 mt-6 mb-2">Truncated Taylor Expansions for Primitive Derivatives</h4>
+              <h4 class="text-sm font-bold uppercase tracking-wider text-slate-700 mt-6 mb-2">Truncated Taylor Expansions for Partial Derivatives</h4>
 
               <div class="my-4 p-4 border border-slate-100 rounded-lg bg-slate-50/50">
                   <span class="text-xs font-bold text-cyan-700 block uppercase tracking-wide mb-2">Case 1: Scaled Normals (Dipole Moments $m_i$)</span>
