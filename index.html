@@ -250,8 +250,8 @@
             computed via:
         </p>
         <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
-          $$\tan\left(\frac{\Omega_t(x)}{2}\right) = \frac{a \cdot (b \times c)}{\|a\|\|b\|\|c\| + (a \cdot b)\|c\| + (b \cdot
-          c)\|a\| + (c \cdot a)\|b\|}$$
+          $$\Omega_t(x) = 2 \arctan\left(\frac{a \cdot (b \times c)}{\|a\|\|b\|\|c\| + (a \cdot b)\|c\| + (b \cdot
+          c)\|a\| + (c \cdot a)\|b\|}\right)$$
         </div>
         <p>
           With this we can compute the winding field for any triangle mesh. As an example we show the winding number field of a single triangle in the following video.
@@ -935,69 +935,198 @@
                   backward computational pass strictly to a highly efficient execution complexity of $\mathcal{O}((M + N) \log M)$,
                   which natively accounts for the initial $\mathcal{O}(M)$ tree construction overhead.
               </p>
+        </section>
+        <section class="bg-white p-8 rounded-xl shadow-xs border border-slate-200/80 mt-6">
+                <h2 class="text-2xl font-bold border-b border-slate-200 pb-3 mb-6 text-slate-900 flex items-center gap-2">
+                    <span class="text-cyan-600">02.</span> Exact Analytical Spatial Jacobian of the Vertex Gradient
+                </h2>
+                
+                <div class="prose prose-slate max-w-none text-slate-600 leading-relaxed space-y-4">
+                    <p>
+                        To populate the second-order terms of the localized Taylor serialization, we require the spatial Jacobian 
+                        $\nabla_x F_k \in \mathbb{R}^{3 \times 3}$ of the solid-angle vertex-gradient field 
+                        $F_k(x) = \frac{\partial \Omega_T(x)}{\partial v_k}$. Since the relative vertex coordinates are defined as 
+                        $r_i = v_i - x$, the spatial derivative map satisfies $\frac{\partial}{\partial x} = -\sum_{i=1}^3 \frac{\partial}{\partial r_i}$. 
+                        By application of the multivariate chain rule, the exact spatial Jacobian expands to the accumulation of relative parameter gradients:
+                    </p>
 
-                <hr class="border-slate-200/60 my-6" />
-                <div>
-                    <h3 class="text-base font-bold text-slate-900 mb-4 flex items-center gap-2">
-                        Engine Architecture Status &amp; Implementation Matrix
-                    </h3>
+                    <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                        $$\nabla_x F_k = -\left( \frac{\partial F_k}{\partial r_1} + \frac{\partial F_k}{\partial r_2} + \frac{\partial F_k}{\partial r_3} \right)$$
+                    </div>
 
-                    <div class="space-y-4">
-                        <div class="border border-slate-200 rounded-lg overflow-hidden">
-                            <div class="bg-slate-50 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between">
-                                <span class="text-sm font-semibold text-slate-700">Forward Pass Evaluation Pipeline</span>
-                                <span class="text-xs bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded font-mono">Complete</span>
+                    <h3 class="text-lg font-semibold text-slate-900 pt-4 mb-2">1. Geometric Primitives & Linearized Differentials</h3>
+                    <p>
+                        Let $[w]_\times \in \mathbb{R}^{3 \times 3}$ denote the skew-symmetric cross-product matrix such that $[w]_\times v = w \times v$, 
+                        and let $\mathbf{I}$ specify the $3 \times 3$ identity matrix.
+                        We define the directional projection operators $P_i$ along with the forward solid-angle scalar invariants $N$, $D$, and $S$:
+                    </p>
+
+                    <div class="my-4 bg-slate-50/60 p-4 rounded-xl border border-slate-200/60 space-y-3 font-mono text-sm">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <span class="text-xs font-bold text-slate-400 uppercase block mb-1">Relative Vectors & Projections</span>
+                                $$\hat{r}_i = \frac{r_i}{\|r_i\|}, \quad P_i = \mathbf{I} - \hat{r}_i \hat{r}_i^T$$
                             </div>
-                            <div class="p-4 bg-white divide-y divide-slate-100">
-                                <div class="flex items-start gap-3 py-2">
-                                    <div class="mt-1 w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0"></div>
-                                    <div class="flex-1">
-                                        <p class="text-sm font-semibold text-slate-800">Reference Implementation (Brute-Force)</p>
-                                        <p class="text-xs text-slate-500 mt-0.5">Fully functional, templated codebase supporting both point clouds and
-                                          triangles. Serves as the exact numerical verification baseline for all accelerated tracking paths.</p>
-                                    </div>
-                                </div>
-                                <div class="flex items-start gap-3 py-2 pt-3">
-                                    <div class="mt-1 w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0"></div>
-                                    <div class="flex-1">
-                                        <p class="text-sm font-semibold text-slate-800">Tree-Accelerated Production Kernels (BVH8)</p>
-                                        <p class="text-xs text-slate-500 mt-0.5">Highly unified, template-driven pipelines for point clouds and triangles
-                                          running on an 8-way bounding volume hierarchy. Structural divergences are isolated strictly to the offline tree
-                                          construction routines. Mesh inputs undergo an automated conversion pass to triangle arrays prior to evaluation.</p>
-                                    </div>
-                                </div>
+                            <div>
+                                <span class="text-xs font-bold text-slate-400 uppercase block mb-1">Field Invariants & Scaling</span>
+                                $$N = r_1 \cdot (r_2 \times r_3), \quad S = N^2 + D^2$$
                             </div>
                         </div>
-
-                        <div class="border border-slate-200 rounded-lg overflow-hidden">
-                            <div class="bg-slate-50 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between">
-                                <span class="text-sm font-semibold text-slate-700">Backward Pass Differentiation Pipeline</span>
-                                <span class="text-xs bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded font-mono">In Active Development</span>
-                            </div>
-                            <div class="p-4 bg-white divide-y divide-slate-100">
-                                <div class="flex items-start gap-3 py-2">
-                                    <div class="mt-1 w-2 h-2 rounded-full bg-amber-400 flex-shrink-0"></div>
-                                    <div class="flex-1">
-                                        <p class="text-sm font-semibold text-slate-800">Theoretical Adjoint Framework</p>
-                                        <p class="text-xs text-slate-500 mt-0.5">The mathematical formulation for reverse-mode automatic differentiation via
-                                          multi-order query moments is established. Adjoint structures map uniformly across all primitive geometries.</p>
-                                    </div>
-                                </div>
-                                <div class="flex items-start gap-3 py-2 pt-3">
-                                    <div class="mt-1 w-2 h-2 rounded-full bg-slate-300 flex-shrink-0"></div>
-                                    <div class="flex-1">
-                                        <p class="text-sm font-semibold text-slate-700">Kernel Architecture Design</p>
-                                        <p class="text-xs text-slate-400 mt-0.5">Currently planning the underlying implementation details for parallel
-                                          backpropagation. Active tasks focus on determining optimal memory layouts and contraction logic for the dynamic
-                                          query-tree caching system.</p>
-                                    </div>
-                                </div>
-                            </div>
+                        <div class="pt-2 border-t border-slate-200/60">
+                            <span class="text-xs font-bold text-slate-400 uppercase block mb-1">Global Topographic Denominator</span>
+                            $$D = \|r_1\|\|r_2\|\|r_3\| + (r_1 \cdot r_2)\|r_3\| + (r_2 \cdot r_3)\|r_1\| + (r_3 \cdot r_1)\|r_2\|$$
                         </div>
                     </div>
-                </div>
 
-            </div>
+                    <h3 class="text-lg font-semibold text-slate-900 pt-4 mb-2">2. Forward Intermediate Gradients</h3>
+                    <p>
+                        The analytical vertex gradient for $v_1$ maps to $F_1 = \frac{2}{S}W$, where the intermediate vector field is 
+                        $W = DU - NV$. The standalone forward gradient vectors $U, V \in \mathbb{R}^3$ (and their cyclic permutations $V_2, V_3$ for the denominator components) evaluate to:
+                    </p>
+
+                    <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                        $$\begin{aligned}
+                        U &= r_2 \times r_3 \\
+                        V &= \alpha \hat{r}_1 + \|r_3\|r_2 + \|r_2\|r_3, \quad \text{where } \alpha = \|r_2\|\|r_3\| + r_2 \cdot r_3 \\
+                        V_2 &= (\|r_3\|\|r_1\| + r_3 \cdot r_1)\hat{r}_2 + \|r_1\|r_3 + \|r_3\|r_1 \\
+                        V_3 &= (\|r_1\|\|r_2\| + r_1 \cdot r_2)\hat{r}_3 + \|r_2\|r_1 + \|r_1\|r_2
+                        \end{aligned}$$
+                    </div>
+
+                    <h3 class="text-lg font-semibold text-slate-900 pt-4 mb-2">3. Matrix Component Differentiation</h3>
+                    <p>
+                        Differentiating the primary vector blocks $U$ and $V$ with respect to each relative coordinate vector $r_i$ produces isolated, low-rank structural matrices. The exact $3 \times 3$ component Jacobians match the following forms:
+                    </p>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 my-3">
+                        <div class="bg-white p-4 rounded border border-slate-200">
+                            <span class="text-xs font-bold text-cyan-700 block uppercase tracking-wide mb-2">Numerator Component Jacobians</span>
+                            $$\begin{aligned}
+                            \frac{\partial U}{\partial r_1} &= \mathbf{0}_{3 \times 3} \\
+                            \frac{\partial U}{\partial r_2} &= -[r_3]_\times \\
+                            \frac{\partial U}{\partial r_3} &= [r_2]_\times
+                            \end{aligned}$$
+                        </div>
+                        <div class="bg-white p-4 rounded border border-slate-200">
+                            <span class="text-xs font-bold text-cyan-700 block uppercase tracking-wide mb-2">Denominator Component Jacobians</span>
+                            $$\begin{aligned}
+                            \frac{\partial V}{\partial r_1} &= \frac{\alpha}{\|r_1\|} P_1 \\
+                            \frac{\partial V}{\partial r_2} &= \|r_3\| \hat{r}_1 \hat{r}_2^T + \hat{r}_1 r_3^T + r_3 \hat{r}_2^T + \|r_3\| \mathbf{I} \\
+                            \frac{\partial V}{\partial r_3} &= \|r_2\| \hat{r}_1 \hat{r}_3^T + \hat{r}_1 r_2^T + r_2 \hat{r}_3^T + \|r_2\| \mathbf{I}
+                            \end{aligned}$$
+                        </div>
+                    </div>
+
+                    <h3 class="text-lg font-semibold text-slate-900 pt-4 mb-2">4. Final Assembly of the Relative Representation</h3>
+                    <p>
+                        By applying the quotient rule to the primary structural statement $F_1 = \frac{2}{S}W$, we resolve the full relative gradient tensor $\frac{\partial F_1}{\partial r_i} \in \mathbb{R}^{3 \times 3}$. We define the invariant directional columns as $N_i = \nabla_{r_i} N$ and $D_i = \nabla_{r_i} D$:
+                    </p>
+
+                    <div class="my-3 bg-slate-950 text-slate-200 p-4 rounded-xl font-mono text-xs overflow-x-auto">
+                        <table class="w-full text-left text-slate-300">
+                            <thead>
+                                <tr class="border-b border-slate-800 text-slate-400">
+                                    <th class="pb-2 text-cyan-400">Index ($i$)</th>
+                                    <th class="pb-2">Scalar Adjoint $N_i^T = (\nabla_{r_i} N)^T$</th>
+                                    <th class="pb-2">Scalar Adjoint $D_i^T = (\nabla_{r_i} D)^T$</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr class="border-b border-slate-900">
+                                    <td class="py-2 font-bold text-slate-400">1</td>
+                                    <td>$U^T = (r_2 \times r_3)^T$</td>
+                                    <td>$V^T$</td>
+                                </tr>
+                                <tr class="border-b border-slate-900">
+                                    <td class="py-2 font-bold text-slate-400">2</td>
+                                    <td>$(r_3 \times r_1)^T$</td>
+                                    <td>$V_2^T$</td>
+                                </tr>
+                                <tr>
+                                    <td class="py-2 font-bold text-slate-400">3</td>
+                                    <td>$(r_1 \times r_2)^T$</td>
+                                    <td>$V_3^T$</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <p>
+                        Feeding these components into the vectorized quotient architecture completes the analytical assembly rule for each individual constituent matrix:
+                    </p>
+
+                    <div class="my-4 bg-white p-4 rounded-xl border border-slate-200 shadow-xs text-center">
+                        $$\frac{\partial F_1}{\partial r_i} = \frac{2}{S}\left[ D\frac{\partial U}{\partial r_i} - N\frac{\partial V}{\partial r_i} + U D_i^T - V N_i^T \right] - \frac{4W}{S^2}\left[ N N_i^T + D D_i^T \right]$$
+                    </div>
+
+                    <p class="text-xs text-slate-500 pl-3 border-l-2 border-cyan-500 my-2 italic">
+                        <strong>Implementation Profiling Note:</strong> This exact layout maps entirely to hardware-friendly execution kernels on the GPU. The assembly avoids dense linear solvers or explicit $3 \times 3$ matrix inversions entirely, relying exclusively on symmetric rank-1 outer products ($U D_i^T$), skew-symmetric footprints ($[r_k]_\times$), and fused vector scaling.
+                    </p>
+                </div>
+            </section>
+
+            <section class="bg-white p-8 rounded-xl shadow-xs border border-slate-200/80 mt-6">
+              <div>
+                  <h3 class="text-base font-bold text-slate-900 mb-4 flex items-center gap-2">
+                      Engine Architecture Status &amp; Implementation Matrix
+                  </h3>
+
+                  <div class="space-y-4">
+                      <div class="border border-slate-200 rounded-lg overflow-hidden">
+                          <div class="bg-slate-50 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between">
+                              <span class="text-sm font-semibold text-slate-700">Forward Pass Evaluation Pipeline</span>
+                              <span class="text-xs bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded font-mono">Complete</span>
+                          </div>
+                          <div class="p-4 bg-white divide-y divide-slate-100">
+                              <div class="flex items-start gap-3 py-2">
+                                  <div class="mt-1 w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0"></div>
+                                  <div class="flex-1">
+                                      <p class="text-sm font-semibold text-slate-800">Reference Implementation (Brute-Force)</p>
+                                      <p class="text-xs text-slate-500 mt-0.5">Fully functional, templated codebase supporting both point clouds and
+                                        triangles. Serves as the exact numerical verification baseline for all accelerated tracking paths.</p>
+                                  </div>
+                              </div>
+                              <div class="flex items-start gap-3 py-2 pt-3">
+                                  <div class="mt-1 w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0"></div>
+                                  <div class="flex-1">
+                                      <p class="text-sm font-semibold text-slate-800">Tree-Accelerated Production Kernels (BVH8)</p>
+                                      <p class="text-xs text-slate-500 mt-0.5">Highly unified, template-driven pipelines for point clouds and triangles
+                                        running on an 8-way bounding volume hierarchy. Structural divergences are isolated strictly to the offline tree
+                                        construction routines. Mesh inputs undergo an automated conversion pass to triangle arrays prior to evaluation.</p>
+                                  </div>
+                              </div>
+                          </div>
+                      </div>
+
+                      <div class="border border-slate-200 rounded-lg overflow-hidden">
+                          <div class="bg-slate-50 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between">
+                              <span class="text-sm font-semibold text-slate-700">Backward Pass Differentiation Pipeline</span>
+                              <span class="text-xs bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded font-mono">In Active Development</span>
+                          </div>
+                          <div class="p-4 bg-white divide-y divide-slate-100">
+                              <div class="flex items-start gap-3 py-2">
+                                  <div class="mt-1 w-2 h-2 rounded-full bg-amber-400 flex-shrink-0"></div>
+                                  <div class="flex-1">
+                                      <p class="text-sm font-semibold text-slate-800">Theoretical Adjoint Framework</p>
+                                      <p class="text-xs text-slate-500 mt-0.5">The mathematical formulation for reverse-mode automatic differentiation via
+                                        multi-order query moments is established. Adjoint structures map uniformly across all primitive geometries.</p>
+                                  </div>
+                              </div>
+                              <div class="flex items-start gap-3 py-2 pt-3">
+                                  <div class="mt-1 w-2 h-2 rounded-full bg-slate-300 flex-shrink-0"></div>
+                                  <div class="flex-1">
+                                      <p class="text-sm font-semibold text-slate-700">Kernel Architecture Design</p>
+                                      <p class="text-xs text-slate-400 mt-0.5">Currently planning the underlying implementation details for parallel
+                                        backpropagation. Active tasks focus on determining optimal memory layouts and contraction logic for the dynamic
+                                        query-tree caching system.</p>
+                                  </div>
+                              </div>
+                          </div>
+                      </div>
+                  </div>
+              </div>
+
+          </div>
         </section>
 
          <section class="bg-slate-900 text-white p-8 rounded-2xl shadow-xl space-y-8">
