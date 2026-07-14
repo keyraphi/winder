@@ -105,6 +105,10 @@ struct Triangle {
   __host__ __device__ __forceinline__ auto
   contributionToQuery(const Vec3 &query, float inf_epsilon) const -> float;
 
+  __host__ __device__ __forceinline__ void
+  gradContributionOfQuery(const Vec3 &q, float g, Vec3 &contrib_v0,
+                          Vec3 &contrib_v1, Vec3 &contrib_v2) const;
+
   [[nodiscard]] auto dump() const -> std::string {
     // Returns a compact, single-line representation safe for HTML labels
     return std::format("v0:({:.2f}, {:.2f}, {:.2f}) | v1:({:.2f}, {:.2f}, "
@@ -139,6 +143,13 @@ struct PointNormal {
 
   __host__ __device__ __forceinline__ auto
   contributionToQuery(const Vec3 &query, float inv_epsilon) const -> float;
+
+  __host__ __device__ __forceinline__ auto gradContributionOfQuery(
+      const Vec3 &q, const float g, const float inv_epsilon,
+      const float reg_term_const,     // Precomputed: inv_epsilon3 * INV_PI_1_5
+      const float near_field_g_denum, // Precomputed: (1.f / (3.f * pi^1.5)) *
+                                      // inv_epsilon3
+      Vec3 &contrib_p, Vec3 &contrib_n) const -> void;
 
   [[nodiscard]] auto dump() const -> std::string {
     // Returns a compact, single-line representation safe for HTML labels
@@ -305,86 +316,227 @@ PointNormal::get_taylor_terms(const Vec3 &p_center, bool is_active,
 #define INV_FOUR_PI 0.07957747154F
 #define INV_TWO_PI 0.15915494309F
 
+__host__ __device__ __forceinline__ auto S_regularization(const float t)
+    -> float {
+  if (t < 0.1F) {
+    return FOUR_OVER_3SQRT_PI * (t * t * t);
+  }
+
+#if defined(__CUDA_ARCH__)
+  return erff(t) - (TWO_OVER_SQRT_PI * t * __expf(-t * t));
+#else
+  return erff(t) - (TWO_OVER_SQRT_PI * t * expf(-t * t));
+#endif
+}
+
 __host__ __device__ __forceinline__ auto
 Triangle::contributionToQuery(const Vec3 &query,
                               [[maybe_unused]] const float inv_epsilon) const
     -> float {
-  // TODO: for gradient: this has discontinuities on the edges. Use inv_epsilon
-  // to create a regularized version:
-  // if (min_dist2 < 4.0f * eps2) {a_len =
-  //    sqrtf(a_l2 + eps2);...
   const Vec3 a = v0 - query;
   const Vec3 b = v1 - query;
   const Vec3 c = v2 - query;
-  const float a_len = a.length();
-  const float b_len = b.length();
-  const float c_len = c.length();
-  const float det = a.dot(Vec3::cross(b, c));
-  const float div = a_len * b_len * c_len + a.dot(b) * c_len +
-                    a.dot(c) * b_len + b.dot(c) * a_len;
 
-  // Handle the singularity: atan2(0, 0) is undefined.
-  // If div is 0, we are on the boundary.
-  if (fabsf(div) < 1e-12F) {
+  const float a2 = a.length2() + 1e-20F;
+  const float b2 = b.length2() + 1e-20F;
+  const float c2 = c.length2() + 1e-20F;
+
+#ifdef __CUDACC__
+  const float inv_a = rsqrtf(a2);
+  const float inv_b = rsqrtf(b2);
+  const float inv_c = rsqrtf(c2);
+#else
+  const float inv_a = 1.F / sqrtf(a2);
+  const float inv_b = 1.F / sqrtf(b2);
+  const float inv_c = 1.F / sqrtf(c2);
+#endif
+
+  // Calculate dimensionless cosines
+  const float cos_ab = a.dot(b) * inv_a * inv_b;
+  const float cos_ac = a.dot(c) * inv_a * inv_c;
+  const float cos_bc = b.dot(c) * inv_b * inv_c;
+
+  // normalized determinant and denominator
+  const float det_norm = a.dot(Vec3::cross(b, c)) * inv_a * inv_b * inv_c;
+  const float div_norm = 1.F + cos_ab + cos_ac + cos_bc;
+
+  // Scale-invariant singularity check
+  if (fabsf(div_norm) < 1e-6F) {
     return 0.5F;
   }
-  return atan2f(det, div) * INV_TWO_PI;
-}
-
-__host__ __device__ __forceinline__ auto S_regularization(const float t)
-    -> float {
-  // For small t use Taylor expansion to avoid numerical issues in subtraction
-  // as both terms approach the same value.
-  // S(t) \approx (4/(3*sqrt(pi))) * t^3
-  if (t < 0.1F) {
-    return FOUR_OVER_3SQRT_PI * (t * t * t);
-  }
-  // Standard evaluation for larger t
-  // S(t) = erf(t) - (2t/sqrt(pi)) * exp(-t^2)
-  return erff(t) - (TWO_OVER_SQRT_PI * t * expf(-t * t));
+  return atan2f(det_norm, div_norm) * INV_TWO_PI;
 }
 
 __host__ __device__ __forceinline__ auto
 PointNormal::contributionToQuery(const Vec3 &query,
                                  const float inv_epsilon) const -> float {
-  // Use regularized dipole potential from:
-  // 3D reconstruction with fast dipole sums
-  // Hanyu Chen, Bailey Miller, Ioannis Gkioulekas
-  // ACM Transactions on Graphics (SIGGRAPH Asia) 2024
-  // https://arxiv.org/pdf/2405.16788
   const Vec3 d = p - query;
   const float dist2 = d.length2();
 
-  // Guard against exact zero distance to prevent NaN in dot(d)/dist3
-  if (dist2 < 1e-18F) {
-    return 0.F;
-  }
+#ifdef __CUDACC__
+  const float inv_distance = rsqrtf(dist2 + 1e-20F);
+#else
+  const float inv_distance = 1.F / sqrtf(dist2 + 1e-20F);
+#endif
+  const float inv_dist2 = inv_distance * inv_distance;
+  const float inv_dist3 = inv_dist2 * inv_distance;
 
-  const float distance = sqrtf(dist2);
+  const float distance = dist2 * inv_distance;
   const float t = distance * inv_epsilon;
 
   float s_over_dist3;
 
-  // If t is very small, S(t) ~ t^3, which cancels the distance^3 in the
-  // denominator.
   if (t < 2.F) {
     if (t < 0.1F) {
-      // S(t)/dist^3 \approx (FOUR_OVER_3SQRT_PI * (dist/eps)^3) / distr^3
-      // The distr^3 terms cancel out.
-      // This is the finite value P_eps(y,y) mentioned in the paper
       s_over_dist3 =
           FOUR_OVER_3SQRT_PI * (inv_epsilon * inv_epsilon * inv_epsilon);
     } else {
-      s_over_dist3 = S_regularization(t) / (dist2 * distance);
+      s_over_dist3 = S_regularization(t) * inv_dist3;
     }
   } else {
-    // Standard Poisson kernel (S(t) is effectively 1.0)
-    s_over_dist3 = 1.F / (dist2 * distance);
+    s_over_dist3 = inv_dist3;
   }
 
   return n.dot(d) * INV_FOUR_PI * s_over_dist3;
 }
 
+__host__ __device__ __forceinline__ void
+Triangle::gradContributionOfQuery(const Vec3 &q, const float g,
+                                  Vec3 &contrib_v0, Vec3 &contrib_v1,
+                                  Vec3 &contrib_v2) const {
+  // Relative vectors from query point to vertices
+  const Vec3 a = v0 - q;
+  const Vec3 b = v1 - q;
+  const Vec3 c = v2 - q;
+
+  // Squared distances with a tiny epsilon to prevent division-by-zero on exact
+  // singularities
+  const float a2 = a.length2() + 1e-20F;
+  const float b2 = b.length2() + 1e-20F;
+  const float c2 = c.length2() + 1e-20F;
+
+#if defined(__CUDA_ARCH__)
+  const float inv_a = rsqrtf(a2);
+  const float inv_b = rsqrtf(b2);
+  const float inv_c = rsqrtf(c2);
+#else
+  const float inv_a = 1.F / sqrtf(a2);
+  const float inv_b = 1.F / sqrtf(b2);
+  const float inv_c = 1.F / sqrtf(c2);
+#endif
+
+  const float a_len = a2 * inv_a;
+  const float b_len = b2 * inv_b;
+  const float c_len = c2 * inv_c;
+
+  // Precompute cosines for the dimensionless denominator
+  const float cos_ab = a.dot(b) * inv_a * inv_b;
+  const float cos_ac = a.dot(c) * inv_a * inv_c;
+  const float cos_bc = b.dot(c) * inv_b * inv_c;
+
+  // Normalized determinant (N_norm) and denominator (D_norm)
+  const float det_norm = a.dot(Vec3::cross(b, c)) * inv_a * inv_b * inv_c;
+  const float div_norm = 1.F + cos_ab + cos_ac + cos_bc;
+
+  // Scale-invariant singular boundary check using the normalized denominator
+  const float denom_norm = det_norm * det_norm + div_norm * div_norm;
+  if (denom_norm < 1e-12F) {
+    contrib_v0 = Vec3{0.F, 0.F, 0.F};
+    contrib_v1 = Vec3{0.F, 0.F, 0.F};
+    contrib_v2 = Vec3{0.F, 0.F, 0.F};
+    return;
+  }
+
+  // 1. Numerator Derivatives: dN / dv_k
+  const Vec3 dN_dv0 = Vec3::cross(b, c);
+  const Vec3 dN_dv1 = Vec3::cross(c, a);
+  const Vec3 dN_dv2 = Vec3::cross(a, b);
+
+  // 2. Denominator Derivatives: dD / dv_k
+  const Vec3 hat_a = a * inv_a;
+  const Vec3 hat_b = b * inv_b;
+  const Vec3 hat_c = c * inv_c;
+
+  const float b_dot_c = b.dot(c);
+  const float c_dot_a = c.dot(a);
+  const float a_dot_b = a.dot(b);
+
+  const Vec3 dD_dv0 = hat_a * (b_len * c_len + b_dot_c) + b * c_len + c * b_len;
+  const Vec3 dD_dv1 = hat_b * (c_len * a_len + c_dot_a) + c * a_len + a * c_len;
+  const Vec3 dD_dv2 = hat_c * (a_len * b_len + a_dot_b) + a * b_len + b * a_len;
+
+  // 3. Assemble Gradients using the scale-invariant scaling factor
+  const float inv_L = inv_a * inv_b * inv_c;
+  const float factor = g * INV_TWO_PI * (inv_L / denom_norm);
+
+  contrib_v0 = (dN_dv0 * div_norm - dD_dv0 * det_norm) * factor;
+  contrib_v1 = (dN_dv1 * div_norm - dD_dv1 * det_norm) * factor;
+  contrib_v2 = (dN_dv2 * div_norm - dD_dv2 * det_norm) * factor;
+}
+
+__host__ __device__ __forceinline__ void PointNormal::gradContributionOfQuery(
+    const Vec3 &q, const float g, const float inv_epsilon,
+    const float reg_term_const,     // Precomputed: inv_epsilon3 * INV_PI_1_5
+    const float near_field_g_denum, // Precomputed: (1.f / (3.f * pi^1.5)) *
+                                    // inv_epsilon3
+    Vec3 &contrib_p, Vec3 &contrib_n) const {
+
+  const Vec3 d = p - q;
+  const float dist2 = d.x * d.x + d.y * d.y + d.z * d.z;
+
+  // Fast reciprocal square root with NaN-safe offset
+#ifdef __CUDACC__
+  const float inv_dist = rsqrtf(dist2 + 1e-20F);
+#else
+  const float inv_dist = 1.F / sqrtf(dist2 + 1e-20F);
+#endif
+  const float inv_dist2 = inv_dist * inv_dist;
+  const float inv_dist3 = inv_dist2 * inv_dist;
+
+  const float distance = dist2 * inv_dist;
+  const float t = distance * inv_epsilon;
+
+  float scale_n;
+  float scale_d;
+
+  if (t < 0.1F) {
+    scale_n = g * near_field_g_denum;
+    scale_d = 0.F;
+  } else {
+    float reg_term = 0.F;
+    float s_over_dist3;
+
+    if (t < 2.F) {
+      s_over_dist3 = S_regularization(t) * inv_dist3;
+      const float t2 = t * t;
+#if defined(__CUDA_ARCH__)
+      const float exp_t2 = __expf(-t2);
+#else
+      const float exp_t2 = expf(-t2);
+#endif
+      reg_term = exp_t2 * reg_term_const;
+    } else {
+      s_over_dist3 = inv_dist3;
+    }
+
+    const float g_denum = INV_FOUR_PI * s_over_dist3;
+    const float dot = n.x * d.x + n.y * d.y + n.z * d.z;
+    const float shared_factor = dot * inv_dist2;
+
+    scale_n = g * g_denum;
+    scale_d = g * shared_factor * (reg_term - 3.F * g_denum);
+  }
+
+  // Position gradient
+  contrib_p.x = scale_n * n.x + scale_d * d.x;
+  contrib_p.y = scale_n * n.y + scale_d * d.y;
+  contrib_p.z = scale_n * n.z + scale_d * d.z;
+
+  // Normal gradient
+  contrib_n.x = scale_n * d.x;
+  contrib_n.y = scale_n * d.y;
+  contrib_n.z = scale_n * d.z;
+}
 
 // Concept for Geometry template
 template <typename T>
@@ -406,25 +558,25 @@ concept IsPrimitiveGeometry = requires(T g) {
   { g.centroid() } -> std::same_as<Vec3>;
 };
 
-
-
 // TODO move this somewhere else maybe?
-template IsGeometry Geometry
-__host__ __device__ __forceinline__ auto
-Geometry::get_taylor_terms_backward(const Vec3 &q_center, const bool is_active,
-                          const Vec3 &query_pos, float g_j, float &zero_order,
-                          Vec3 &first_order, Mat3x3 &second_order) -> void {
-  if (!is_active) {
-    zero_order = 0.F;
-    first_order.x = 0.F;
-    first_order.y = 0.F;
-    first_order.z = 0.F;
-    second_order = Mat3x3::zero();
-    return;
-  }
-
-  zero_order = g_j;
-  Vec3 u = query_pos - q_center;
-  first_order = g_j * u;
-  second_order = g_j * u.outer_product(u);
-}
+// template <IsGeometry Geometry>
+// __host__ __device__ __forceinline__ auto
+// Geometry::get_taylor_terms_backward(const Vec3 &q_center, const bool
+// is_active,
+//                                     const Vec3 &query_pos, float g_j,
+//                                     float &zero_order, Vec3 &first_order,
+//                                     Mat3x3 &second_order) -> void {
+//   if (!is_active) {
+//     zero_order = 0.F;
+//     first_order.x = 0.F;
+//     first_order.y = 0.F;
+//     first_order.z = 0.F;
+//     second_order = Mat3x3::zero();
+//     return;
+//   }
+//
+//   zero_order = g_j;
+//   Vec3 u = query_pos - q_center;
+//   first_order = g_j * u;
+//   second_order = g_j * u.outer_product(u);
+// }

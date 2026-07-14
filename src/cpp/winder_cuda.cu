@@ -709,13 +709,54 @@ auto WinderBackend<Triangle>::CreateFromMesh(const float *vertices,
   return self;
 }
 
-auto WinderBackend<PointNormal>::grads_brute_force(const float *queries,
-                                                   const float *grad_output,
-                                                   size_t point_count,
-                                                   size_t stream = 0) const
-    -> CudaUniquePtr<float> {
+template <>
+auto WinderBackend<Triangle>::grads_brute_force(
+    const float *queries, const float *grad_output, 
+    const size_t query_count, [[maybe_unused]] float epsilon,
+    size_t stream) const -> CudaUniquePtr<float> {
   const Vec3 *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
   ScopedCudaDevice device_scope{m_device};
+
+  cudaEvent_t start, finish;
+  CUDA_CHECK(cudaEventCreate(&start));
+  CUDA_CHECK(cudaEventCreate(&finish));
+
+  // convert stream to cuda stream
+  cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
+
+  CUDA_CHECK(cudaEventRecord(start, compute_stream));
+
+  // Allocate required buffers
+  float *gradients;
+  CUDA_CHECK(cudaMallocAsync(&gradients, m_count * 3 * 3 * sizeof(float),
+                             compute_stream));
+
+  compute_brute_force_gradients_triangles(
+      queries_vec3, grad_output, m_sorted_geometry, m_to_internal, (uint32_t)query_count,
+      (uint32_t)m_count, gradients, compute_stream);
+
+  CUDA_CHECK(cudaEventRecord(finish, compute_stream));
+  // free events
+  CUDA_CHECK(cudaEventDestroy(start));
+  CUDA_CHECK(cudaEventDestroy(finish));
+
+  CudaUniquePtr<float> result(
+      gradients, CudaDeleter{reinterpret_cast<size_t>(compute_stream)});
+  return result;
+}
+
+template <>
+auto WinderBackend<PointNormal>::grads_brute_force(
+    const float *queries, const float *grad_output, 
+    const size_t query_count,
+    float epsilon, size_t stream) const -> CudaUniquePtr<float> {
+  const Vec3 *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
+  ScopedCudaDevice device_scope{m_device};
+
+  if (epsilon < 0.F) {
+    // default from 3D Reconstruction with Fast Dipole Sums
+    epsilon = 1.F / 250.F;
+  }
 
   cudaEvent_t start, finish;
   CUDA_CHECK(cudaEventCreate(&start));
@@ -732,10 +773,8 @@ auto WinderBackend<PointNormal>::grads_brute_force(const float *queries,
                              compute_stream));
 
   compute_brute_force_gradients_point_normals(
-      queries_vec3, grad_output, m_sorted_geometry, (uint32_t)query_count,
-      (uint32_t)m_count, gradients, compute_stream);
-
-  // TODO write out to original positions
+      queries_vec3, grad_output, m_sorted_geometry, m_to_internal, (uint32_t)query_count,
+      (uint32_t)m_count, epsilon, gradients, compute_stream);
 
   CUDA_CHECK(cudaEventRecord(finish, compute_stream));
   // free events

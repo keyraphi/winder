@@ -80,6 +80,14 @@ struct Vec3 {
     return result;
   }
 
+  __host__ __device__ __forceinline__ static auto zero() -> Vec3 {
+    Vec3 result;
+    result.x = 0.F;
+    result.y = 0.F;
+    result.z = 0.F;
+    return result;
+  }
+
   __host__ __device__ __forceinline__ auto dot(const Vec3 &v) const {
     return x * v.x + y * v.y + z * v.z;
   }
@@ -129,6 +137,9 @@ struct Vec3 {
       -> Vec3 {
     return {x - b.x, y - b.y, z - b.z};
   }
+  __host__ __device__ __forceinline__ auto operator-() const -> Vec3 {
+    return {-x, -y, -z};
+  }
   __host__ __device__ __forceinline__ auto operator*(const Vec3 &b) const
       -> Vec3 {
     return {x * b.x, y * b.y, z * b.z};
@@ -161,6 +172,13 @@ struct Vec3 {
     m.data[7] = z * b.y;
     m.data[8] = z * b.z;
     return m;
+  }
+  __host__ __device__ __forceinline__ friend auto operator*(const Mat3x3 &lhs, const Vec3 &v) -> Vec3 {
+    Vec3 result;
+    result.x = lhs.data[0] * v.x + lhs.data[1] * v.y + lhs.data[2] * v.z;
+    result.y = lhs.data[3] * v.x + lhs.data[4] * v.y + lhs.data[5] * v.z;
+    result.z = lhs.data[6] * v.x + lhs.data[7] * v.y + lhs.data[8] * v.z;
+    return result;
   }
   __host__ __device__ __forceinline__ static auto cross(const Vec3 &a,
                                                         const Vec3 &b) -> Vec3 {

@@ -65,18 +65,22 @@ public:
                                size_t point_count, int device_id)
       -> std::unique_ptr<WinderBackend<PointNormal>>;
 
-  auto compute(const float *queries, size_t query_count, float beta = -1,
-               float epsilon = -1, size_t stream = 0) const
+  auto compute(const float *queries, size_t query_count, float beta = -1.F,
+               float epsilon = -1.F, size_t stream = 0) const
       -> CudaUniquePtr<float>;
 
-  auto brute_force(const float *queries, size_t query_count, float epsilon = -1,
-                   size_t stream = 0) const -> CudaUniquePtr<float>;
-
-  [[nodiscard]] auto get_gradients(const float *grad_output, size_t point_count,
-                                   float beta = -1, size_t stream = 0) const
+  auto brute_force(const float *queries, size_t query_count,
+                   float epsilon = -1.F, size_t stream = 0) const
       -> CudaUniquePtr<float>;
-  [[nodiscard]] auto grads_brute_force(const float *grad_output,
-                                       size_t point_count,
+
+  [[nodiscard]] auto get_gradients(const float *queries,
+                                   const float *grad_output, size_t query_count,
+                                   float beta = -1.F, float epsilon = -1.F,
+                                   size_t stream = 0) const
+      -> CudaUniquePtr<float>;
+  [[nodiscard]] auto grads_brute_force(const float *queries,
+                                       const float *grad_output,
+                                       size_t query_count, float epsilon = -1.F,
                                        size_t stream = 0) const
       -> CudaUniquePtr<float>;
 

@@ -127,26 +127,28 @@ public:
     return {raw_ptr, {n}, owner};
   }
 
-  auto get_gradients(const Scalar_t &grad_output, const float beta = -1.F,
+  auto get_gradients(const Vec3_t &queries, const Scalar_t &grad_output, const float beta = -1.F, const float epsilon = -1.F,
                      const bool is_brute_force = false, const size_t stream = 0)
       -> GradResult_t {
     // todo ensure queries are on same device as m_impl
-    size_t m = grad_output.shape(0);
+    size_t n = queries.shape(0);
 
     CudaUniquePtr<float> raw_ptr_unique;
     if (is_brute_force) {
       if (is_backend_triangle) {
         raw_ptr_unique =
-            m_impl_tri->grad_brute_force(grad_output.data(), m, stream);
+            m_impl_tri->grads_brute_force(queries.data(), grad_output.data(), n, epsilon, stream);
       } else {
         raw_ptr_unique =
-            m_impl_pn->grad_brute_force(grad_output.data(), m, stream);
+            m_impl_pn->grads_brute_force(queries.data(), grad_output.data(), n, epsilon, stream);
       }
     } else {
       if (is_backend_triangle) {
-        raw_ptr_unique = m_impl_tri->get_gradients(grad_output.data(), m, beta, stream);
+        raw_ptr_unique =
+            m_impl_tri->get_gradients(queries.data(), grad_output.data(), n, beta, epsilon, stream);
       } else {
-        raw_ptr_unique = m_impl_pn->get_gradients(grad_output.data(), m, beta, stream);
+        raw_ptr_unique =
+            m_impl_pn->get_gradients(queries.data(), grad_output.data(), n, beta, epsilon, stream);
       }
     }
 
@@ -160,6 +162,16 @@ public:
     }
     size_t n_points = m_impl_pn->point_count();
     return {raw_ptr, {n_points, 2, 3}, owner};
+  }
+
+  [[nodiscard]] auto dump() const -> std::string {
+    std::string result;
+    if (is_backend_triangle) {
+      result += m_impl_tri->dump();
+    } else {
+      result += m_impl_pn->dump();
+    }
+    return result;
   }
 
 private:
@@ -260,7 +272,7 @@ NB_MODULE(winder_module, m) {
                     Only applies to point cloud backends.
                     - distance >= 2*epsilon: Acts as standard unregularized potential.
                     - distance < 2*epsilon: Smoothly dampens potential to a finite maximum.
-                    Use any negative number to use the default value (1/250).
+                    Use any negative number to get the default value (1/250).
                 is_brute_force: bool, optional
                     Computes the winding numbers at the given query location with brute force on GPU.
                     This is O(N*M) but precise. (N: geometry count, M: query count)
@@ -276,10 +288,10 @@ NB_MODULE(winder_module, m) {
             )doc")
 
       // --- Gradients ---
-      .def("gradients", &WinderEngine::get_gradients, "grad_output"_a,
-           "beta"_a = -1.F, "stream"_a = 0,
+      .def("gradients", &WinderEngine::get_gradients, "queries"_a, "grad_output"_a,
+           "beta"_a = -1.F, "epsilon"_a=-1.F, "is_brute_force"_a = false, "stream"_a = 0,
            nb::sig("def gradients(self, grad_output: Array[Q; "
-                   "float32; cuda], beta: float32 = -1, stream: uint64_t = 0) "
+                   "float32; cuda], beta: float32 = -1, epsilon: float32 = -1, is_brute_force: bool = false, stream: uint64_t = 0) "
                    "-> Array[N, ANY, 3; float32; cuda]"),
            R"doc(
                 Compute the Vector-Jacobian Product (VJP) for all inputs.
@@ -292,6 +304,8 @@ NB_MODULE(winder_module, m) {
 
                 Parameters
                 ----------
+                queries : Array
+                    (N, 3) CUDA array of query points.
                 grad_output : Array
                     (Q,) float32 CUDA array representing the gradient of the loss 
                     with respect to the winding numbers at each query location 
@@ -300,11 +314,18 @@ NB_MODULE(winder_module, m) {
                     Scalar that controls the degree of approximation.
                     Larger beta leads to more precise results, but also slower execution.
                     Use any negative number to get default values.
-                    Default for point clouds is 2.0. TODO
-                    Default flor triangles is 2.3 TODO
+                    Default for point clouds is 2.0. TODO EXPERIMENT
+                    Default flor triangles is 2.3 TODO EXPERIMENT
+                epsilon : float, optional
+                    Regularization scale (smoothing radius) used to prevent numerical 
+                    singularities (NaN/infinity) when queries land near points in point clouds.
+                    Only applies to point cloud backends.
+                    - distance >= 2*epsilon: Acts as standard unregularized potential.
+                    - distance < 2*epsilon: Smoothly dampens potential to a finite maximum.
+                    Use any negative number to get the default value (1/250).
                 is_brute_force: bool, optional
                     Computes the gradients for the geometry with brute force on GPU.
-                    This is O(N*M) but precise. (N: geometry count, M: query count)
+                    This is O(N*M) but precise. (M: geometry count, N: query count)
                 stream : int, optional
                     The raw 64-bit identifier (handle) of a CUDA stream. 
                     Allows enqueuing operations asynchronously within deep learning frameworks.
@@ -314,52 +335,22 @@ NB_MODULE(winder_module, m) {
                 Returns
                 -------
                 For Triangles:
-                  Array (N, 3, 3) float32 CUDA array
+                  Array (M, 3, 3) float32 CUDA array
                     output[i, j] represents the gradient of the loss 
                       with respect to the vertex j of triangle i  (dL/dv_j)
                       Calculated as: dL/dv_j = (dL/dw)^T * (dw/dv_j).
 
                 For Points with scaled Normals:
-                  Array (N, 2, 3) float32 CUDA array
+                  Array (M, 2, 3) float32 CUDA array
                     output[i, 0] represents the gradient of the loss 
-                      with respect to the source positions at index i (dL/dp)
-                      Calculated as: dL/dp = (dL/dw)^T * (dw/dp).
-                    output[i, 1] represents the gradient of the loss 
                       with respect to the input scaled normals at index i (dL/dn). 
                       Calculated as: dL/dn = (dL/dw)^T * (dw/dn).
+                    output[i, 1] represents the gradient of the loss 
+                      with respect to the source positions at index i (dL/dp)
+                      Calculated as: dL/dp = (dL/dw)^T * (dw/dp).
 
                 SUBJECT TO CHANGE
             )doc")
-
-      .def("grad_points", &WinderEngine::get_grad_points, "grad_output"_a,
-           nb::sig("def grad_points(self, grad_output: Array[Q; float32; "
-                   "cuda]) -> Array[N, 3; float32; cucda]"),
-           R"doc(
-                Compute the Vector-Jacobian Product (VJP) for the source point positions.
-
-                Propagates the gradient of the loss from the query locations back to 
-                the source geometry positions (vertices or point cloud centers).
-
-                Parameters
-                ----------
-                grad_output : Array
-                    (Q,) float32 CUDA array representing the gradient of the loss 
-                    with respect to the winding numbers at each query location 
-                    (dL/dw).
-
-                Returns
-                -------
-                Array
-                    (N, 3) float32 CUDA array representing the gradient of the loss 
-                    with respect to the source positions (dL/dp).
-                    
-                Note
-                ----
-                For point clouds, this computes the gradient w.r.t. point positions.
-                For meshes, this computes the gradient w.r.t triangle vertice positions.
-                SUBJECT TO CHANGE
-            )doc")
-
       // --- Utilities ---
       .def("dump", &WinderEngine::dump, nb::sig("def dump(self) -> str"),
            R"doc(
