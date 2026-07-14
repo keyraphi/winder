@@ -1,4 +1,5 @@
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <nanobind/nanobind.h>
@@ -27,6 +28,8 @@ using TriangleIdx_t = nb::ndarray<nb::array_api, uint32_t, nb::shape<-1, 3>,
                                   nb::c_contig, nb::device::cuda>;
 using Scalar_t = nb::ndarray<nb::array_api, float, nb::shape<-1>, nb::c_contig,
                              nb::device::cuda>;
+using GradResult_t = nb::ndarray<nb::array_api, float, nb::shape<-1, -1, 3>,
+                                 nb::c_contig, nb::device::cuda>;
 namespace winder_cuda {
 
 auto scalar_with_default(const std::optional<Scalar_t> &maybe_pc_wn,
@@ -46,8 +49,8 @@ auto scalar_with_default(const std::optional<Scalar_t> &maybe_pc_wn,
 } // namespace winder_cuda
 
 struct AsyncCleanupGlue {
-    float *ptr;
-    CudaDeleter deleter;
+  float *ptr;
+  CudaDeleter deleter;
 };
 
 class WinderEngine {
@@ -86,74 +89,29 @@ public:
     is_backend_triangle = false;
   }
 
-  // --- Static Solver (Factory Method) ---
-  static WinderEngine solve_from_constraints(
-      const Vec3_t &points, const Vec3_t &extra_points,
-      const Scalar_t &extra_winding_numbers,
-      const std::optional<Scalar_t> &maybe_points_winding_nubers,
-      float alpha_extra) {
-    int device_id = points.device_id();
-    if (extra_points.device_id() != device_id ||
-        extra_winding_numbers.device_id() != device_id) {
-      throw std::runtime_error(
-          "All input arrays must reside on the same CUDA device.");
-    }
-    if (maybe_points_winding_nubers.has_value() &&
-        maybe_points_winding_nubers->device_id() != device_id) {
-      throw std::runtime_error(
-          "pc_wn must reside on the same CUDA device as pc.");
-    }
-    if (maybe_points_winding_nubers.has_value() &&
-        maybe_points_winding_nubers->shape(0) != points.shape(0)) {
-      throw std::runtime_error("pc_wn must have one value per point.");
-    }
-    // by default the points are assumed to be on a surface. Ther winding number
-    // is 0.5
-    Scalar_t points_winding_numbers = winder_cuda::scalar_with_default(
-        maybe_points_winding_nubers, points.shape(0), 0.5F);
-
-    auto backend = WinderBackend<PointNormal>::CreateForSolver(
-        points.data(), points.shape(0), points.device_id());
-
-    backend->solve_for_normals(extra_points.data(), extra_points.shape(0),
-                               extra_winding_numbers.data(),
-                               points_winding_numbers.data(), alpha_extra);
-
-    return WinderEngine(std::move(backend));
-  }
-
-  Vec3_t get_scaled_normals() {
-    if (is_backend_triangle) {
-      throw std::runtime_error(
-          "Normals are not explicitly stored for triangle based geometry.");
-    }
-    auto raw_ptr_unique = m_impl_pn->get_normals();
-
-    if (!raw_ptr_unique) {
-      return {};
-    }
-
-    float *raw_ptr = raw_ptr_unique.release();
-    nb::capsule owner(raw_ptr,
-                      [](void *p) noexcept { winder_cuda::cuda_free(p); });
-
-    size_t n_points = m_impl_pn->point_count();
-    return {raw_ptr, {n_points, 3}, owner};
-  }
-
   auto compute(const Vec3_t &queries, const float beta = -1.F,
-               const float epsilon = -1.F, const size_t stream = 0)
-      -> Scalar_t {
+               const float epsilon = -1.F, const bool is_brute_force = false,
+               const size_t stream = 0) -> Scalar_t {
     size_t n = queries.shape(0);
     // todo ensure queries are on same device as m_impl
 
     CudaUniquePtr<float> raw_ptr_unique;
-    if (is_backend_triangle) {
-      raw_ptr_unique =
-          m_impl_tri->compute(queries.data(), n, beta, epsilon, stream);
+    if (is_brute_force) {
+      if (is_backend_triangle) {
+        raw_ptr_unique =
+            m_impl_tri->brute_force(queries.data(), n, epsilon, stream);
+      } else {
+        raw_ptr_unique =
+            m_impl_pn->brute_force(queries.data(), n, epsilon, stream);
+      }
     } else {
-      raw_ptr_unique =
-          m_impl_pn->compute(queries.data(), n, beta, epsilon, stream);
+      if (is_backend_triangle) {
+        raw_ptr_unique =
+            m_impl_tri->compute(queries.data(), n, beta, epsilon, stream);
+      } else {
+        raw_ptr_unique =
+            m_impl_pn->compute(queries.data(), n, beta, epsilon, stream);
+      }
     }
 
     CudaDeleter deleter = raw_ptr_unique.get_deleter();
@@ -162,75 +120,46 @@ public:
     auto *glue = new AsyncCleanupGlue{raw_ptr, deleter};
 
     nb::capsule owner(glue, [](void *p) noexcept -> void {
-        auto *g = static_cast<AsyncCleanupGlue *>(p);
-        g->deleter(g->ptr);
-        delete g;
-    }); 
+      auto *g = static_cast<AsyncCleanupGlue *>(p);
+      g->deleter(g->ptr);
+      delete g;
+    });
     return {raw_ptr, {n}, owner};
   }
 
-  auto brute_force(const Vec3_t &queries, const float epsilon = -1.F,
-                   const size_t stream = 0) -> Scalar_t {
-    size_t n = queries.shape(0);
+  auto get_gradients(const Scalar_t &grad_output, const float beta = -1.F,
+                     const bool is_brute_force = false, const size_t stream = 0)
+      -> GradResult_t {
     // todo ensure queries are on same device as m_impl
+    size_t m = grad_output.shape(0);
 
     CudaUniquePtr<float> raw_ptr_unique;
-    if (is_backend_triangle) {
-      raw_ptr_unique =
-          m_impl_tri->brute_force(queries.data(), n, epsilon, stream);
+    if (is_brute_force) {
+      if (is_backend_triangle) {
+        raw_ptr_unique =
+            m_impl_tri->grad_brute_force(grad_output.data(), m, stream);
+      } else {
+        raw_ptr_unique =
+            m_impl_pn->grad_brute_force(grad_output.data(), m, stream);
+      }
     } else {
-      raw_ptr_unique =
-          m_impl_pn->brute_force(queries.data(), n, epsilon, stream);
+      if (is_backend_triangle) {
+        raw_ptr_unique = m_impl_tri->get_gradients(grad_output.data(), m, beta, stream);
+      } else {
+        raw_ptr_unique = m_impl_pn->get_gradients(grad_output.data(), m, beta, stream);
+      }
     }
-    CudaDeleter deleter = raw_ptr_unique.get_deleter();
-    float *raw_ptr = raw_ptr_unique.release();
-
-    auto *glue = new AsyncCleanupGlue{raw_ptr, deleter};
-
-    nb::capsule owner(glue, [](void *p) noexcept -> void {
-        auto *g = static_cast<AsyncCleanupGlue *>(p);
-        g->deleter(g->ptr);
-        delete g;
-    }); 
-
-    return {raw_ptr, {n}, owner};
-  }
-
-  Vec3_t get_grad_normals(const Scalar_t &grad_output) {
-    // TODO
-
-    auto raw_ptr_unique =
-        m_impl_pn->grad_normals(grad_output.data(), grad_output.shape(0));
 
     float *raw_ptr = raw_ptr_unique.release();
     nb::capsule owner(raw_ptr,
                       [](void *p) noexcept { winder_cuda::cuda_free(p); });
 
-    size_t n_points = m_impl_pn->point_count();
-    return {raw_ptr, {n_points, 3}, owner};
-  }
-
-  Vec3_t get_grad_points(const Scalar_t &grad_output) {
-    // TODO
-
-    auto raw_ptr_unique =
-        m_impl_pn->grad_points(grad_output.data(), grad_output.shape(0));
-    float *raw_ptr = raw_ptr_unique.release();
-    nb::capsule owner(
-        raw_ptr, [](void *p) noexcept -> void { winder_cuda::cuda_free(p); });
-
-    size_t n_points = m_impl_pn->point_count();
-    return {raw_ptr, {n_points, 3}, nb::handle()};
-  }
-
-  [[nodiscard]] auto dump() const -> std::string {
-    std::string result;
     if (is_backend_triangle) {
-      result += m_impl_tri->dump();
-    } else {
-      result += m_impl_pn->dump();
+      size_t n_triangles = m_impl_tri->point_count();
+      return {raw_ptr, {n_triangles, 3, 3}, owner};
     }
-    return result;
+    size_t n_points = m_impl_pn->point_count();
+    return {raw_ptr, {n_points, 2, 3}, owner};
   }
 
 private:
@@ -304,66 +233,13 @@ NB_MODULE(winder_module, m) {
                     the scale the associated voronoi area.
             )doc")
 
-      // --- Normal Solver ---
-      .def_static("solve_normals", &WinderEngine::solve_from_constraints,
-                  "pc"_a, "extra_points"_a, "extra_wn"_a,
-                  "pc_wn"_a = nb::none(), "alpha_extra"_a = 0.2F,
-                  nb::sig("def solve_normals(pc: Array[N, 3; float32; cuda], "
-                          "extra_points: Array[K, 3; float32; cuda], "
-                          "extra_wn: Array[K; float32; cuda], pc_wn: "
-                          "Optional[Array[N; float32; cuda]] = None, "
-                          "alpha_extra: float = 0.2) -> WinderEngine"),
-                  R"doc(
-                Solves for optimal scaled normals for a point cloud.
-
-                This solver finds the orientation and scale (area) of normals that 
-                best satisfy the provided winding number constraints.
-
-                Parameters
-                ----------
-                pc : Array
-                    (N, 3) CUDA array of source points.
-                extra_points : Array
-                    (K, 3) CUDA array of query points with known winding values.
-                extra_wn : Array
-                    (K,) CUDA array of target winding values at extra_points.
-                pc_wn : Array, optional
-                    (N,) CUDA array of target winding values for the source points. 
-                    If None, defaults to 0.5 for all points.
-                alpha_extra : float, optional
-                    Weighting factor for the 'extra_points' constraints relative to 
-                    the point cloud constraints. A lower value prioritizes the 
-                    pc_wn (0.5) manifold. Default is 0.2.
-
-                Returns
-                -------
-                WinderEngine
-                    A new engine instance initialized with the point cloud and the solved normals.
-            )doc")
-      // --- Data Access ---
-      .def_prop_ro(
-          "scaled_normals", &WinderEngine::get_scaled_normals,
-          nb::sig("@property\ndef scaled_normals(self) -> Array[N, 3]"),
-          R"doc(
-                Returns a copy of the scaled normals currently stored in the engine.
-
-                Returns
-                -------
-                Array
-                    (N, 3) float32 CUDA array.
-                
-                Note
-                ----
-                If the engine is in Triangle Mesh mode, this will return an empty array,
-                as there are no normals stored for triangle representations.
-            )doc")
-
       // --- Inference ---
       .def("compute", &WinderEngine::compute, "queries"_a, "beta"_a = -1.F,
-           "epsilon"_a = -1.F, "stream"_a = 0,
+           "epsilon"_a = -1.F, "is_brute_force"_a = false, "stream"_a = 0,
            nb::sig(
                "def compute(self, queries: Array[N, 3; flaot32; cuda], beta: "
-               "float32 = -1, epsilon: float32 = -1, stream: uint64_t = 0) -> "
+               "float32 = -1, epsilon: float32 = -1, is_brute_force: bool = "
+               "false, stream: uint64_t = 0) -> "
                "Array"),
            R"doc(
                 Computes the winding number at the given query locations.
@@ -373,7 +249,7 @@ NB_MODULE(winder_module, m) {
                 queries : Array
                     (N, 3) CUDA array of query points.
                 beta    : float
-                    Scalar that controlls the degree of approximation.
+                    Scalar that controls the degree of approximation.
                     Larger beta leads to more precise results, but also slower execution.
                     Use any negative number to get default values.
                     Default for point clouds is 2.0.
@@ -385,6 +261,9 @@ NB_MODULE(winder_module, m) {
                     - distance >= 2*epsilon: Acts as standard unregularized potential.
                     - distance < 2*epsilon: Smoothly dampens potential to a finite maximum.
                     Use any negative number to use the default value (1/250).
+                is_brute_force: bool, optional
+                    Computes the winding numbers at the given query location with brute force on GPU.
+                    This is O(N*M) but precise. (N: geometry count, M: query count)
                 stream  : int, optional
                     The raw 64-bit identifier (handle) of a CUDA stream. 
                     Allows enqueuing operations asynchronously within deep learning frameworks.
@@ -395,47 +274,21 @@ NB_MODULE(winder_module, m) {
                 -------
                 (N,) float32 CUDA array holding the winding numbers.
             )doc")
-      .def("brute_force", &WinderEngine::brute_force, "queries"_a,
-           "epsilon"_a = -1.F, "stream"_a = 0,
-           nb::sig("def brute_force(self, queries: Array[N, 3; float32, cuda], "
-                   "epsilon: float32 = -1, stream: uint64_t = 0)"
-                   "-> Array"),
-           R"doc(
-                Computes the winding numbers at the given query location with brute force on GPU.
-                This is O(N^2) but precise.
-
-                Parameters
-                ----------
-                queries : Array
-                    (N, 3) CUDA array of query points.
-                epsilon : float, optional
-                    Regularization scale (smoothing radius) used to prevent numerical 
-                    singularities (NaN/infinity) when queries land near points in point clouds.
-                    Only applies to point cloud backends.
-                    - distance >= 2*epsilon: Acts as standard unregularized potential.
-                    - distance < 2*epsilon: Smoothly dampens potential to a finite maximum.
-                    Use any negative number to use the default value (1/250).
-                stream  : int, optional
-                    The raw 64-bit identifier (handle) of a CUDA stream. 
-                    Allows enqueuing operations asynchronously within deep learning frameworks.
-                    For example, in PyTorch pass: `torch.cuda.current_stream().cuda_stream`.
-                    Default is 0 (the default/null stream).
-
-                Returns
-                -------
-                (N,) float32 CUDA array holding the winding numbers.
-          )doc")
 
       // --- Gradients ---
-      .def("grad_scaled_normals", &WinderEngine::get_grad_normals,
-           "grad_output"_a,
-           nb::sig("def grad_scaled_normals(self, grad_output: Array[Q; "
-                   "float32; cuda]) -> Array[N, 3; float32; cuda]"),
+      .def("gradients", &WinderEngine::get_gradients, "grad_output"_a,
+           "beta"_a = -1.F, "stream"_a = 0,
+           nb::sig("def gradients(self, grad_output: Array[Q; "
+                   "float32; cuda], beta: float32 = -1, stream: uint64_t = 0) "
+                   "-> Array[N, ANY, 3; float32; cuda]"),
            R"doc(
-                Compute the Vector-Jacobian Product (VJP) for the scaled normals.
+                Compute the Vector-Jacobian Product (VJP) for all inputs.
 
                 This function propagates the gradient of a scalar loss function with 
-                respect to the computed winding numbers back to the input normals.
+                respect to the computed winding numbers back to the inputs.
+
+                For Triangles: Gradients w.r.t the vertices.
+                For Points with scaled normals: Gradients w.r.t points and w.r.t scaled normals
 
                 Parameters
                 ----------
@@ -443,18 +296,38 @@ NB_MODULE(winder_module, m) {
                     (Q,) float32 CUDA array representing the gradient of the loss 
                     with respect to the winding numbers at each query location 
                     (dL/dw).
+                beta    : float
+                    Scalar that controls the degree of approximation.
+                    Larger beta leads to more precise results, but also slower execution.
+                    Use any negative number to get default values.
+                    Default for point clouds is 2.0. TODO
+                    Default flor triangles is 2.3 TODO
+                is_brute_force: bool, optional
+                    Computes the gradients for the geometry with brute force on GPU.
+                    This is O(N*M) but precise. (N: geometry count, M: query count)
+                stream : int, optional
+                    The raw 64-bit identifier (handle) of a CUDA stream. 
+                    Allows enqueuing operations asynchronously within deep learning frameworks.
+                    For example, in PyTorch pass: `torch.cuda.current_stream().cuda_stream`.
+                    Default is 0 (the default/null stream).
 
                 Returns
                 -------
-                Array
-                    (N, 3) float32 CUDA array representing the gradient of the loss 
-                    with respect to the input scaled normals (dL/dn). 
-                    Calculated as: dL/dn = (dL/dw)^T * (dw/dn).
+                For Triangles:
+                  Array (N, 3, 3) float32 CUDA array
+                    output[i, j] represents the gradient of the loss 
+                      with respect to the vertex j of triangle i  (dL/dv_j)
+                      Calculated as: dL/dv_j = (dL/dw)^T * (dw/dv_j).
 
-                Note
-                ----
-                If the engine was initialized in Triangle Mesh mode, this returns 
-                an array of zeros as normals are not primary inputs.
+                For Points with scaled Normals:
+                  Array (N, 2, 3) float32 CUDA array
+                    output[i, 0] represents the gradient of the loss 
+                      with respect to the source positions at index i (dL/dp)
+                      Calculated as: dL/dp = (dL/dw)^T * (dw/dp).
+                    output[i, 1] represents the gradient of the loss 
+                      with respect to the input scaled normals at index i (dL/dn). 
+                      Calculated as: dL/dn = (dL/dw)^T * (dw/dn).
+
                 SUBJECT TO CHANGE
             )doc")
 

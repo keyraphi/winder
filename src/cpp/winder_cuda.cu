@@ -709,72 +709,43 @@ auto WinderBackend<Triangle>::CreateFromMesh(const float *vertices,
   return self;
 }
 
-template <>
-auto WinderBackend<PointNormal>::CreateForSolver(const float *points,
-                                                 size_t point_count,
-                                                 int device_id)
-    -> std::unique_ptr<WinderBackend<PointNormal>> {
-  ScopedCudaDevice device_scope(device_id);
-  auto self = std::unique_ptr<WinderBackend<PointNormal>>{
-      new WinderBackend<PointNormal>(point_count, device_id)};
+auto WinderBackend<PointNormal>::grads_brute_force(const float *queries,
+                                                   const float *grad_output,
+                                                   size_t point_count,
+                                                   size_t stream = 0) const
+    -> CudaUniquePtr<float> {
+  const Vec3 *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
+  ScopedCudaDevice device_scope{m_device};
 
-  // initialize unknown normals with 0
-  thrust::device_vector<float> zero_normals(point_count, 0.F);
+  cudaEvent_t start, finish;
+  CUDA_CHECK(cudaEventCreate(&start));
+  CUDA_CHECK(cudaEventCreate(&finish));
 
-  self->initialize_point_data(points, zero_normals.data().get());
-  return self;
-}
+  // convert stream to cuda stream
+  cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
 
-template <>
-auto WinderBackend<PointNormal>::get_normals() const -> CudaUniquePtr<float> {
-  throw std::runtime_error("get_normals is not implemented yet!");
-}
-template <>
-auto WinderBackend<Triangle>::get_normals() const -> CudaUniquePtr<float> {
-  throw std::runtime_error("get_normals is not implemented yet!");
-}
+  CUDA_CHECK(cudaEventRecord(start, compute_stream));
 
-template <>
-auto WinderBackend<PointNormal>::grad_normals(
-    [[maybe_unused]] const float *grad_output,
-    [[maybe_unused]] size_t n_queries) const -> CudaUniquePtr<float> {
-  throw std::runtime_error("grad_normals not implemented yet!");
-}
-template <>
-auto WinderBackend<Triangle>::grad_normals(
-    [[maybe_unused]] const float *grad_output,
-    [[maybe_unused]] size_t n_queries) const -> CudaUniquePtr<float> {
-  throw std::runtime_error("grad_normals not implemented yet!");
-}
+  // Allocate required buffers
+  float *gradients;
+  CUDA_CHECK(cudaMallocAsync(&gradients, m_count * 2 * 3 * sizeof(float),
+                             compute_stream));
 
-template <>
-auto WinderBackend<PointNormal>::grad_points(
-    [[maybe_unused]] const float *grad_output,
-    [[maybe_unused]] size_t n_queries) const -> CudaUniquePtr<float> {
-  throw std::runtime_error("grad_points not implemented yet!");
-}
-template <>
-auto WinderBackend<Triangle>::grad_points(
-    [[maybe_unused]] const float *grad_output,
-    [[maybe_unused]] size_t n_queries) const -> CudaUniquePtr<float> {
-  throw std::runtime_error("grad_points not implemented yet!");
-}
+  compute_brute_force_gradients_point_normals(
+      queries_vec3, grad_output, m_sorted_geometry, (uint32_t)query_count,
+      (uint32_t)m_count, gradients, compute_stream);
 
-template <>
-void WinderBackend<PointNormal>::solve_for_normals(
-    [[maybe_unused]] const float *extra_p, [[maybe_unused]] size_t extra_count,
-    [[maybe_unused]] const float *extra_wn, [[maybe_unused]] const float *pc_wn,
-    [[maybe_unused]] float alpha) {
-  throw std::runtime_error("solve_for_normals not implemented yet!");
-}
-template <>
-void WinderBackend<Triangle>::solve_for_normals(
-    [[maybe_unused]] const float *extra_p, [[maybe_unused]] size_t extra_count,
-    [[maybe_unused]] const float *extra_wn, [[maybe_unused]] const float *pc_wn,
-    [[maybe_unused]] float alpha) {
-  throw std::runtime_error("solve_for_normals not implemented yet!");
-}
+  // TODO write out to original positions
 
+  CUDA_CHECK(cudaEventRecord(finish, compute_stream));
+  // free events
+  CUDA_CHECK(cudaEventDestroy(start));
+  CUDA_CHECK(cudaEventDestroy(finish));
+
+  CudaUniquePtr<float> result(
+      gradients, CudaDeleter{reinterpret_cast<size_t>(compute_stream)});
+  return result;
+}
 
 template <IsGeometry Geometry>
 auto WinderBackend<Geometry>::dump() const -> std::string {

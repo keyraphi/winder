@@ -729,18 +729,19 @@
 
               <h4 class="text-sm font-semibold text-slate-700 mt-4 mb-2">Kernel Definitions</h4>
               <p>
-                  Where the spatial displacement vector is defined as $r = x_j - p_i$ with magnitude $r = \|r\|$, the analytical forms of the 3D potential field kernels are given by:
+                  Where the spatial displacement vector is defined as $r = x_j - p_i$ and its magnitude is denoted as $\|r\|$, the
+                  analytical forms of the 3D potential field kernels are given by:
               </p>
 
               <div class="my-4 bg-slate-50 p-4 rounded-lg border border-slate-200 text-sm space-y-4">
                   <div>
                       <span class="text-xs font-mono text-slate-500 block">Free-Space Green's Function Gradient ($\nabla G \in \mathbb{R}^3$):</span>
-                      $$\nabla G(r) = -\frac{r}{4\pi r^3}$$
+                      $$\nabla G(r) = -\frac{r}{4\pi \|r\|^3}$$
                   </div>
                   <hr class="border-slate-200" />
                   <div>
                       <span class="text-xs font-mono text-slate-500 block">Spatial Hessian Matrix ($\mathbf{H}_G \in \mathbb{R}^{3 \times 3}$):</span>
-                      $$\mathbf{H}_G(r) = \frac{1}{4\pi r^5} \left( 3r r^T - r^2 \mathbf{I} \right)$$
+                      $$\mathbf{H}_G(r) = \frac{1}{4\pi \|r\|^5} \left( 3r r^T - \|r\|^2 \mathbf{I} \right)$$
                       <span class="text-xs text-slate-500 mt-1 block">where $\mathbf{I}$ is the $3 \times 3$ identity matrix.</span>
                   </div>
                   <hr class="border-slate-200" />

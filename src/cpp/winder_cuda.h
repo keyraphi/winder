@@ -65,10 +65,6 @@ public:
                                size_t point_count, int device_id)
       -> std::unique_ptr<WinderBackend<PointNormal>>;
 
-  static auto CreateForSolver(const float *points, size_t point_count,
-                              int device_id)
-      -> std::unique_ptr<WinderBackend<PointNormal>>;
-
   auto compute(const float *queries, size_t query_count, float beta = -1,
                float epsilon = -1, size_t stream = 0) const
       -> CudaUniquePtr<float>;
@@ -76,20 +72,16 @@ public:
   auto brute_force(const float *queries, size_t query_count, float epsilon = -1,
                    size_t stream = 0) const -> CudaUniquePtr<float>;
 
-  [[nodiscard]] auto get_normals() const -> CudaUniquePtr<float>;
-  [[nodiscard]] auto grad_normals(const float *grad_output,
-                                  size_t n_queries) const
+  [[nodiscard]] auto get_gradients(const float *grad_output, size_t point_count,
+                                   float beta = -1, size_t stream = 0) const
       -> CudaUniquePtr<float>;
-  [[nodiscard]] auto grad_points(const float *grad_output,
-                                 size_t n_queries) const
+  [[nodiscard]] auto grads_brute_force(const float *grad_output,
+                                       size_t point_count,
+                                       size_t stream = 0) const
       -> CudaUniquePtr<float>;
 
   [[nodiscard]] auto point_count() const -> size_t { return m_count; }
   [[nodiscard]] auto device_id() const -> int { return m_device; }
-
-  void solve_for_normals(const float *extra_p, size_t extra_count,
-                         const float *extra_wn, const float *pc_wn,
-                         float alpha);
 
   [[nodiscard]] auto dump() const -> std::string;
 
@@ -122,9 +114,10 @@ public: // TODO DEBUG  make private!
   // --- BVH8 Tree Structure (Final Output) ---
   BVH8Node *m_bvh8_nodes; // [~0.2L] The 8-way wide-tree nodes (Quantized AABBs
                           // + Topology)
-  TailorCoefficientsF16 *m_tailor_coefficients; // Tailor expansion terms for nodes
+  TailorCoefficientsF16
+      *m_tailor_coefficients; // Tailor expansion terms for nodes
   TailorCoefficientsF16 *m_leaf_coefficients; // [L] Taylor expansion terms for
-                                               // leaf clusters (half)
+                                              // leaf clusters (half)
 
   // --- BVH8 Construction & M2M Support ---
   LeafPointers *m_bvh8_leaf_pointers; // [0.2L] Map: BVH8Node slot -> Leaf index
