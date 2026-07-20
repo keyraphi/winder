@@ -120,10 +120,8 @@ __global__ void gradients_brute_force_point_normals_kernel(
   const float reg_term_const = inv_epsilon3 * INV_PI_1_5;
   const float near_field_g_denum = (INV_PI_1_5 / 3.F) * inv_epsilon3;
 
-  uint32_t morton_idx =
-      pn_idx < geometry_count ? mapping_to_internal[pn_idx] : 0;
   PointNormal my_point_normal =
-      PointNormal::load(geometry, morton_idx, geometry_count);
+      PointNormal::load(geometry, pn_idx, geometry_count);
 
   // Accumulate gradient contributions tile by tile
   for (uint32_t i = 0; i < query_count; i += BlockSize) {
@@ -198,7 +196,8 @@ __global__ void gradients_brute_force_point_normals_kernel(
 
   // Write out result
   if (pn_idx < geometry_count) {
-    uint32_t out_base = 6 * pn_idx;
+    uint32_t orig_idx = mapping_to_internal[pn_idx];
+    uint32_t out_base = 6 * orig_idx;
     out_gradients[out_base] = my_n_grad.x;
     out_gradients[out_base + 1] = my_n_grad.y;
     out_gradients[out_base + 2] = my_n_grad.z;
@@ -257,10 +256,8 @@ __global__ void gradients_brute_force_triangles_kernel(
   Vec3 c_v1 = Vec3::zero();
   Vec3 c_v2 = Vec3::zero();
 
-  uint32_t morton_idx =
-      pn_idx < geometry_count ? mapping_to_internal[pn_idx] : 0;
   Triangle my_triangle =
-      Triangle::load(geometry, morton_idx, geometry_count);
+      Triangle::load(geometry, pn_idx, geometry_count);
 
   // Accumulate gradient contributions tile by tile
   for (uint32_t i = 0; i < query_count; i += BlockSize) {
@@ -346,7 +343,8 @@ __global__ void gradients_brute_force_triangles_kernel(
 
   // Write out result
   if (pn_idx < geometry_count) {
-    uint32_t out_base = 9 * pn_idx;
+    uint32_t orig_idx = mapping_to_internal[pn_idx];
+    uint32_t out_base = 9 * orig_idx;
     out_gradients[out_base] = my_v0_grad.x;
     out_gradients[out_base + 1] = my_v0_grad.y;
     out_gradients[out_base + 2] = my_v0_grad.z;

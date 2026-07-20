@@ -650,7 +650,6 @@ auto WinderBackend<PointNormal>::CreateFromPoints(const float *points,
     -> std::unique_ptr<WinderBackend<PointNormal>> {
   ScopedCudaDevice device_scope(device_id);
 
-  printf("CreateFromPoints!\n");
   auto self = std::unique_ptr<WinderBackend<PointNormal>>{
       new WinderBackend<PointNormal>(point_count, device_id)};
   self->initialize_point_data(points, normals);
@@ -679,7 +678,6 @@ auto WinderBackend<Triangle>::CreateFromMesh(const float *vertices,
                                              int device_id)
     -> std::unique_ptr<WinderBackend<Triangle>> {
   ScopedCudaDevice device_scope(device_id);
-  printf("CreateFromMesh!\n");
   auto self = std::unique_ptr<WinderBackend>{
       new WinderBackend<Triangle>(triangle_count, device_id)};
 
@@ -710,10 +708,12 @@ auto WinderBackend<Triangle>::CreateFromMesh(const float *vertices,
 }
 
 template <>
-auto WinderBackend<Triangle>::grads_brute_force(
-    const float *queries, const float *grad_output, 
-    const size_t query_count, [[maybe_unused]] float epsilon,
-    size_t stream) const -> CudaUniquePtr<float> {
+auto WinderBackend<Triangle>::grads_brute_force(const float *queries,
+                                                const float *grad_output,
+                                                const size_t query_count,
+                                                [[maybe_unused]] float epsilon,
+                                                size_t stream) const
+    -> CudaUniquePtr<float> {
   const Vec3 *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
   ScopedCudaDevice device_scope{m_device};
 
@@ -732,8 +732,8 @@ auto WinderBackend<Triangle>::grads_brute_force(
                              compute_stream));
 
   compute_brute_force_gradients_triangles(
-      queries_vec3, grad_output, m_sorted_geometry, m_to_internal, (uint32_t)query_count,
-      (uint32_t)m_count, gradients, compute_stream);
+      queries_vec3, grad_output, m_sorted_geometry, m_to_internal,
+      (uint32_t)query_count, (uint32_t)m_count, gradients, compute_stream);
 
   CUDA_CHECK(cudaEventRecord(finish, compute_stream));
   // free events
@@ -746,10 +746,12 @@ auto WinderBackend<Triangle>::grads_brute_force(
 }
 
 template <>
-auto WinderBackend<PointNormal>::grads_brute_force(
-    const float *queries, const float *grad_output, 
-    const size_t query_count,
-    float epsilon, size_t stream) const -> CudaUniquePtr<float> {
+auto WinderBackend<PointNormal>::grads_brute_force(const float *queries,
+                                                   const float *grad_output,
+                                                   const size_t query_count,
+                                                   float epsilon,
+                                                   size_t stream) const
+    -> CudaUniquePtr<float> {
   const Vec3 *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
   ScopedCudaDevice device_scope{m_device};
 
@@ -773,8 +775,9 @@ auto WinderBackend<PointNormal>::grads_brute_force(
                              compute_stream));
 
   compute_brute_force_gradients_point_normals(
-      queries_vec3, grad_output, m_sorted_geometry, m_to_internal, (uint32_t)query_count,
-      (uint32_t)m_count, epsilon, gradients, compute_stream);
+      queries_vec3, grad_output, m_sorted_geometry, m_to_internal,
+      (uint32_t)query_count, (uint32_t)m_count, epsilon, gradients,
+      compute_stream);
 
   CUDA_CHECK(cudaEventRecord(finish, compute_stream));
   // free events
@@ -784,6 +787,17 @@ auto WinderBackend<PointNormal>::grads_brute_force(
   CudaUniquePtr<float> result(
       gradients, CudaDeleter{reinterpret_cast<size_t>(compute_stream)});
   return result;
+}
+
+template <IsGeometry Geometry>
+auto WinderBackend<Geometry>::get_gradients(
+    [[maybe_unused]] const float *queries,
+    [[maybe_unused]] const float *grad_output,
+    [[maybe_unused]] size_t query_count, [[maybe_unused]] float beta,
+    [[maybe_unused]] float epsilon, [[maybe_unused]] size_t stream) const
+    -> CudaUniquePtr<float> {
+  throw std::runtime_error(
+      "get_gradients is not yet implemented Work In Proress!");
 }
 
 template <IsGeometry Geometry>

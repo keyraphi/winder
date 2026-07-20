@@ -23,6 +23,7 @@ def positive_type(arg: str) -> int:
         raise argparse.ArgumentTypeError("Minimum value is 1")
     return x
 
+
 def apply_colormap_gpu(
     winding_numbers, resolution: int, cmap_name: str = "vanimo"
 ) -> NPT.ArrayLike:
@@ -70,6 +71,7 @@ def apply_colormap_gpu(
 
     return (color_tensor * 255).to(torch.uint8).cpu().numpy()
 
+
 def write_video(
     video_path: str, frames_numpy_array: NPT.ArrayLike, fps=25, is_lossless: bool = True
 ):
@@ -84,7 +86,6 @@ def write_video(
 
         for frame in tqdm(frames_numpy_array, desc="writing video"):
             file.write_frame(frame)
-
 
 
 @torch.no_grad()
@@ -221,10 +222,12 @@ def create_vis_mesh(
 
     match mode:
         case "igl":
-            query_list_block = np.concatenate(query_list, axis = 0)
+            query_list_block = np.concatenate(query_list, axis=0)
             print("Computing winding numbers with IGL...")
             start_time = time()
-            winding_numbers = igl.fast_winding_number(vertices, indices, query_list_block)
+            winding_numbers = igl.fast_winding_number(
+                vertices, indices, query_list_block
+            )
             end_time = time()
             duration = end_time - start_time
             duration_per_frame = duration / len(query_list)
@@ -232,7 +235,7 @@ def create_vis_mesh(
             metrics["compute_time_sec"] = duration
 
         case "winder":
-            query_list_block = np.concatenate(query_list, axis = 0)
+            query_list_block = np.concatenate(query_list, axis=0)
             print("Uploading vertices, indices and query_list...")
             start_upload_time = time()
             vertices_torch = torch.from_numpy(vertices).to(device)
@@ -251,7 +254,9 @@ def create_vis_mesh(
             )
             print("Computing winding numbers with WINDER...")
             start_time = time()
-            winding_numbers = engine.compute(query_list_block_torch, stream=torch.cuda.current_stream().cuda_stream)
+            winding_numbers = engine.compute(
+                query_list_block_torch, stream=torch.cuda.current_stream().cuda_stream
+            )
             torch.cuda.synchronize()
             end_time = time()
             duration = end_time - start_time
@@ -270,7 +275,7 @@ def create_vis_mesh(
             metrics["download_time_sec"] = end_download - start_download
 
         case "brute_force":
-            query_list_block = np.concatenate(query_list, axis = 0)
+            query_list_block = np.concatenate(query_list, axis=0)
             print("Uploading vertices, indices, and query_list...")
             start_upload_time = time()
             vertices_torch = torch.from_numpy(vertices).to(device)
@@ -290,7 +295,11 @@ def create_vis_mesh(
 
             print("Computing winding numbers with WINDER BRUTE FORCE...")
             start_time = time()
-            winding_numbers = engine.brute_force(query_list_block_torch, stream=torch.cuda.current_stream().cuda_stream)
+            winding_numbers = engine.compute(
+                query_list_block_torch,
+                is_brute_force=True,
+                stream=torch.cuda.current_stream().cuda_stream,
+            )
             torch.cuda.synchronize()
             end_time = time()
             duration = end_time - start_time
@@ -350,9 +359,7 @@ def create_vis_mesh(
             raise ValueError("Unsupported mode.")
 
     print("Applying colormap...")
-    winding_numbers = winding_numbers.reshape(
-        [len(query_list), resolution, resolution]
-    )
+    winding_numbers = winding_numbers.reshape([len(query_list), resolution, resolution])
     winding_numbers_frames = apply_colormap_gpu(winding_numbers, resolution)
 
     if add_duration_string:
@@ -574,12 +581,14 @@ def main():
             if os.path.isfile(gt_path):
                 print(f"--> Found cached ground truth tensor at: {gt_path}. Loading...")
                 gt_winding_numbers = np.load(gt_path).squeeze()
-                
+
                 # Make sure we don't evaluate brute_force again
                 if "brute_force" in methods_to_execute:
                     methods_to_execute.remove("brute_force")
             else:
-                print(f"--> [Warning] --gt_prefix provided but '{gt_path}' was not found. Reverting to active brute force calculation.")
+                print(
+                    f"--> [Warning] --gt_prefix provided but '{gt_path}' was not found. Reverting to active brute force calculation."
+                )
                 if "brute_force" not in methods_to_execute:
                     methods_to_execute.insert(0, "brute_force")
         else:
@@ -667,6 +676,7 @@ def main():
             args.resolution,
             diagnostic_filename,
         )
+
 
 if __name__ == "__main__":
     main()

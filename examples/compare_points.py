@@ -423,7 +423,9 @@ def create_vis_points(
 
             print("Computing winding numbers with WINDER...")
             start_time = time()
-            winding_numbers = engine.compute(query_list_block_torch, stream=torch.cuda.current_stream().cuda_stream)
+            winding_numbers = engine.compute(
+                query_list_block_torch, stream=torch.cuda.current_stream().cuda_stream
+            )
             torch.cuda.synchronize()
             end_time = time()
             duration = end_time - start_time
@@ -464,7 +466,11 @@ def create_vis_points(
 
             print("Computing winding numbers with WINDER BRUTE FORCE...")
             start_time = time()
-            winding_numbers = engine.brute_force(query_list_block_torch, stream=torch.cuda.current_stream().cuda_stream)
+            winding_numbers = engine.compute(
+                query_list_block_torch,
+                is_brute_force=True,
+                stream=torch.cuda.current_stream().cuda_stream,
+            )
             torch.cuda.synchronize()
             end_time = time()
             duration = end_time - start_time
@@ -813,7 +819,8 @@ def main():
                     run_metrics["mae"] = "N/A"
                     run_metrics["rmse"] = "N/A"
             metrics.update(run_metrics)
-        except:
+        except Exception as e:
+            print(e)
             metrics["mse"] = "N/A"
             metrics["mae"] = "N/A"
             metrics["rmse"] = "N/A"
