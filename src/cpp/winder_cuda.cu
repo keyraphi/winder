@@ -36,13 +36,13 @@
 #include <thrust/sequence.h>
 #include <thrust/sort.h>
 #include <thrust/transform.h>
-#include <vector>
 #include <vector_functions.h>
 #include <vector_types.h>
 
 #include "aabb.h"
 #include "binary_node.h"
 #include "bvh8.h"
+#include "utils.h"
 #include "geometry.h"
 #include "kernels/binary2bvh8.cuh"
 #include "kernels/brute_force.cuh"

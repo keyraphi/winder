@@ -1,7 +1,13 @@
 CompileFlags:
   Add:
     - -Wall
+    - --cuda-path=/graphics/opt/opt_Ubuntu18.04/cuda/toolkit_13.3.0/cuda
+    - -I/graphics/opt/opt_Ubuntu18.04/cuda/toolkit_13.3.0/cuda/include
+    - -I/graphics/opt/opt_Ubuntu18.04/cuda/toolkit_13.3.0/cuda/targets/x86_64-linux/include
+    - -I/graphics/opt/opt_Ubuntu18.04/cuda/toolkit_13.3.0/cuda/targets/x86_64-linux/include/cccl
     - -I/opt/cuda/include
+    - -I/opt/cuda/targets/x86_64-linux/include
+    - -I/opt/cuda/targets/x86_64-linux/include/cccl
     - -Wextra
     - -fopenmp
     - --cuda-gpu-arch=sm_90

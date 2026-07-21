@@ -1,14 +1,33 @@
 #pragma once
 #include <cstddef>
-#include <cstdint>
 #include <cuda_runtime_api.h>
-#include <optional>
-#include <string>
+#include <memory>
+
+struct CudaDeleter {
+  size_t stream = 0; // Plain integer data type, safe for pure C++
+
+  // Constructor to make initialization clean
+  explicit CudaDeleter(size_t stream_ptr = 0) : stream(stream_ptr) {}
+
+  void operator()(void *ptr) const;
+};
+
+class ScopedCudaDevice {
+private:
+  int original_device_;
+
+public:
+  ScopedCudaDevice(int new_device);
+  ~ScopedCudaDevice();
+
+  // Disallow copying
+  ScopedCudaDevice(const ScopedCudaDevice &) = delete;
+  ScopedCudaDevice &operator=(const ScopedCudaDevice &) = delete;
+};
+
+template <typename T> using CudaUniquePtr = std::unique_ptr<T[], CudaDeleter>;
 
 namespace winder_cuda {
-
-// Forward declarations
-class ScopedCudaDevice;
 
 // CUDA memory management functions
 void *cuda_allocate(size_t size);

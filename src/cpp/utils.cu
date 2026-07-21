@@ -16,6 +16,12 @@
     }                                                                          \
   } while (0)
 
+ScopedCudaDevice::ScopedCudaDevice(int new_device) {
+  cudaGetDevice(&original_device_);
+  cudaSetDevice(new_device);
+}
+ScopedCudaDevice::~ScopedCudaDevice() { cudaSetDevice(original_device_); }
+
 namespace winder_cuda {
 // Helper to get CUDA device from nanobind ndarray
 auto get_cuda_device_from_ndarray(const void *data_ptr) -> int {

@@ -4,6 +4,7 @@
 #include "bvh8.h"
 #include "geometry.h"
 #include "tailor_coefficients.h"
+#include "utils.h"
 #include "vec3.h"
 #include <cstddef>
 #include <cstdint>
@@ -19,33 +20,6 @@
 #define LEAF_SIZE 32
 #define L2_ALIGN 128
 
-// forward definitions
-
-class ScopedCudaDevice {
-private:
-  int original_device_;
-
-public:
-  ScopedCudaDevice(int new_device) {
-    cudaGetDevice(&original_device_);
-    cudaSetDevice(new_device);
-  }
-  ~ScopedCudaDevice() { cudaSetDevice(original_device_); }
-  // Disallow copying
-  ScopedCudaDevice(const ScopedCudaDevice &) = delete;
-  ScopedCudaDevice &operator=(const ScopedCudaDevice &) = delete;
-};
-
-struct CudaDeleter {
-  size_t stream = 0; // Plain integer data type, safe for pure C++
-
-  // Constructor to make initialization clean
-  explicit CudaDeleter(size_t stream_ptr = 0) : stream(stream_ptr) {}
-
-  void operator()(void *ptr) const;
-};
-
-template <typename T> using CudaUniquePtr = std::unique_ptr<T[], CudaDeleter>;
 
 template <IsGeometry Geometry> class WinderBackend {
 

@@ -14,6 +14,7 @@
 
 #include "geometry.h"
 #include "utils.h"
+#include "winder_brute_force.h"
 #include "winder_cuda.h"
 
 namespace nb = nanobind;
@@ -53,6 +54,77 @@ struct AsyncCleanupGlue {
   CudaDeleter deleter;
 };
 
+auto brute_force_winding_numbers(const Vec3_t &points,
+                                 const Vec3_t &scaled_normals,
+                                 const Vec3_t &queries, float epsilon = -1,
+                                 const uint64_t stream = 0) -> Scalar_t {
+  if (points.device_id() != scaled_normals.device_id()) {
+    throw std::runtime_error(
+        "Points and Normals must be on the same CUDA device.");
+  }
+  if (points.shape(0) != scaled_normals.shape(0)) {
+    throw std::runtime_error(
+        "Shape of points must be equal to shape of normals.");
+  }
+  CudaUniquePtr<float> raw_ptr_unique = brute_force_point_normal_impl(
+      points.data(), scaled_normals.data(), queries.data(), points.shape(0),
+      queries.shape(0), epsilon, points.device_id(), stream);
+
+  CudaDeleter deleter = raw_ptr_unique.get_deleter();
+  float *raw_ptr = raw_ptr_unique.release();
+
+  auto *glue = new AsyncCleanupGlue{raw_ptr, deleter};
+
+  nb::capsule owner(glue, [](void *p) noexcept -> void {
+    auto *g = static_cast<AsyncCleanupGlue *>(p);
+    g->deleter(g->ptr);
+    delete g;
+  });
+  return {raw_ptr, {queries.shape(0)}, owner};
+}
+
+auto brute_force_winding_numbers(const Vec3_t &vertices,
+                                 const TriangleIdx_t &triangle_indices,
+                                 const Vec3_t &queries,
+                                 const uint64_t stream = 0) -> Scalar_t {
+  if (vertices.device_id() != triangle_indices.device_id()) {
+    throw std::runtime_error(
+        "Vertices and triangle_indices must be on the same CUDA device.");
+  }
+  CudaUniquePtr<float> raw_ptr_unique = brute_force_mesh_impl(
+      vertices.data(), triangle_indices.data(), queries.data(),
+      triangle_indices.shape(0), queries.shape(0), vertices.shape(0), vertices.device_id(), stream);
+  CudaDeleter deleter = raw_ptr_unique.get_deleter();
+  float *raw_ptr = raw_ptr_unique.release();
+
+  auto *glue = new AsyncCleanupGlue{raw_ptr, deleter};
+
+  nb::capsule owner(glue, [](void *p) noexcept -> void {
+    auto *g = static_cast<AsyncCleanupGlue *>(p);
+    g->deleter(g->ptr);
+    delete g;
+  });
+  return {raw_ptr, {queries.shape(0)}, owner};
+}
+auto brute_force_winding_numbers(const Triangle_t &triangles,
+                                 const Vec3_t &queries,
+                                 const uint64_t stream = 0) -> Scalar_t {
+  CudaUniquePtr<float> raw_ptr_unique =
+      brute_force_triangle_impl(triangles.data(), queries.data(),
+                                triangles.shape(0), queries.shape(0), triangles.device_id(), stream);
+  CudaDeleter deleter = raw_ptr_unique.get_deleter();
+  float *raw_ptr = raw_ptr_unique.release();
+
+  auto *glue = new AsyncCleanupGlue{raw_ptr, deleter};
+
+  nb::capsule owner(glue, [](void *p) noexcept -> void {
+    auto *g = static_cast<AsyncCleanupGlue *>(p);
+    g->deleter(g->ptr);
+    delete g;
+  });
+  return {raw_ptr, {queries.shape(0)}, owner};
+}
+
 class WinderEngine {
 public:
   // --- Triangle Mesh Constructor ---
@@ -90,28 +162,17 @@ public:
   }
 
   auto compute(const Vec3_t &queries, const float beta = -1.F,
-               const float epsilon = -1.F, const bool is_brute_force = false,
+               const float epsilon = -1.F,
                const size_t stream = 0) -> Scalar_t {
     size_t n = queries.shape(0);
-    // todo ensure queries are on same device as m_impl
 
     CudaUniquePtr<float> raw_ptr_unique;
-    if (is_brute_force) {
-      if (is_backend_triangle) {
-        raw_ptr_unique =
-            m_impl_tri->brute_force(queries.data(), n, epsilon, stream);
-      } else {
-        raw_ptr_unique =
-            m_impl_pn->brute_force(queries.data(), n, epsilon, stream);
-      }
+    if (is_backend_triangle) {
+      raw_ptr_unique =
+          m_impl_tri->compute(queries.data(), n, beta, epsilon, stream);
     } else {
-      if (is_backend_triangle) {
-        raw_ptr_unique =
-            m_impl_tri->compute(queries.data(), n, beta, epsilon, stream);
-      } else {
-        raw_ptr_unique =
-            m_impl_pn->compute(queries.data(), n, beta, epsilon, stream);
-      }
+      raw_ptr_unique =
+          m_impl_pn->compute(queries.data(), n, beta, epsilon, stream);
     }
 
     CudaDeleter deleter = raw_ptr_unique.get_deleter();
@@ -197,8 +258,11 @@ NB_MODULE(winder_module, m) {
         CUDA device.
     )doc";
 
-  m.def("brute_force_winding_numbers", brute_force_winding_numbers, "points"_a,
-        "scaled_normals"_a, "queries"_a, "epsilon"_a = -1.F, "stream"_a = 0,
+  m.def("brute_force_winding_numbers",
+        nb::overload_cast<const Vec3_t &, const Vec3_t &, const Vec3_t &, float,
+                          uint64_t>(&brute_force_winding_numbers),
+        "points"_a, "scaled_normals"_a, "queries"_a, "epsilon"_a = -1.F,
+        "stream"_a = 0,
         nb::sig("def brute_force_winding_numbers(points: Array[N, 3; float32, "
                 "cuda], scaled_normals: Array[N, 3; float32, cuda], queries: "
                 "Array[M, 3; float32, cuda], epsilon: float32 = -1, "
@@ -236,8 +300,10 @@ NB_MODULE(winder_module, m) {
                 (M,) float32 CUDA array holding the winding numbers for the queries.
             )doc");
   m.def(
-      "brute_force_winding_numbers", brute_force_winding_numbers, "vertices"_a,
-      "triangle_indices"_a, "queries"_a, "stream"_a = 0,
+      "brute_force_winding_numbers",
+      nb::overload_cast<const Vec3_t &, const TriangleIdx_t &, const Vec3_t &,
+                        uint64_t>(&brute_force_winding_numbers),
+      "vertices"_a, "triangle_indices"_a, "queries"_a, "stream"_a = 0,
       nb::sig("def brute_force_winding_numbers(vertices: Array[K, 3; float32, "
               "cuda], triangle_indices: Array[N, 3; uint32, cuda], queries: "
               "Array[M, 3; float32, cuda], "
@@ -266,7 +332,9 @@ NB_MODULE(winder_module, m) {
                 -------
                 (M,) float32 CUDA array holding the winding numbers for the queries.
             )doc");
-  m.def("brute_force_winding_numbers", brute_force_winding_numbers,
+  m.def("brute_force_winding_numbers",
+        nb::overload_cast<const Triangle_t &, const Vec3_t &, uint64_t>(
+            &brute_force_winding_numbers),
         "triangles"_a, "queries"_a, "stream"_a = 0,
         nb::sig("def brute_force_winding_numbers(triangles: Array[N, 3, 3; "
                 "float32, cuda], queries: Array[M, 3; float32, cuda], stream: "
