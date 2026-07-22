@@ -346,6 +346,34 @@
                 negative. Left: Progressive cross-sectional scans. Right: Path-traced 3D volumetric field.
             </span>
         </div>
+        <h4 class="text-sm font-semibold uppercase tracking-wider text-slate-400 mt-8 mb-2">Singularity &amp; Boundary Regularization</h4>
+        <p class="mb-4">
+            A fundamental issue with the classical formulation of the point dipole sum is its singular behavior: as a query point
+            $x$ approaches a source point $p_i$, the denominator $\|p_i - x\|^3$ approaches zero, causing the evaluation to diverge
+            to infinity ($\pm \infty$). To resolve this and ensure smooth, continuous evaluations, we use the regularized potential
+            formulation proposed by
+            <a href="https://dl.acm.org/doi/10.1145/3687914" target="_blank" class="text-cyan-600 font-medium hover:underline">Chen et al.</a> 
+            This replaces the singular potential field with a smooth, regularized counterpart controlled by a spatial scale parameter $\epsilon$:
+        </p>
+
+        <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
+            $$\mathcal{W}_{\text{points},\epsilon}(x) = \frac{1}{4\pi} \sum_{i} \frac{(p_i - x) \cdot n_i}{\|p_i - x\|^3} S(t) a_i$$
+        </div>
+
+        <p class="mb-4">
+            Where $t = \frac{\|p_i - x\|}{\epsilon}$ is a non-dimensional distance parameter, and $S(t)$ is a smooth regularization scaling modifier defined piecewise based on the proximity to the source point:
+        </p>
+
+        <div id="RegularizationModifier" class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-sm space-y-4">
+            <div>
+                <span class="text-xs font-mono text-slate-500 block mb-1">Regularization Modifier $S(t)$ (Our Formulation):</span>
+                $$S(t) = \begin{cases} 
+                    \frac{4}{3\sqrt{\pi}} t^3 & \text{for } t < 0.1 \quad \text{(Taylor Approximation)} \\ 
+                    \text{erf}(t) - \frac{2t}{\sqrt{\pi}} e^{-t^2} & \text{for } 0.1 \le t < 2.0 \\ 
+                    1.0 & \text{for } t \ge 2.0 \quad \text{(Standard Poisson)} 
+                \end{cases}$$
+            </div>
+        </div>
     </div>
 </section>
 
@@ -700,7 +728,7 @@
                     </span>
                 </div>
 
-            <h3 class="text-lg font-semibold text-slate-800 mt-6 mb-1">4. Partial Derivatives</h3>
+              <h3 class="text-lg font-semibold text-slate-800 mt-6 mb-1">4. Partial Derivatives</h3>
               <p>
                   To compute the partial derivatives of generalized winding numbers for reverse-mode automatic differentiation, we map an
                   incoming scalar adjoint gradient $g_j = \frac{\partial \mathcal{L}}{\partial w(x_j)} \in \mathbb{R}$ at each query
@@ -712,56 +740,71 @@
                   <div class="space-y-4">
                       <div>
                           <span class="text-xs font-mono text-slate-500 block ">1. Gradient w.r.t. Scaled Normals (Dipole Moments $m_i = a_i \cdot n_i \in \mathbb{R}^3$):</span>
-                          $$\frac{\partial \mathcal{L}}{\partial m_i} = \sum_{j=1}^{M} g_j \nabla G(x_j - p_i)$$
+                          $$\frac{\partial \mathcal{L}}{\partial m_i} = \sum_{j=1}^{M} g_j \nabla G_\epsilon(x_j - p_i)$$
                       </div>
                       <hr class="border-slate-200" />
                       <div>
                           <span class="text-xs font-mono text-slate-500 block">2. Gradient w.r.t. Source Point Positions ($p_i \in \mathbb{R}^3$):</span>
-                          $$\frac{\partial \mathcal{L}}{\partial p_i} = -\sum_{j=1}^{M} g_j \mathbf{H}_G(x_j - p_i) m_i$$
+                          $$\frac{\partial \mathcal{L}}{\partial p_i} = -\sum_{j=1}^{M} g_j \mathbf{H}_{G,\epsilon}(x_j - p_i) m_i$$
                       </div>
                       <hr class="border-slate-200" />
                       <div>
                           <span class="text-xs font-mono text-slate-500 block">3. Gradient w.r.t. Triangle Vertices ($v_k \in \mathbb{R}^3$):</span>
-                          $$\frac{\partial \mathcal{L}}{\partial v_k} = \sum_{j=1}^{M} g_j \frac{\partial \Omega_T(x_j)}{\partial v_k}$$
+                          $$\frac{\partial \mathcal{L}}{\partial v_k} = \sum_{j=1}^{M} g_j \frac{\partial w_T(x_j)}{\partial v_k}$$
                       </div>
                   </div>
               </div>
 
               <h4 class="text-sm font-semibold text-slate-700 mt-4 mb-2">Kernel Definitions</h4>
               <p>
-                  Where the spatial displacement vector is defined as $r = x_j - p_i$ and its magnitude is denoted as $\|r\|$, the
-                  analytical forms of the 3D potential field kernels are given by:
+                  The spatial displacement vector is defined as $r = x_j - p_i$, its magnitude is denoted as $\|r\|$, and the
+                  non-dimensionalized scaling parameter is defined as $t = \frac{\|r\|}{\epsilon}$.
+                  See <a href="#RegularizationModifier" class="text-cyan-600 font-medium hover:underline"> here</a> for a reminder
+                  on the regularization modifier $S(t)$.
               </p>
-
+              
+              
               <div class="my-4 bg-slate-50 p-4 rounded-lg border border-slate-200 text-sm space-y-4">
                   <div>
-                      <span class="text-xs font-mono text-slate-500 block">Free-Space Green's Function Gradient ($\nabla G \in \mathbb{R}^3$):</span>
-                      $$\nabla G(r) = -\frac{r}{4\pi \|r\|^3}$$
+                      <span class="text-xs font-mono text-slate-500 block">Regularized Green's Function Gradient ($\nabla G_\epsilon \in \mathbb{R}^3$):</span>
+                      $$\nabla G_\epsilon(r) = \begin{cases} -\frac{r}{4\pi \|r\|^3} S(t) & \text{for } t \ge 0.1 \\ -\frac{r}{3\pi^{1.5}\epsilon^3} & \text{for } t < 0.1 \end{cases}$$
                   </div>
                   <hr class="border-slate-200" />
                   <div>
-                      <span class="text-xs font-mono text-slate-500 block">Spatial Hessian Matrix ($\mathbf{H}_G \in \mathbb{R}^{3 \times 3}$):</span>
-                      $$\mathbf{H}_G(r) = \frac{1}{4\pi \|r\|^5} \left( 3r r^T - \|r\|^2 \mathbf{I} \right)$$
-                      <span class="text-xs text-slate-500 mt-1 block">where $\mathbf{I}$ is the $3 \times 3$ identity matrix.</span>
+                      <span class="text-xs font-mono text-slate-500 block">Regularized Spatial Hessian Matrix ($\mathbf{H}_{G,\epsilon} \in \mathbb{R}^{3 \times 3}$):</span>
+                      $$\mathbf{H}_{G,\epsilon}(r) = \begin{cases} \left( \frac{3 K_\epsilon - R_\epsilon}{\|r\|^2} \right) r r^T - K_\epsilon \mathbf{I} & \text{for } t \ge 0.1 \\ -\frac{1}{3\pi^{1.5}\epsilon^3} \mathbf{I} & \text{for } t < 0.1 \end{cases}$$
+                      <div class="text-xs text-slate-500 mt-3 space-y-1.5">
+                          <p>where $\mathbf{I}$ is the $3 \times 3$ identity matrix, and the underlying scalar kernel components are partitioned
+                            into range-specific definitions:</p>
+                      </div>
+                          <div class="bg-slate-100 p-2 rounded font-mono text-[11px] text-slate-600 space-y-1">
+                              $$K_\epsilon = \begin{cases} \frac{S(t)}{4\pi \|r\|^3} & \text{for } t < 2.0 \\ \frac{1}{4\pi \|r\|^3} & \text{for } t \ge 2.0 \end{cases}$$
+                              $$R_\epsilon = \begin{cases} \frac{e^{-t^2}}{\pi^{1.5}\epsilon^3} & \text{for } t < 2.0 \\ 0 & \text{for } t \ge 2.0 \end{cases}$$
+                          </div>
+                      </div>
+                          <p class="pt-1 text-[11px] italic">Note: For $t \ge 2.0$, the regularization modifier $S(t) \to 1.0$ and the evaluation smoothly transitions back to standard free-space behavior.</p>
+                      </div>
                   </div>
-                  <hr class="border-slate-200" />
 
-              <span class="text-xs font-mono text-slate-500 block">Triangle Solid Angle Vertex Gradient ($\frac{\partial
-                \Omega_t}{\partial v_k} \in \mathbb{R}^3$):</span>
+              <span class="text-xs font-mono text-slate-500 block">Triangle Winding Number Vertex Gradient ($\frac{\partial w_T}{\partial v_k} \in \mathbb{R}^3$):</span>
               <p class="text-xs text-slate-600 my-1">
-                  For a fixed query point $x_j$, let the relative vertex vectors be $a = v_1 - x_j$, $b = v_2 - x_j$, and $c = v_3 - x_j$,
+                  For a fixed query point $x_j$, let the relative vertex vectors be $a = v_0 - x_j$, $b = v_1 - x_j$, and $c = v_2 - x_j$,
                   with corresponding unit vectors $\hat{a} = \frac{a}{\|a\|}$, $\hat{b} = \frac{b}{\|b\|}$, and $\hat{c} =
-                  \frac{c}{\|c\|}$. The solid angle $\Omega_t$ is defined via the Oosterom–Strackee formula mentioned previously:
+                  \frac{c}{\|c\|}$. The winding number contribution $w_T(x_j)$ of triangle $T$ is defined via the Oosterom–Strackee formula normalized over the unit sphere:
               </p>
+              <div class="bg-slate-100 p-2 rounded font-mono text-[11px] text-slate-600 space-y-1">
               $$N = a \cdot (b \times c)$$
               $$D = \|a\|\|b\|\|c\| + (a \cdot b)\|c\| + (b \cdot c)\|a\| + (c \cdot a)\|b\|$$
-              $$\Omega_t(x_j) = 2 \arctan \left( \frac{N}{D} \right)$$
+              $$w_T(x_j) = \frac{1}{2\pi} \arctan \left( \frac{N}{D} \right)$$
+              </div>
 
               <p class="text-xs text-slate-600 mt-3 mb-1">
-                  Differentiating $\Omega_t$ with respect to each vertex yields the per-query gradient configuration:
+                  Differentiating $w_T$ with respect to each vertex yields the per-query gradient configuration:
               </p>
-              $$\frac{\partial \Omega_t}{\partial v_k} = 2 \frac{D \frac{\partial N}{\partial v_k} - N \frac{\partial D}{\partial
-              v_k}}{N^2 + D^2} \quad \text{for } k \in \{1, 2, 3\}$$
+              <div class="bg-slate-100 p-2 rounded font-mono text-[11px] text-slate-600 space-y-1">
+              $$\frac{\partial w_T}{\partial v_k} = \frac{1}{2\pi} \frac{D \frac{\partial N}{\partial v_k} - N \frac{\partial D}{\partial
+              v_k}}{N^2 + D^2} \quad \text{for } k \in \{0, 1, 2\}$$
+              </div>
 
               <p class="text-xs text-slate-600 mt-3 mb-2">
                   The explicit intermediate vector derivatives for each vertex $v_k$ are evaluated as follows:
@@ -771,51 +814,56 @@
                   <table class="min-w-full divide-y divide-slate-200 text-left text-xs">
                       <thead class="bg-slate-100 font-mono text-slate-600">
                           <tr>
-                              <th class="px-3 py-2 w-16">Vertex</th>
+                              <th class="px-3 py-2 w-24">Vertex</th>
                               <th class="px-3 py-2">Numerator Derivative ($\frac{\partial N}{\partial v_k}$)</th>
                               <th class="px-3 py-2">Denominator Derivative ($\frac{\partial D}{\partial v_k}$)</th>
                           </tr>
                       </thead>
                       <tbody class="divide-y divide-slate-200 font-mono text-slate-700 bg-white">
                           <tr>
-                              <td class="px-3 py-2 font-bold font-sans text-slate-900">$v_1$</td>
+                              <td class="px-3 py-2 font-bold font-sans text-slate-900">$v_0$ <span class="text-slate-500 font-normal">(`v0`)</span></td>
                               <td class="px-3 py-2">$b \times c$</td>
                               <td class="px-3 py-2">$(\|b\|\|c\| + b \cdot c)\hat{a} + \|c\|b + \|b\|c$</td>
                           </tr>
                           <tr>
-                              <td class="px-3 py-2 font-bold font-sans text-slate-900">$v_2$</td>
+                              <td class="px-3 py-2 font-bold font-sans text-slate-900">$v_1$ <span class="text-slate-500 font-normal">(`v1`)</span></td>
                               <td class="px-3 py-2">$c \times a$</td>
                               <td class="px-3 py-2">$(\|c\|\|a\| + c \cdot a)\hat{b} + \|a\|c + \|c\|a$</td>
                           </tr>
                           <tr>
-                              <td class="px-3 py-2 font-bold font-sans text-slate-900">$v_3$</td>
+                              <td class="px-3 py-2 font-bold font-sans text-slate-900">$v_2$ <span class="text-slate-500 font-normal">(`v2`)</span></td>
                               <td class="px-3 py-2">$a \times b$</td>
                               <td class="px-3 py-2">$(\|a\|\|b\| + a \cdot b)\hat{c} + \|b\|a + \|a\|b$</td>
                           </tr>
                       </tbody>
                   </table>
               </div>
+              <div>
               <span class="text-[11px] text-slate-500 block italic leading-normal">
                   Note: These formulations are well-defined everywhere except at singular boundaries (such as directly on the triangle's
                   edges or vertices) where the denominator vanishes ($|D| < 10^{-12}$). In the forward pass, this condition corresponds to
                     a boundary discontinuity where a constant value of $0.5$ is returned; consequently, the gradient is explicitly set to
                     $0$ in this case.
               </span>
+              </div>
 
-              <p>
-                  Evaluating these formulations directly requires a dense pairwise computation between all $N$ geometry elements and all
-                  $M$ query points, yielding a computational complexity of $\mathcal{O}(NM)$.
-              </p>
-              <p>
-                  However, the underlying field behavior of the backward pass closely mirrors the forward pass. While the forward pass
-                  clusters geometry sources because their collective potential field varies smoothly over distance, the backward pass
-                  allows us to cluster query points. The adjoint fields, specifically the free-space Green's function gradient $\nabla G$,
-                  its spatial Hessian $\mathbf{H}_G$, and the boundary derivative vector field, are smooth fields that decay rapidly with
-                  distance to the query position. Consequently, the influence of a distant cluster of query points on any given source
-                  primitive can be replaced
-                  with a Taylor approximation at the cluster center. This leads to a hierarchical approximation scheme that is very
-                  similar to the Fast Winding Numbers scheme in the forward pass.
-              </p>
+              <div>
+              <div class="my-4">
+                <p>
+                    Evaluating these formulations directly requires a dense pairwise computation between all $N$ geometry elements and all
+                    $M$ query points, yielding a computational complexity of $\mathcal{O}(NM)$.
+                </p>
+                <p>
+                    However, the underlying field behavior of the backward pass closely mirrors the forward pass. While the forward pass
+                    clusters geometry sources because their collective potential field varies smoothly over distance, the backward pass
+                    allows us to cluster query points. The adjoint fields, specifically the free-space Green's function gradient $\nabla G$,
+                    its spatial Hessian $\mathbf{H}_G$, and the boundary derivative vector field, are smooth fields that decay rapidly with
+                    distance to the query position. Consequently, the influence of a distant cluster of query points on any given source
+                    primitive can be replaced
+                    with a Taylor approximation at the cluster center. This leads to a hierarchical approximation scheme that is very
+                    similar to the Fast Winding Numbers scheme in the forward pass.
+                </p>
+              </div>
 
               <h4 class="text-sm font-bold uppercase tracking-wider text-slate-700 mt-6 mb-2">Truncated Taylor Expansions for Partial Derivatives</h4>
 
