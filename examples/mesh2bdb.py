@@ -79,7 +79,7 @@ def main():
     queries = torch.stack([grid_x, grid_y, grid_z], dim=-1).reshape(-1, 3)
 
     start = time()
-    engine = winder.WinderEngine(verts, idxs)
+    engine = winder.WindingNumberEngine(verts, idxs)
     print("Evaluating winding numbers on GPU...")
     raw_field = torch.from_dlpack(engine.compute(queries, stream=torch.cuda.current_stream().cuda_stream))
     torch.cuda.synchronize()

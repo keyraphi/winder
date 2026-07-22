@@ -1,5 +1,7 @@
 #include "geometry.h"
+#include "utils.h"
 #include "vec3.h"
+#include "winder_brute_force.h"
 #include "winder_cuda.h"
 #include <cstddef>
 #include <cstdio>
@@ -146,22 +148,28 @@ template <typename T> void RunAccuracyTest(const WinderTestParams &params) {
 
   std::unique_ptr<WinderBackend<T>> backend;
 
+  CudaUniquePtr<float> wn_gt;
   if constexpr (std::is_same_v<T, PointNormal>) {
     backend = WinderBackend<T>::CreateFromPoints(
         (float *)points_d.data().get(), (float *)scaled_normals_d.data().get(),
         points_d.size(), 0);
+    wn_gt = brute_force_point_normal_impl(
+        (float *)points_d.data().get(), (float *)scaled_normals_d.data().get(),
+        (float *)queries_d.data().get(), points_d.size(), query_count, epsilon,
+        0);
   } else {
     backend = WinderBackend<T>::CreateFromTriangles(
         (float *)geom_d.data().get(), geom_d.size(), 0);
+    wn_gt = brute_force_triangle_impl((float *)geom_d.data().get(),
+                                     (float*) queries_d.data().get(), geom_d.size(),
+                                      queries_d.size(), 0);
   }
 
   // DEBUG
   printf("Waiting until tree construction is actually done\n");
   cudaDeviceSynchronize();
 
-  auto wn_gt =
-      backend->brute_force((float *)queries_d.data().get(), queries_d.size());
-  cudaMemcpy(&gt_h[0], wn_gt.get(), params.query_count*sizeof(float),
+  cudaMemcpy(&gt_h[0], wn_gt.get(), params.query_count * sizeof(float),
              cudaMemcpyDeviceToHost);
 
   auto wn = backend->compute((float *)queries_d.data().get(), queries_d.size(),

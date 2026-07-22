@@ -111,6 +111,7 @@ def main():
     grid_x, grid_y, grid_z = torch.meshgrid(lin, lin, lin, indexing="ij")
     queries = torch.stack([grid_x, grid_y, grid_z], dim=-1).reshape(-1, 3)
 
+    print("Evaluating winding numbers on GPU...")
     if args.type == "dipole":
         points = torch.tensor(
             [[0, 0, 0]], dtype=torch.float32, device="cuda:0"
@@ -118,17 +119,15 @@ def main():
         normals = torch.tensor(
             [[0, 0, 1]], dtype=torch.float32, device="cuda:0"
         ).reshape([1, 3])
-        engine = winder.WinderEngine(points, normals)
+        raw_field = torch.from_dlpack(winder.brute_force_winding_numbers(points, normals, queries))
     else:
         triangles = torch.tensor(
             [[[-0.7, -0.7, 0], [0.7, -0.7, 0], [0, 0.7, 0]]],
             dtype=torch.float32,
             device="cuda:0",
         ).reshape([1, 3, 3])
-        engine = winder.WinderEngine(triangles)
+        raw_field = torch.from_dlpack(winder.brute_force_winding_numbers(triangles, queries))
 
-    print("Evaluating winding numbers on GPU...")
-    raw_field = torch.from_dlpack(engine.brute_force(queries))
 
     # Reshape the flat output back into a structured 3D volume [X, Y, Z]
     winding_number_field = raw_field.view(

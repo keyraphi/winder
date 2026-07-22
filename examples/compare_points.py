@@ -414,7 +414,7 @@ def create_vis_points(
 
             print("Building winder engine...")
             start_build_time = time()
-            engine = winder.WinderEngine(points_torch, normals_torch)
+            engine = winder.WindingNumberEngine(points_torch, normals_torch)
             torch.cuda.synchronize()
             end_build_time = time()
             print(
@@ -455,20 +455,12 @@ def create_vis_points(
             end_upload_time = time()
             print(f"Done. Upload took {end_upload_time - start_upload_time:.4f} sec.")
 
-            print("Building winder engine...")
-            start_build_time = time()
-            engine = winder.WinderEngine(points_torch, normals_torch)
-            torch.cuda.synchronize()
-            end_build_time = time()
-            print(
-                f"Done. Building Engine took {end_build_time - start_build_time:.4f} sec."
-            )
-
             print("Computing winding numbers with WINDER BRUTE FORCE...")
             start_time = time()
-            winding_numbers = engine.compute(
+            winding_numbers = winder.brute_force_winding_numbers(
+                points_torch,
+                normals_torch,
                 query_list_block_torch,
-                is_brute_force=True,
                 stream=torch.cuda.current_stream().cuda_stream,
             )
             torch.cuda.synchronize()
@@ -484,7 +476,7 @@ def create_vis_points(
             print("Done.")
 
             metrics["upload_time_sec"] = end_upload_time - start_upload_time
-            metrics["build_time_sec"] = end_build_time - start_build_time
+            metrics["build_time_sec"] = 0
             metrics["compute_time_sec"] = duration
             metrics["download_time_sec"] = end_download - start_download
 

@@ -175,10 +175,9 @@ void compute_brute_force_triangle(const Vec3 *queries_vec3,
 
 template <uint32_t BlockSize = 256>
 __global__ void gradients_brute_force_point_normals_kernel(
-    const Vec3 *__restrict__ queries, const float *__restrict__ in_gradients,
-    SoAView<PointNormal> geometry,
-    const uint32_t *__restrict__ mapping_to_internal,
-    const uint32_t query_count, const uint32_t geometry_count,
+    const float *__restrict__ in_gradients, const Vec3 *__restrict__ points,
+    const Vec3 *__restrict__ normals, const Vec3 *__restrict__ queries,
+    const uint32_t geometry_count, const uint32_t query_count,
     const float inv_epsilon, float *__restrict__ out_gradients) {
 
   uint32_t pn_idx = blockIdx.x * BlockSize + threadIdx.x;
@@ -190,8 +189,8 @@ __global__ void gradients_brute_force_point_normals_kernel(
       reinterpret_cast<float *>(shared_mem + BlockSize * sizeof(Vec3));
 
   // Cast pointers for coalesced cooperative copying
-  const float *queries_float = reinterpret_cast<const float *>(queries);
-  float *tile_q_float = reinterpret_cast<float *>(tile_q);
+  const auto *queries_float = reinterpret_cast<const float *>(queries);
+  auto *tile_q_float = reinterpret_cast<float *>(tile_q);
 
   Vec3 my_p_grad = Vec3::zero();
   Vec3 my_n_grad = Vec3::zero();
@@ -205,8 +204,10 @@ __global__ void gradients_brute_force_point_normals_kernel(
   const float reg_term_const = inv_epsilon3 * INV_PI_1_5;
   const float near_field_g_denum = (INV_PI_1_5 / 3.F) * inv_epsilon3;
 
-  PointNormal my_point_normal =
-      PointNormal::load(geometry, pn_idx, geometry_count);
+  PointNormal my_point_normal;
+  if (pn_idx < geometry_count) {
+    my_point_normal = PointNormal{.p = points[pn_idx], .n = normals[pn_idx]};
+  }
 
   // Accumulate gradient contributions tile by tile
   for (uint32_t i = 0; i < query_count; i += BlockSize) {
@@ -281,8 +282,7 @@ __global__ void gradients_brute_force_point_normals_kernel(
 
   // Write out result
   if (pn_idx < geometry_count) {
-    uint32_t orig_idx = mapping_to_internal[pn_idx];
-    uint32_t out_base = 6 * orig_idx;
+    uint32_t out_base = 6 * pn_idx;
     out_gradients[out_base] = my_n_grad.x;
     out_gradients[out_base + 1] = my_n_grad.y;
     out_gradients[out_base + 2] = my_n_grad.z;
@@ -293,10 +293,10 @@ __global__ void gradients_brute_force_point_normals_kernel(
 }
 
 void compute_brute_force_gradients_point_normals(
-    const Vec3 *queries_vec3, const float *grad_output, const float *geometry,
-    const uint32_t *mapping_to_internal, const uint32_t query_count,
-    const uint32_t geometry_count, const float epsilon, float *gradients,
-    cudaStream_t compute_stream) {
+    const float *grad_output, const Vec3 *points_vec3,
+    const Vec3 *scaled_normals_vec3, const Vec3 *queries_vec3,
+    const uint32_t geometry_count, const uint32_t query_count,
+    const float epsilon, float *gradients, cudaStream_t compute_stream) {
 
   constexpr uint32_t threads = 256;
   uint32_t geom_blocks = (geometry_count + threads - 1) / threads;
@@ -306,22 +306,20 @@ void compute_brute_force_gradients_point_normals(
 
   gradients_brute_force_point_normals_kernel<threads>
       <<<geom_blocks, threads, smem_size, compute_stream>>>(
-          queries_vec3, grad_output,
-          SoAView<PointNormal>{geometry, geometry_count}, mapping_to_internal,
-          query_count, geometry_count, inv_epsilon, gradients);
+          grad_output, points_vec3, scaled_normals_vec3, queries_vec3,
+          geometry_count, query_count, inv_epsilon, gradients);
 
   CUDA_CHECK(cudaGetLastError());
 }
 
 template <uint32_t BlockSize = 256>
 __global__ void gradients_brute_force_triangles_kernel(
-    const Vec3 *__restrict__ queries, const float *__restrict__ in_gradients,
-    SoAView<Triangle> geometry,
-    const uint32_t *__restrict__ mapping_to_internal,
-    const uint32_t query_count, const uint32_t geometry_count,
+    const float *__restrict__ in_gradients,
+    const Triangle *__restrict__ triangles, const Vec3 *__restrict__ queries,
+    const uint32_t geometry_count, const uint32_t query_count,
     float *__restrict__ out_gradients) {
 
-  uint32_t pn_idx = blockIdx.x * BlockSize + threadIdx.x;
+  uint32_t triangle_idx = blockIdx.x * BlockSize + threadIdx.x;
 
   // Shared memory allocation
   extern __shared__ char shared_mem[];
@@ -330,8 +328,8 @@ __global__ void gradients_brute_force_triangles_kernel(
       reinterpret_cast<float *>(shared_mem + BlockSize * sizeof(Vec3));
 
   // Cast pointers for coalesced cooperative copying
-  const float *queries_float = reinterpret_cast<const float *>(queries);
-  float *tile_q_float = reinterpret_cast<float *>(tile_q);
+  const auto *queries_float = reinterpret_cast<const float *>(queries);
+  auto *tile_q_float = reinterpret_cast<float *>(tile_q);
 
   Vec3 my_v0_grad = Vec3::zero();
   Vec3 my_v1_grad = Vec3::zero();
@@ -341,7 +339,10 @@ __global__ void gradients_brute_force_triangles_kernel(
   Vec3 c_v1 = Vec3::zero();
   Vec3 c_v2 = Vec3::zero();
 
-  Triangle my_triangle = Triangle::load(geometry, pn_idx, geometry_count);
+  Triangle my_triangle;
+  if (triangle_idx < geometry_count) {
+    my_triangle = triangles[triangle_idx];
+  }
 
   // Accumulate gradient contributions tile by tile
   for (uint32_t i = 0; i < query_count; i += BlockSize) {
@@ -349,7 +350,6 @@ __global__ void gradients_brute_force_triangles_kernel(
 
     if (num_elements_in_tile == BlockSize) {
       // Fully unroll BlockSized loops
-      //
 #pragma unroll
       for (uint32_t f_idx = threadIdx.x; f_idx < BlockSize * 3;
            f_idx += BlockSize) {
@@ -358,7 +358,7 @@ __global__ void gradients_brute_force_triangles_kernel(
       tile_g[threadIdx.x] = in_gradients[i + threadIdx.x];
       __syncthreads();
 
-      if (pn_idx < geometry_count) {
+      if (triangle_idx < geometry_count) {
 #pragma unroll 4
         for (uint32_t j = 0; j < BlockSize; ++j) {
           Vec3 contrib_v0;
@@ -396,7 +396,7 @@ __global__ void gradients_brute_force_triangles_kernel(
       __syncthreads();
 
       // Fallback for the trailing partial tile
-      if (pn_idx < geometry_count) {
+      if (triangle_idx < geometry_count) {
         for (uint32_t j = 0; j < num_elements_in_tile; ++j) {
           Vec3 contrib_v0;
           Vec3 contrib_v1;
@@ -424,9 +424,8 @@ __global__ void gradients_brute_force_triangles_kernel(
   }
 
   // Write out result
-  if (pn_idx < geometry_count) {
-    uint32_t orig_idx = mapping_to_internal[pn_idx];
-    uint32_t out_base = 9 * orig_idx;
+  if (triangle_idx < geometry_count) {
+    uint32_t out_base = 9 * triangle_idx;
     out_gradients[out_base] = my_v0_grad.x;
     out_gradients[out_base + 1] = my_v0_grad.y;
     out_gradients[out_base + 2] = my_v0_grad.z;
@@ -440,10 +439,9 @@ __global__ void gradients_brute_force_triangles_kernel(
 }
 
 void compute_brute_force_gradients_triangles(
-    const Vec3 *queries_vec3, const float *grad_output, const float *geometry,
-    const uint32_t *mapping_to_internal, const uint32_t query_count,
-    const uint32_t geometry_count, float *gradients,
-    cudaStream_t compute_stream) {
+    const float *grad_output, const Triangle *triangles,
+    const Vec3 *queries_vec3, const uint32_t geometry_count,
+    const uint32_t query_count, float *gradients, cudaStream_t compute_stream) {
 
   constexpr uint32_t threads = 256;
   uint32_t geom_blocks = (geometry_count + threads - 1) / threads;
@@ -452,9 +450,56 @@ void compute_brute_force_gradients_triangles(
 
   gradients_brute_force_triangles_kernel<threads>
       <<<geom_blocks, threads, smem_size, compute_stream>>>(
-          queries_vec3, grad_output,
-          SoAView<Triangle>{geometry, geometry_count}, mapping_to_internal,
-          query_count, geometry_count, gradients);
+          grad_output, triangles, queries_vec3, geometry_count, query_count,
+          gradients);
 
   CUDA_CHECK(cudaGetLastError());
+}
+
+__global__ void accumulate_vertice_gradients_kernel(
+    const float *__restrict__ triangle_results,
+    const uint32_t *__restrict__ triangle_indices,
+    const uint32_t total_local_vertices, float *__restrict__ vertice_grads) {
+  const uint32_t gtid = blockIdx.x * blockDim.x + threadIdx.x;
+  const uint32_t stride = blockDim.x * gridDim.x;
+
+  const auto* triangle_results_float3 = reinterpret_cast<const float3*>(triangle_results);
+
+  for (uint32_t i = gtid; i < total_local_vertices; i += stride) {
+
+    const uint32_t v_idx = triangle_indices[i];
+    // (dx, dy, dz) gradient vector for triangle vertex
+    const float3 grad = triangle_results_float3[i];
+    // Pointer to target vertex gradient in output array
+    float *dst = &vertice_grads[static_cast<size_t>(v_idx) * 3];
+
+    // Hardware-accelerated L2 atomic additions
+    atomicAdd(&dst[0], grad.x);
+    atomicAdd(&dst[1], grad.y);
+    atomicAdd(&dst[2], grad.z);
+  }
+}
+
+void accumulate_vertice_gradients(const float *triangle_results,
+                                  const uint32_t *triangle_indices,
+                                  const uint32_t triangle_count,
+                                  float *vertice_grads,
+                                  cudaStream_t compute_stream) {
+  if (triangle_count == 0) {
+    return;
+  }
+
+  const size_t triangle_vertex_count = triangle_count * 3;
+  const size_t threads_per_block = 256;
+
+  // Calculate grid size
+  const size_t blocks_needed =
+      (triangle_vertex_count + threads_per_block - 1) / threads_per_block;
+  const size_t max_blocks = 65535;
+  const size_t actual_blocks =
+      (blocks_needed < max_blocks) ? blocks_needed : max_blocks;
+
+  accumulate_vertice_gradients_kernel<<<actual_blocks, threads_per_block, 0,
+                                        compute_stream>>>(
+      triangle_results, triangle_indices, triangle_vertex_count, vertice_grads);
 }

@@ -516,47 +516,6 @@ template <> struct GeometryTraits<PointNormal> {
 };
 
 template <IsGeometry Geometry>
-auto WinderBackend<Geometry>::brute_force(const float *queries,
-                                          size_t query_count, float epsilon,
-                                          size_t stream) const
-    -> CudaUniquePtr<float> {
-  ScopedCudaDevice device_scope{m_device};
-  const Vec3 *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
-
-  cudaEvent_t start, finish;
-  CUDA_CHECK(cudaEventCreate(&start));
-  CUDA_CHECK(cudaEventCreate(&finish));
-
-  // convert stream to cuda stream
-  cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
-
-  CUDA_CHECK(cudaEventRecord(start, compute_stream));
-
-  // Allocate required buffers
-  float *winding_numbers; // result
-  CUDA_CHECK(cudaMallocAsync(&winding_numbers, query_count * sizeof(float),
-                             compute_stream));
-
-  if (epsilon < 0.F) {
-    // default from 3D Reconstruction with Fast Dipole Sums
-    epsilon = 1.F / 250.F;
-  }
-
-  compute_brute_force<Geometry>(queries_vec3, m_sorted_geometry,
-                                (uint32_t)query_count, (uint32_t)m_count,
-                                winding_numbers, epsilon, compute_stream);
-
-  CUDA_CHECK(cudaEventRecord(finish, compute_stream));
-  // free events
-  CUDA_CHECK(cudaEventDestroy(start));
-  CUDA_CHECK(cudaEventDestroy(finish));
-
-  CudaUniquePtr<float> result(
-      winding_numbers, CudaDeleter{reinterpret_cast<size_t>(compute_stream)});
-  return result;
-}
-
-template <IsGeometry Geometry>
 auto WinderBackend<Geometry>::compute(const float *queries, size_t query_count,
                                       float beta, float epsilon,
                                       size_t stream) const
@@ -707,98 +666,16 @@ auto WinderBackend<Triangle>::CreateFromMesh(const float *vertices,
   return self;
 }
 
-template <>
-auto WinderBackend<Triangle>::grads_brute_force(const float *queries,
-                                                const float *grad_output,
-                                                const size_t query_count,
-                                                [[maybe_unused]] float epsilon,
-                                                size_t stream) const
-    -> CudaUniquePtr<float> {
-  const Vec3 *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
-  ScopedCudaDevice device_scope{m_device};
-
-  cudaEvent_t start, finish;
-  CUDA_CHECK(cudaEventCreate(&start));
-  CUDA_CHECK(cudaEventCreate(&finish));
-
-  // convert stream to cuda stream
-  cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
-
-  CUDA_CHECK(cudaEventRecord(start, compute_stream));
-
-  // Allocate required buffers
-  float *gradients;
-  CUDA_CHECK(cudaMallocAsync(&gradients, m_count * 3 * 3 * sizeof(float),
-                             compute_stream));
-
-  compute_brute_force_gradients_triangles(
-      queries_vec3, grad_output, m_sorted_geometry, m_to_internal,
-      (uint32_t)query_count, (uint32_t)m_count, gradients, compute_stream);
-
-  CUDA_CHECK(cudaEventRecord(finish, compute_stream));
-  // free events
-  CUDA_CHECK(cudaEventDestroy(start));
-  CUDA_CHECK(cudaEventDestroy(finish));
-
-  CudaUniquePtr<float> result(
-      gradients, CudaDeleter{reinterpret_cast<size_t>(compute_stream)});
-  return result;
-}
-
-template <>
-auto WinderBackend<PointNormal>::grads_brute_force(const float *queries,
-                                                   const float *grad_output,
-                                                   const size_t query_count,
-                                                   float epsilon,
-                                                   size_t stream) const
-    -> CudaUniquePtr<float> {
-  const Vec3 *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
-  ScopedCudaDevice device_scope{m_device};
-
-  if (epsilon < 0.F) {
-    // default from 3D Reconstruction with Fast Dipole Sums
-    epsilon = 1.F / 250.F;
-  }
-
-  cudaEvent_t start, finish;
-  CUDA_CHECK(cudaEventCreate(&start));
-  CUDA_CHECK(cudaEventCreate(&finish));
-
-  // convert stream to cuda stream
-  cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
-
-  CUDA_CHECK(cudaEventRecord(start, compute_stream));
-
-  // Allocate required buffers
-  float *gradients;
-  CUDA_CHECK(cudaMallocAsync(&gradients, m_count * 2 * 3 * sizeof(float),
-                             compute_stream));
-
-  compute_brute_force_gradients_point_normals(
-      queries_vec3, grad_output, m_sorted_geometry, m_to_internal,
-      (uint32_t)query_count, (uint32_t)m_count, epsilon, gradients,
-      compute_stream);
-
-  CUDA_CHECK(cudaEventRecord(finish, compute_stream));
-  // free events
-  CUDA_CHECK(cudaEventDestroy(start));
-  CUDA_CHECK(cudaEventDestroy(finish));
-
-  CudaUniquePtr<float> result(
-      gradients, CudaDeleter{reinterpret_cast<size_t>(compute_stream)});
-  return result;
-}
-
-template <IsGeometry Geometry>
-auto WinderBackend<Geometry>::get_gradients(
-    [[maybe_unused]] const float *queries,
-    [[maybe_unused]] const float *grad_output,
-    [[maybe_unused]] size_t query_count, [[maybe_unused]] float beta,
-    [[maybe_unused]] float epsilon, [[maybe_unused]] size_t stream) const
-    -> CudaUniquePtr<float> {
-  throw std::runtime_error(
-      "get_gradients is not yet implemented Work In Proress!");
-}
+// template <IsGeometry Geometry>
+// auto WinderBackend<Geometry>::compute(
+//     [[maybe_unused]] const float *queries,
+//     [[maybe_unused]] const float *grad_output,
+//     [[maybe_unused]] size_t query_count, [[maybe_unused]] float beta,
+//     [[maybe_unused]] float epsilon, [[maybe_unused]] size_t stream) const
+//     -> CudaUniquePtr<float> {
+//   throw std::runtime_error(
+//       "get_gradients is not yet implemented Work In Proress!");
+// }
 
 template <IsGeometry Geometry>
 auto WinderBackend<Geometry>::dump() const -> std::string {

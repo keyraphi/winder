@@ -122,7 +122,8 @@ def main():
     normals = 15 * torch.randn([args.geometry_count, 3], device=device)
     # points = torch.tensor([[0, 0, 0]], dtype=torch.float32, device=device)
     # normals = torch.tensor([[0, 1, 0]], dtype=torch.float32, device=device)
-    engine = winder.WinderEngine(points, normals)
+    engine = winder.WindingNumberEngine(points, normals)
+    torch.cuda.synchronize()
 
     queries = create_query_grid(args.query_grid_resolution, args.grid_extend)
 
@@ -130,8 +131,10 @@ def main():
     N_RUNS = 1000
     for _ in tqdm(range(1000), desc=f"Running {N_RUNS} runs"):
         winding_number_grid = engine.compute(queries, beta=args.beta)
+    torch.cuda.synchronize()
     t1 = time.time()
-    winding_number_grid_brute_force = engine.brute_force(queries)
+    winding_number_grid_brute_force = winder.brute_force_winding_numbers(points, normals, queries)
+    torch.cuda.synchronize()
     t2 = time.time()
     print(f"Approx took {(t1-t0)/N_RUNS} sec. Bruteforce took {t2-t1} sec.")
 

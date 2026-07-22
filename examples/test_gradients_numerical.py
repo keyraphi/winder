@@ -58,7 +58,7 @@ def generate_queries(
 
 
 def pytorch_triangle_winding_grads_chunked_64(
-    vertices: torch.Tensor,  # Shape: [M, 3, 3] float64
+    vertices: torch.Tensor,  # Shape: [N, 3, 3] float64
     queries: torch.Tensor,  # Shape: [Q, 3] float64
     grad_output: torch.Tensor,  # Shape: [Q] float64
     chunk_size: int = 50,
@@ -224,33 +224,31 @@ def test_triangle_gradients(
 ):
     print("\n=== Testing Triangle Gradients against PyTorch float64 Autograd ===")
 
-    flat_vertices = vertices[indices.flatten()]
-    flat_indices = np.arange(len(flat_vertices)).reshape(-1, 3)
-    num_triangles = len(flat_indices)
+    triangles = vertices[indices]
+    num_triangles = len(triangles)
 
-    queries = generate_queries(flat_vertices, query_mode, query_count)
+    queries = generate_queries(vertices, query_mode, query_count)
     grad_output = np.random.normal(size=(query_count,)).astype(np.float32)
 
-    v_tensor = torch.from_numpy(flat_vertices).cuda()
-    i_tensor = torch.from_numpy(flat_indices).int().cuda()
+    t_tensor = torch.from_numpy(triangles).to(torch.float32).cuda()
     q_tensor = torch.from_numpy(queries).cuda()
     g_out_tensor = torch.from_numpy(grad_output).cuda()
 
-    engine = winder.WinderEngine(v_tensor, i_tensor)
+    print("DEBUG: t_tensor", t_tensor.shape, t_tensor.dtype, t_tensor.device)
+    print("DEBUG: q_tensor", q_tensor.shape, q_tensor.dtype, q_tensor.device)
+    print("DEBUG: g_out_tensor", g_out_tensor.shape, g_out_tensor.dtype, g_out_tensor.device)
     cuda_grads = torch.from_dlpack(
-        engine.gradients(
-            queries=q_tensor, grad_output=g_out_tensor, is_brute_force=True
-        )
+        winder.brute_force_gradients(g_out_tensor, t_tensor, q_tensor)
     )
 
     print(
         f"Evaluating PyTorch float64 autograd across ALL {num_triangles} triangles..."
     )
-    v_64 = v_tensor.reshape(-1, 3, 3).to(torch.float64)
+    t_64 = t_tensor.to(torch.float64)
     q_64 = q_tensor.to(torch.float64)
     g_out_64 = g_out_tensor.to(torch.float64)
 
-    ref_grads_64 = pytorch_triangle_winding_grads_chunked_64(v_64, q_64, g_out_64)
+    ref_grads_64 = pytorch_triangle_winding_grads_chunked_64(t_64, q_64, g_out_64)
     ref_grads_32 = ref_grads_64.to(torch.float32)
 
     validate_gradients(
@@ -274,19 +272,19 @@ def test_point_normal_gradients(
     queries = generate_queries(vertices, query_mode, query_count)
     grad_output = np.random.normal(size=(query_count,)).astype(np.float32)
 
-    p_tensor = torch.from_numpy(pts).cuda()
-    n_tensor = torch.from_numpy(scaled_normals).cuda()
-    q_tensor = torch.from_numpy(queries).cuda()
-    g_out_tensor = torch.from_numpy(grad_output).cuda()
+    p_tensor = torch.from_numpy(pts).to(torch.float32).cuda()
+    n_tensor = torch.from_numpy(scaled_normals).to(torch.float32).cuda()
+    q_tensor = torch.from_numpy(queries).to(torch.float32).cuda()
+    g_out_tensor = torch.from_numpy(grad_output).to(torch.float32).cuda()
 
-    engine = winder.WinderEngine(p_tensor, n_tensor)
+    print("DEBUG p_tensor:", p_tensor.shape, p_tensor.dtype, p_tensor.device)
+    print("DEBUG n_tensor:", n_tensor.shape, n_tensor.dtype, n_tensor.device)
+    print("DEBUG q_tensor:", q_tensor.shape, q_tensor.dtype, q_tensor.device)
+    print("DEBUG g_out_tensor:", g_out_tensor.shape, g_out_tensor.dtype, g_out_tensor.device)
+
+
     cuda_grads = torch.from_dlpack(
-        engine.gradients(
-            queries=q_tensor,
-            grad_output=g_out_tensor,
-            epsilon=1.0/inv_epsilon,
-            is_brute_force=True,
-        )
+        winder.brute_force_gradients(g_out_tensor, p_tensor, n_tensor, q_tensor, 1 / inv_epsilon)
     )
 
     cuda_n_grads = cuda_grads[:, 0, :]

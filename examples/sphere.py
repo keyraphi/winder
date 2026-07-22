@@ -243,7 +243,7 @@ def main():
                 triangles.dtype,
                 triangles.device,
             )
-            engine = winder.WinderEngine(triangles)
+            engine = winder.WindingNumberEngine(triangles)
         case "mesh":
             vertices = []
             indices = []
@@ -255,7 +255,7 @@ def main():
             indices = torch.concatenate(indices, dim=0)
             print("DEBUG: vertices", vertices.shape, vertices.dtype, vertices.device)
             print("DEBUG: indices", indices.shape, indices.dtype, indices.device)
-            engine = winder.WinderEngine(vertices, indices)
+            engine = winder.WindingNumberEngine(vertices, indices)
         case "points":
             points = []
             normals = []
@@ -267,7 +267,7 @@ def main():
             normals = torch.concatenate(normals, dim=0)
             print("DEBUG: points", points.shape, points.dtype, points.device)
             print("DEBUG: normals", normals.shape, normals.dtype, normals.device)
-            engine = winder.WinderEngine(points, normals)
+            engine = winder.WindingNumberEngine(points, normals)
         case _:
             raise RuntimeError("Unknown geometry_type")
 
@@ -278,6 +278,7 @@ def main():
     for _ in tqdm(range(args.evaluation_rounds), desc="Eval. Repetitions"):
         t0 = time.time()
         winding_number_grid = engine.compute(queries, beta=args.beta)
+        torch.cuda.synchronize()
         t1 = time.time()
         durations.append(t1 - t0)
     print_time_statistics("Approximation", durations)
@@ -287,7 +288,14 @@ def main():
         range(min(args.evaluation_rounds, 3)), desc="Brute Force Repetitions"
     ):
         t0 = time.time()
-        winding_number_grid_brute_force = engine.brute_force(queries)
+        match args.geometry_type:
+            case "points":
+                winding_number_grid_brute_force = winder.brute_force_winding_numbers(points, normals, queries)
+            case "mesh":
+                winding_number_grid_brute_force = winder.brute_force_winding_numbers(verts, indices, queries)
+            case "triangles":
+                winding_number_grid_brute_force = winder.brute_force_winding_numbers(triangles, queries)
+        torch.cuda.synchronize()
         t1 = time.time()
         durations.append(t1 - t0)
     print_time_statistics("BruteForce", durations)

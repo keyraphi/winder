@@ -43,21 +43,6 @@ public:
                float epsilon = -1.F, size_t stream = 0) const
       -> CudaUniquePtr<float>;
 
-  auto brute_force(const float *queries, size_t query_count,
-                   float epsilon = -1.F, size_t stream = 0) const
-      -> CudaUniquePtr<float>;
-
-  [[nodiscard]] auto get_gradients(const float *queries,
-                                   const float *grad_output, size_t query_count,
-                                   float beta = -1.F, float epsilon = -1.F,
-                                   size_t stream = 0) const
-      -> CudaUniquePtr<float>;
-  [[nodiscard]] auto grads_brute_force(const float *queries,
-                                       const float *grad_output,
-                                       size_t query_count, float epsilon = -1.F,
-                                       size_t stream = 0) const
-      -> CudaUniquePtr<float>;
-
   [[nodiscard]] auto point_count() const -> size_t { return m_count; }
   [[nodiscard]] auto device_id() const -> int { return m_device; }
 
