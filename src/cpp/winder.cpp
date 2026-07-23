@@ -209,48 +209,98 @@ auto brute_force_gradients(const Scalar_t &grad_output,
 
 class GradientEngine {
 public:
-  GradientEngine(const Vec3_t &queries) {
-    throw std::runtime_error("GradientEngine not yet implemented");
-  }
+  GradientEngine(const Vec3_t &queries)
+      : m_impl{GradientBackend(queries.data(), queries.shape(0), queries.device_id())} {}
 
+  // PointNormal
   auto compute(const Scalar_t &grad_output, const Vec3_t &points,
                const Vec3_t &scaled_normals, float beta = -1.F,
-               float epsilon = -1.F, const uint64_t stream = 0) {
-    throw std::runtime_error("GradientEngine not yet implemented");
+               float epsilon = -1.F, const uint64_t stream = 0)
+      -> GradResult_t {
+    CudaUniquePtr<float> raw_ptr_unique = m_impl.compute(
+        grad_output.data(), points.data(), scaled_normals.data(),
+        grad_output.shape(0), points.shape(0), beta, epsilon, stream);
+
+    CudaDeleter deleter = raw_ptr_unique.get_deleter();
+    float *raw_ptr = raw_ptr_unique.release();
+
+    auto *glue = new AsyncCleanupGlue{raw_ptr, deleter};
+
+    nb::capsule owner(glue, [](void *p) noexcept -> void {
+      auto *g = static_cast<AsyncCleanupGlue *>(p);
+      g->deleter(g->ptr);
+      delete g;
+    });
+    return {raw_ptr, {points.shape(0), 2, 3}, owner};
   }
+
+  // Mesh
   auto compute(const Scalar_t &grad_output, const Vec3_t &vertices,
                const TriangleIdx_t &triangle_indices, float beta = -1.F,
-               const uint64_t stream = 0) {
-    throw std::runtime_error("GradientEngine not yet implemented");
+               const uint64_t stream = 0) -> GradResult_t {
+    CudaUniquePtr<float> raw_ptr_unique = m_impl.compute(
+        grad_output.data(), vertices.data(), triangle_indices.data(),
+        grad_output.shape(0), vertices.shape(0), triangle_indices.shape(0),
+        beta, stream);
+
+    CudaDeleter deleter = raw_ptr_unique.get_deleter();
+    float *raw_ptr = raw_ptr_unique.release();
+
+    auto *glue = new AsyncCleanupGlue{raw_ptr, deleter};
+
+    nb::capsule owner(glue, [](void *p) noexcept -> void {
+      auto *g = static_cast<AsyncCleanupGlue *>(p);
+      g->deleter(g->ptr);
+      delete g;
+    });
+    return {raw_ptr, {vertices.shape(0), 3, 3}, owner};
   }
+  // Triangles
   auto compute(const Scalar_t &grad_output, const Triangle_t &triangles,
-               float beta = -1.F, const uint64_t stream = 0) {
-    throw std::runtime_error("GradientEngine not yet implemented");
+               float beta = -1.F, const uint64_t stream = 0) -> GradResult_t {
+    CudaUniquePtr<float> raw_ptr_unique =
+        m_impl.compute(grad_output.data(), triangles.data(),
+                       grad_output.shape(0), triangles.shape(0), beta, stream);
+
+    CudaDeleter deleter = raw_ptr_unique.get_deleter();
+    float *raw_ptr = raw_ptr_unique.release();
+
+    auto *glue = new AsyncCleanupGlue{raw_ptr, deleter};
+
+    nb::capsule owner(glue, [](void *p) noexcept -> void {
+      auto *g = static_cast<AsyncCleanupGlue *>(p);
+      g->deleter(g->ptr);
+      delete g;
+    });
+    return {raw_ptr, {triangles.shape(0), 3, 3}, owner};
   }
+
+private:
+  GradientBackend m_impl;
 };
 
-class WinderEngine {
+class WindingNumbersEngine {
 public:
   // --- Triangle Mesh Constructor ---
-  WinderEngine(const Triangle_t &triangles) {
-    m_impl_tri = WinderBackend<Triangle>::CreateFromTriangles(
+  WindingNumbersEngine(const Triangle_t &triangles) {
+    m_impl_tri = WindingNumbersBackend<Triangle>::CreateFromTriangles(
         triangles.data(), triangles.shape(0), triangles.device_id());
     is_backend_triangle = true;
   }
 
-  WinderEngine(const Vec3_t &vertices, const TriangleIdx_t &triangle_indices) {
+  WindingNumbersEngine(const Vec3_t &vertices, const TriangleIdx_t &triangle_indices) {
     if (vertices.device_id() != triangle_indices.device_id()) {
       throw std::runtime_error(
           "Vertices and triangle_indices must be on the same CUDA device.");
     }
-    m_impl_tri = WinderBackend<Triangle>::CreateFromMesh(
+    m_impl_tri = WindingNumbersBackend<Triangle>::CreateFromMesh(
         vertices.data(), vertices.shape(0), triangle_indices.data(),
         triangle_indices.shape(0), vertices.device_id());
     is_backend_triangle = true;
   }
 
   // --- Point Cloud Constructor ---
-  WinderEngine(const Vec3_t &points, const Vec3_t &normals) {
+  WindingNumbersEngine(const Vec3_t &points, const Vec3_t &normals) {
     if (points.device_id() != normals.device_id()) {
       throw std::runtime_error(
           "Points and Normals must be on the same CUDA device.");
@@ -260,7 +310,7 @@ public:
           "Shape of points must be equal to shape of normals.");
     }
 
-    m_impl_pn = WinderBackend<PointNormal>::CreateFromPoints(
+    m_impl_pn = WindingNumbersBackend<PointNormal>::CreateFromPoints(
         points.data(), normals.data(), points.shape(0), points.device_id());
     is_backend_triangle = false;
   }
@@ -305,13 +355,13 @@ public:
 private:
   // flag for used backend
   bool is_backend_triangle;
-  std::unique_ptr<WinderBackend<PointNormal>> m_impl_pn;
-  std::unique_ptr<WinderBackend<Triangle>> m_impl_tri;
+  std::unique_ptr<WindingNumbersBackend<PointNormal>> m_impl_pn;
+  std::unique_ptr<WindingNumbersBackend<Triangle>> m_impl_tri;
 
   // Internal constructor used by factory methods
-  explicit WinderEngine(std::unique_ptr<WinderBackend<PointNormal>> backend)
+  explicit WindingNumbersEngine(std::unique_ptr<WindingNumbersBackend<PointNormal>> backend)
       : m_impl_pn(std::move(backend)) {}
-  explicit WinderEngine(std::unique_ptr<WinderBackend<Triangle>> backend)
+  explicit WindingNumbersEngine(std::unique_ptr<WindingNumbersBackend<Triangle>> backend)
       : m_impl_tri(std::move(backend)) {}
 };
 
@@ -584,7 +634,7 @@ NB_MODULE(winder_module, m) {
                       Calculated as: dL/dv_j = (dL/dw)^T * (dw/dv_j).
             )doc");
 
-  nb::class_<WinderEngine>(m, "WindingNumberEngine")
+  nb::class_<WindingNumbersEngine>(m, "WindingNumberEngine")
       // --- Triangle Mesh Constructor ---
       .def(nb::init<Triangle_t>(), "triangles"_a,
            nb::sig("def __init__(self, triangles: Array[N, 3, 3; float32, "
@@ -634,7 +684,7 @@ NB_MODULE(winder_module, m) {
             )doc")
 
       // --- Inference ---
-      .def("compute", &WinderEngine::compute, "queries"_a, "beta"_a = -1.F,
+      .def("compute", &WindingNumbersEngine::compute, "queries"_a, "beta"_a = -1.F,
            "epsilon"_a = -1.F, "stream"_a = 0,
            nb::sig(
                "def compute(self, queries: Array[M, 3; float32, cuda], beta: "
@@ -671,7 +721,7 @@ NB_MODULE(winder_module, m) {
                 (M,) float32 CUDA array holding the winding numbers for the queries.
             )doc")
       // --- Utilities ---
-      .def("dump", &WinderEngine::dump, nb::sig("def dump(self) -> str"),
+      .def("dump", &WindingNumbersEngine::dump, nb::sig("def dump(self) -> str"),
            R"doc(
             Returns a detailed string representation of the internal BVH8 Tree.
           )doc");

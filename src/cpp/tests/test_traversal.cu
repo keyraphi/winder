@@ -146,11 +146,11 @@ template <typename T> void RunAccuracyTest(const WinderTestParams &params) {
   thrust::device_vector<Vec3> points_d = points_h;
   thrust::device_vector<Vec3> scaled_normals_d = scaled_normals_h;
 
-  std::unique_ptr<WinderBackend<T>> backend;
+  std::unique_ptr<WindingNumbersBackend<T>> backend;
 
   CudaUniquePtr<float> wn_gt;
   if constexpr (std::is_same_v<T, PointNormal>) {
-    backend = WinderBackend<T>::CreateFromPoints(
+    backend = WindingNumbersBackend<T>::CreateFromPoints(
         (float *)points_d.data().get(), (float *)scaled_normals_d.data().get(),
         points_d.size(), 0);
     wn_gt = brute_force_point_normal_impl(
@@ -158,7 +158,7 @@ template <typename T> void RunAccuracyTest(const WinderTestParams &params) {
         (float *)queries_d.data().get(), points_d.size(), query_count, epsilon,
         0);
   } else {
-    backend = WinderBackend<T>::CreateFromTriangles(
+    backend = WindingNumbersBackend<T>::CreateFromTriangles(
         (float *)geom_d.data().get(), geom_d.size(), 0);
     wn_gt = brute_force_triangle_impl((float *)geom_d.data().get(),
                                      (float*) queries_d.data().get(), geom_d.size(),

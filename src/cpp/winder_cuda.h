@@ -21,23 +21,23 @@
 #define L2_ALIGN 128
 
 
-template <IsGeometry Geometry> class WinderBackend {
+template <IsGeometry Geometry> class WindingNumbersBackend {
 
 public:
-  ~WinderBackend();
+  ~WindingNumbersBackend();
 
   static auto CreateFromTriangles(const float *triangles, size_t triangle_count,
                                   int device_id)
-      -> std::unique_ptr<WinderBackend<Triangle>>;
+      -> std::unique_ptr<WindingNumbersBackend<Triangle>>;
 
   static auto CreateFromMesh(const float *vertices, size_t vertex_count,
                              const uint32_t *triangle_indices,
                              size_t triangle_count, int device_id)
-      -> std::unique_ptr<WinderBackend<Triangle>>;
+      -> std::unique_ptr<WindingNumbersBackend<Triangle>>;
 
   static auto CreateFromPoints(const float *points, const float *scaled_normals,
                                size_t point_count, int device_id)
-      -> std::unique_ptr<WinderBackend<PointNormal>>;
+      -> std::unique_ptr<WindingNumbersBackend<PointNormal>>;
 
   auto compute(const float *queries, size_t query_count, float beta = -1.F,
                float epsilon = -1.F, size_t stream = 0) const
@@ -61,7 +61,7 @@ private:
 
   // Private constructor used in factories. Allocates vectors but doesn't fill
   // them yet
-  WinderBackend(size_t size, int device_id);
+  WindingNumbersBackend(size_t size, int device_id);
 
 public: // TODO DEBUG  make private!
   const size_t m_count;

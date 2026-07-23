@@ -79,7 +79,7 @@ void CudaDeleter::operator()(void *ptr) const {
   }
 }
 
-template <IsGeometry Geometry> WinderBackend<Geometry>::~WinderBackend() {
+template <IsGeometry Geometry> WindingNumbersBackend<Geometry>::~WindingNumbersBackend() {
   CUDA_CHECK(cudaStreamSynchronize(m_build_stream));
 
   CUDA_CHECK(cudaEventDestroy(m_start_tree_construction_event));
@@ -115,7 +115,7 @@ template <IsGeometry Geometry> WinderBackend<Geometry>::~WinderBackend() {
 }
 
 template <IsGeometry Geometry>
-WinderBackend<Geometry>::WinderBackend(size_t size, int device_id)
+WindingNumbersBackend<Geometry>::WindingNumbersBackend(size_t size, int device_id)
     : m_count{size}, m_device{device_id} {
 
   // Setup streams
@@ -192,7 +192,7 @@ template <IsPrimitiveGeometry PrimitiveGeometry> struct GeometryToMorton {
 
 template <IsGeometry Geometry>
 template <IsPrimitiveGeometry PrimitiveGeometry>
-auto WinderBackend<Geometry>::initializeMortonCodes(
+auto WindingNumbersBackend<Geometry>::initializeMortonCodes(
     const PrimitiveGeometry *geometry, uint64_t *geometry_morton_codes)
     -> void {
   // compute scene bound
@@ -218,7 +218,7 @@ auto WinderBackend<Geometry>::initializeMortonCodes(
 }
 
 template <>
-void WinderBackend<Triangle>::initialize_triangle_data(const float *triangles) {
+void WindingNumbersBackend<Triangle>::initialize_triangle_data(const float *triangles) {
   const auto *triangles_tri = reinterpret_cast<const Triangle *>(triangles);
 
   CUDA_CHECK(cudaEventRecord(m_start_tree_construction_event, m_build_stream));
@@ -363,7 +363,7 @@ void WinderBackend<Triangle>::initialize_triangle_data(const float *triangles) {
 }
 
 template <>
-void WinderBackend<PointNormal>::initialize_point_data(const float *points,
+void WindingNumbersBackend<PointNormal>::initialize_point_data(const float *points,
                                                        const float *normals) {
   const auto *points_v3 = reinterpret_cast<const Vec3 *>(points);
 
@@ -516,7 +516,7 @@ template <> struct GeometryTraits<PointNormal> {
 };
 
 template <IsGeometry Geometry>
-auto WinderBackend<Geometry>::compute(const float *queries, size_t query_count,
+auto WindingNumbersBackend<Geometry>::compute(const float *queries, size_t query_count,
                                       float beta, float epsilon,
                                       size_t stream) const
     -> CudaUniquePtr<float> {
@@ -602,43 +602,43 @@ auto WinderBackend<Geometry>::compute(const float *queries, size_t query_count,
 }
 
 template <>
-auto WinderBackend<PointNormal>::CreateFromPoints(const float *points,
+auto WindingNumbersBackend<PointNormal>::CreateFromPoints(const float *points,
                                                   const float *normals,
                                                   size_t point_count,
                                                   int device_id)
-    -> std::unique_ptr<WinderBackend<PointNormal>> {
+    -> std::unique_ptr<WindingNumbersBackend<PointNormal>> {
   ScopedCudaDevice device_scope(device_id);
 
-  auto self = std::unique_ptr<WinderBackend<PointNormal>>{
-      new WinderBackend<PointNormal>(point_count, device_id)};
+  auto self = std::unique_ptr<WindingNumbersBackend<PointNormal>>{
+      new WindingNumbersBackend<PointNormal>(point_count, device_id)};
   self->initialize_point_data(points, normals);
   return self;
 }
 
 template <>
-auto WinderBackend<Triangle>::CreateFromTriangles(const float *triangles,
+auto WindingNumbersBackend<Triangle>::CreateFromTriangles(const float *triangles,
                                                   size_t triangle_count,
                                                   int device_id)
-    -> std::unique_ptr<WinderBackend<Triangle>> {
+    -> std::unique_ptr<WindingNumbersBackend<Triangle>> {
   ScopedCudaDevice device_scope(device_id);
   printf("CreateFromTriangles!\n");
-  auto self = std::unique_ptr<WinderBackend>{
-      new WinderBackend<Triangle>(triangle_count, device_id)};
+  auto self = std::unique_ptr<WindingNumbersBackend>{
+      new WindingNumbersBackend<Triangle>(triangle_count, device_id)};
 
   self->initialize_triangle_data(triangles);
   return self;
 }
 
 template <>
-auto WinderBackend<Triangle>::CreateFromMesh(const float *vertices,
+auto WindingNumbersBackend<Triangle>::CreateFromMesh(const float *vertices,
                                              size_t vertex_count,
                                              const uint32_t *triangle_indices,
                                              size_t triangle_count,
                                              int device_id)
-    -> std::unique_ptr<WinderBackend<Triangle>> {
+    -> std::unique_ptr<WindingNumbersBackend<Triangle>> {
   ScopedCudaDevice device_scope(device_id);
-  auto self = std::unique_ptr<WinderBackend>{
-      new WinderBackend<Triangle>(triangle_count, device_id)};
+  auto self = std::unique_ptr<WindingNumbersBackend>{
+      new WindingNumbersBackend<Triangle>(triangle_count, device_id)};
 
   // Verify that index range does not exceed vertex size
   uint32_t max_index = thrust::reduce(thrust::device, triangle_indices,
@@ -678,7 +678,7 @@ auto WinderBackend<Triangle>::CreateFromMesh(const float *vertices,
 // }
 
 template <IsGeometry Geometry>
-auto WinderBackend<Geometry>::dump() const -> std::string {
+auto WindingNumbersBackend<Geometry>::dump() const -> std::string {
   // Edge Case 1: No geometry at all
   if (m_count == 0) {
     return "digraph BVH8 {\n}\n";

@@ -54,8 +54,8 @@ TEST(TreeConstruction, TreeStructure) {
   thrust::device_vector<Vec3> d_points = points;
   thrust::device_vector<Vec3> d_normals = normals;
 
-  std::unique_ptr<WinderBackend<PointNormal>> backend =
-      WinderBackend<PointNormal>::CreateFromPoints(
+  std::unique_ptr<WindingNumbersBackend<PointNormal>> backend =
+      WindingNumbersBackend<PointNormal>::CreateFromPoints(
           (float *)d_points.data().get(), (float *)d_normals.data().get(),
           d_points.size(), 0);
 
@@ -135,8 +135,8 @@ TEST(TreeConstruction, RandomTreeStructure) {
   thrust::device_vector<Vec3> d_points = points;
   thrust::device_vector<Vec3> d_normals = normals;
 
-  std::unique_ptr<WinderBackend<PointNormal>> backend =
-      WinderBackend<PointNormal>::CreateFromPoints(
+  std::unique_ptr<WindingNumbersBackend<PointNormal>> backend =
+      WindingNumbersBackend<PointNormal>::CreateFromPoints(
           (float *)d_points.data().get(), (float *)d_normals.data().get(),
           d_points.size(), 0);
 

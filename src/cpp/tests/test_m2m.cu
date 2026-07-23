@@ -38,7 +38,7 @@ TEST(M2M, AllOrdersQuantizationAware) {
   // Build the tree hierarchy using your backend
   thrust::device_vector<Vec3> points_d = points_h;
   thrust::device_vector<Vec3> scaled_normals_d = scaled_normals_h;
-  auto backend = WinderBackend<PointNormal>::CreateFromPoints(
+  auto backend = WindingNumbersBackend<PointNormal>::CreateFromPoints(
       (float *)points_d.data().get(), (float *)scaled_normals_d.data().get(),
       points_d.size(), 0);
 
