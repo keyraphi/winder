@@ -68,3 +68,4 @@ quantize_value(float value, float p_min, float p_inv_ext) {
   return (uint8_t)(normalized + 0.5F); // round-to-nearest
 #endif
 }
+

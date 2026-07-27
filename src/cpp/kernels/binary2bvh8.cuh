@@ -25,25 +25,29 @@ struct ConvertBinary2BVH8Params {
 void convert_binary_tree_to_bvh8(ConvertBinary2BVH8Params params, int device_id,
                                  const cudaStream_t &stream = 0);
 
-template <IsGeometry Geometry>
+// Concept for max distance computation concept
+template <typename T>
+concept HasMaxDistance = requires(T g, SoAView<T> gp, Vec3 p, uint32_t u) {
+  { T::load(gp, u, u) } -> std::same_as<T>;
+  { g.max_distance_to(p) } -> std::same_as<float>;
+};
+template <HasMaxDistance Geometry>
 void compute_max_distances(BVH8Node *__restrict__ nodes, const float *geometry,
                            const uint32_t *__restrict__ leaf_parents,
                            const uint32_t *__restrict__ internal_parent_map,
-                           float * __restrict__ tmp_max_distance,
-                           uint32_t geometry_count,  uint32_t bvh8_node_count,
+                           float *__restrict__ tmp_max_distance,
+                           uint32_t geometry_count, uint32_t bvh8_node_count,
                            const cudaStream_t &stream = 0);
 
 extern template void compute_max_distances<PointNormal>(
     BVH8Node *__restrict__ nodes, const float *geometry,
     const uint32_t *__restrict__ leaf_parents,
     const uint32_t *__restrict__ internal_parent_map,
-    float * __restrict__ tmp_max_distance,
-    const uint32_t geometry_count, uint32_t bvh8_node_count,
-    const cudaStream_t &stream);
+    float *__restrict__ tmp_max_distance, const uint32_t geometry_count,
+    uint32_t bvh8_node_count, const cudaStream_t &stream);
 extern template void compute_max_distances<Triangle>(
     BVH8Node *__restrict__ nodes, const float *geometry,
     const uint32_t *__restrict__ leaf_parents,
     const uint32_t *__restrict__ internal_parent_map,
-    float * __restrict__ tmp_max_distance,
-    const uint32_t geometry_count, uint32_t bvh8_node_count,
-    const cudaStream_t &stream);
+    float *__restrict__ tmp_max_distance, const uint32_t geometry_count,
+    uint32_t bvh8_node_count, const cudaStream_t &stream);

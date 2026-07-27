@@ -35,6 +35,7 @@
 #include <thrust/scatter.h>
 #include <thrust/sequence.h>
 #include <thrust/sort.h>
+#include <thrust/system/cuda/detail/execution_policy.h>
 #include <thrust/transform.h>
 #include <vector_functions.h>
 #include <vector_types.h>
@@ -42,7 +43,6 @@
 #include "aabb.h"
 #include "binary_node.h"
 #include "bvh8.h"
-#include "utils.h"
 #include "geometry.h"
 #include "kernels/binary2bvh8.cuh"
 #include "kernels/brute_force.cuh"
@@ -52,6 +52,7 @@
 #include "kernels/mesh.cuh"
 #include "kernels/traversal.cuh"
 #include "tailor_coefficients.h"
+#include "utils.h"
 #include "vec3.h"
 #include "winder_cuda.h"
 
@@ -79,7 +80,8 @@ void CudaDeleter::operator()(void *ptr) const {
   }
 }
 
-template <IsGeometry Geometry> WindingNumbersBackend<Geometry>::~WindingNumbersBackend() {
+template <IsGeometry Geometry>
+WindingNumbersBackend<Geometry>::~WindingNumbersBackend() {
   CUDA_CHECK(cudaStreamSynchronize(m_build_stream));
 
   CUDA_CHECK(cudaEventDestroy(m_start_tree_construction_event));
@@ -115,7 +117,8 @@ template <IsGeometry Geometry> WindingNumbersBackend<Geometry>::~WindingNumbersB
 }
 
 template <IsGeometry Geometry>
-WindingNumbersBackend<Geometry>::WindingNumbersBackend(size_t size, int device_id)
+WindingNumbersBackend<Geometry>::WindingNumbersBackend(size_t size,
+                                                       int device_id)
     : m_count{size}, m_device{device_id} {
 
   // Setup streams
@@ -126,12 +129,9 @@ WindingNumbersBackend<Geometry>::WindingNumbersBackend(size_t size, int device_i
   CUDA_CHECK(cudaEventCreate(&m_start_tree_construction_event));
   CUDA_CHECK(cudaEventCreate(&m_tree_construction_finished_event));
 
-  // Allocate memory arena
   size_t leaf_count = (size + LEAF_SIZE - 1) / LEAF_SIZE;
 
-  // uint32_t max_bvh8_nodes =
-  //     (leaf_count <= 1) ? 0 : (uint32_t)ceil(leaf_count * 0.2F) + 1;
-  uint32_t max_bvh8_nodes = leaf_count - 1; // DEBUG worst case scenario!!
+  uint32_t max_bvh8_nodes = leaf_count - 1; // TODO worst case scenario!!
 
   CUDA_CHECK(
       cudaMallocAsync(&m_to_internal, size * sizeof(uint32_t), m_build_stream));
@@ -218,7 +218,8 @@ auto WindingNumbersBackend<Geometry>::initializeMortonCodes(
 }
 
 template <>
-void WindingNumbersBackend<Triangle>::initialize_triangle_data(const float *triangles) {
+void WindingNumbersBackend<Triangle>::initialize_triangle_data(
+    const float *triangles) {
   const auto *triangles_tri = reinterpret_cast<const Triangle *>(triangles);
 
   CUDA_CHECK(cudaEventRecord(m_start_tree_construction_event, m_build_stream));
@@ -363,8 +364,8 @@ void WindingNumbersBackend<Triangle>::initialize_triangle_data(const float *tria
 }
 
 template <>
-void WindingNumbersBackend<PointNormal>::initialize_point_data(const float *points,
-                                                       const float *normals) {
+void WindingNumbersBackend<PointNormal>::initialize_point_data(
+    const float *points, const float *normals) {
   const auto *points_v3 = reinterpret_cast<const Vec3 *>(points);
 
   CUDA_CHECK(cudaEventRecord(m_start_tree_construction_event, m_build_stream));
@@ -516,9 +517,10 @@ template <> struct GeometryTraits<PointNormal> {
 };
 
 template <IsGeometry Geometry>
-auto WindingNumbersBackend<Geometry>::compute(const float *queries, size_t query_count,
-                                      float beta, float epsilon,
-                                      size_t stream) const
+auto WindingNumbersBackend<Geometry>::compute(const float *queries,
+                                              size_t query_count, float beta,
+                                              float epsilon,
+                                              size_t stream) const
     -> CudaUniquePtr<float> {
   cudaEvent_t start, finish;
   CUDA_CHECK(cudaEventCreate(&start));
@@ -603,9 +605,9 @@ auto WindingNumbersBackend<Geometry>::compute(const float *queries, size_t query
 
 template <>
 auto WindingNumbersBackend<PointNormal>::CreateFromPoints(const float *points,
-                                                  const float *normals,
-                                                  size_t point_count,
-                                                  int device_id)
+                                                          const float *normals,
+                                                          size_t point_count,
+                                                          int device_id)
     -> std::unique_ptr<WindingNumbersBackend<PointNormal>> {
   ScopedCudaDevice device_scope(device_id);
 
@@ -616,9 +618,8 @@ auto WindingNumbersBackend<PointNormal>::CreateFromPoints(const float *points,
 }
 
 template <>
-auto WindingNumbersBackend<Triangle>::CreateFromTriangles(const float *triangles,
-                                                  size_t triangle_count,
-                                                  int device_id)
+auto WindingNumbersBackend<Triangle>::CreateFromTriangles(
+    const float *triangles, size_t triangle_count, int device_id)
     -> std::unique_ptr<WindingNumbersBackend<Triangle>> {
   ScopedCudaDevice device_scope(device_id);
   printf("CreateFromTriangles!\n");
@@ -630,11 +631,9 @@ auto WindingNumbersBackend<Triangle>::CreateFromTriangles(const float *triangles
 }
 
 template <>
-auto WindingNumbersBackend<Triangle>::CreateFromMesh(const float *vertices,
-                                             size_t vertex_count,
-                                             const uint32_t *triangle_indices,
-                                             size_t triangle_count,
-                                             int device_id)
+auto WindingNumbersBackend<Triangle>::CreateFromMesh(
+    const float *vertices, size_t vertex_count,
+    const uint32_t *triangle_indices, size_t triangle_count, int device_id)
     -> std::unique_ptr<WindingNumbersBackend<Triangle>> {
   ScopedCudaDevice device_scope(device_id);
   auto self = std::unique_ptr<WindingNumbersBackend>{

@@ -248,7 +248,7 @@ void convert_binary_tree_to_bvh8(ConvertBinary2BVH8Params params,
   CUDA_CHECK(cudaGetLastError());
 }
 
-template <IsGeometry Geometry>
+template <HasMaxDistance Geometry>
 __global__ void __launch_bounds__(128) compute_exact_max_distances_kernel(
     BVH8Node *nodes, SoAView<Geometry> geometry_view,
     const uint32_t *__restrict__ leaf_parents,

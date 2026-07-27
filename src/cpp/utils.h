@@ -2,6 +2,8 @@
 #include <cstddef>
 #include <cuda_runtime_api.h>
 #include <memory>
+#include "aabb.h"
+#include "geometry.h"
 
 struct CudaDeleter {
   size_t stream = 0; // Plain integer data type, safe for pure C++
@@ -37,3 +39,20 @@ bool cuda_memcpy(void *dest, void *src, size_t bytes);
 
 void thrust_fill_float(float *ptr, size_t count, float value);
 } // namespace winder_cuda
+
+
+struct SceneParams {
+  float scale;
+  AABB bounds;
+};
+
+
+template <typename T> struct SoAView {
+  const float *base_ptr;
+  size_t stride;
+};
+
+template <IsPrimitiveGeometry PrimitiveGeometry>
+auto initializeMortonCodes(const PrimitiveGeometry *geometry,
+                           uint64_t *geometry_morton_codes, size_t count,
+                           cudaStream_t stream) -> void;

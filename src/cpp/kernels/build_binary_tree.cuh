@@ -6,12 +6,18 @@
 #include <cstdint>
 #include <driver_types.h>
 
+// Gather kernel to read queries into SoA format
+void gather_queries_soa(const float *__restrict__ queries,
+                      const uint32_t *__restrict__ indices,
+                      float *__restrict__ out_queries, uint32_t count,
+                      const cudaStream_t &stream);
+
 // Gather kernel to read PointNormals into SoA format
 void gather_point_normals_soa(const float *__restrict__ points,
-                             const float *__restrict__ normals,
-                             const uint32_t *__restrict__ indices,
-                             float *__restrict__ out_geometry, uint32_t count,
-                             const cudaStream_t &stream = 0);
+                              const float *__restrict__ normals,
+                              const uint32_t *__restrict__ indices,
+                              float *__restrict__ out_geometry, uint32_t count,
+                              const cudaStream_t &stream = 0);
 
 // Gather kernel to read Triangles into SoA format
 void gather_triangles_soa(const float *__restrict__ input_triangles,
@@ -28,5 +34,13 @@ void populate_binary_tree_aabb_and_leaf_coefficients(
     const float *__restrict__ sorted_geometry,
     TailorCoefficientsF16 *leaf_coefficients, uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
-    const uint32_t *binary_parents, float *atomic_weights,
-    uint32_t point_count, const cudaStream_t &stream = 0);
+    const uint32_t *binary_parents, float *atomic_weights, uint32_t point_count,
+    const cudaStream_t &stream = 0);
+
+void populate_binary_tree_aabb_and_leaf_coefficients_backward(
+    const float *__restrict__ sorted_queries,
+    const float *__restrict__ grad_outputs,
+    BackwardTailorCoefficientsF16 *leaf_coefficients, uint32_t leaf_count,
+    const BinaryNode *binary_nodes, AABB *binary_aabbs,
+    const uint32_t *binary_parents, float *atomic_counters,
+    uint32_t query_count, const cudaStream_t &stream);

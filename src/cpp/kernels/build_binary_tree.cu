@@ -22,6 +22,49 @@
 #include <vector_types.h>
 
 __global__ void __launch_bounds__(256)
+    gather_queries_soa_kernel(const float *__restrict__ queries_aos,
+                              const uint32_t *__restrict__ indices,
+                              float *__restrict__ out_queries_soa,
+                              const uint32_t count) {
+  const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= count) {
+    return;
+  }
+
+  const uint32_t src_idx = indices[idx];
+  const float *query_src_ptr = queries_aos + static_cast<size_t>(src_idx) * 3;
+
+  // batch reads together
+  const size_t float_count = 3; // Vec3 has 3 floats
+  float values[float_count];
+#pragma unroll
+  for (uint32_t i = 0; i < 3; ++i) {
+    values[i] = query_src_ptr[i];
+  }
+
+// write into the SoA coalesced
+#pragma unroll
+  for (uint32_t i = 0; i < float_count; ++i) {
+    out_queries_soa[i * count + idx] = values[i];
+  }
+}
+
+void gather_queries_soa(const float *__restrict__ queries,
+                        const uint32_t *__restrict__ indices,
+                        float *__restrict__ out_queries, const uint32_t count,
+                        const cudaStream_t &stream) {
+  if (count < 1) {
+    return;
+  }
+  // one thread per point
+  const uint32_t threads = 256;
+  const uint32_t blocks = (count + threads - 1) / threads;
+  gather_queries_soa_kernel<<<blocks, threads, 0, stream>>>(queries, indices,
+                                                            out_queries, count);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+__global__ void __launch_bounds__(256)
     gather_point_normals_soa_kernel(const float *__restrict__ points_aos,
                                     const float *__restrict__ normals_aos,
                                     const uint32_t *__restrict__ indices,
@@ -304,8 +347,7 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
     weight += __shfl_xor_sync(0xFFFFFFFF, weight, offset);
   }
   // compute center of mass for leaf
-  center_of_mass =
-      weight > 0.F ? (weighted_com / weight) : Vec3{0.F, 0.F, 0.F};
+  center_of_mass = weight > 0.F ? (weighted_com / weight) : Vec3{0.F, 0.F, 0.F};
   // find max distance of center of mass to any element inside
   float dist_to_com =
       is_thread_active ? geometry.max_distance_to(center_of_mass) : 0.F;
@@ -462,6 +504,204 @@ void populate_binary_tree_aabb_and_leaf_coefficients(
           SoAView<Geometry>{sorted_geometry, geometry_count}, leaf_coefficients,
           leaf_count, binary_nodes, binary_aabbs, binary_parents,
           atomic_counters, geometry_count);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+__global__ void populate_binary_tree_aabb_and_leaf_coefficients_backward_kernel(
+    const SoAView<Vec3> sorted_queries, const float *__restrict__ out_grads,
+    BackwardTailorCoefficientsF16 *leaf_coefficients, const uint32_t leaf_count,
+    const BinaryNode *binary_nodes, AABB *binary_aabbs,
+    const uint32_t *binary_parents, float *atomic_weights,
+    const uint32_t query_count) {
+  uint32_t query_idx = threadIdx.x + blockIdx.x * blockDim.x;
+  uint32_t leaf_idx = query_idx / 32;
+  if (leaf_idx >= leaf_count)
+    return;
+
+  uint32_t lane_id = query_idx % 32;
+
+  Vec3 query = Vec3::load(sorted_queries, query_idx, query_count);
+
+  // Compute AABB for leaf
+  bool is_thread_active = query_idx < query_count;
+  AABB query_aabb;
+  Vec3 center_of_mass;
+  float weight = 0.F;
+  if (is_thread_active) {
+    query_aabb = query.get_aabb();
+    center_of_mass = query.centroid();
+    weight = 1.F;
+  } else {
+    query_aabb.min = Vec3{1e38F, 1e38F, 1e38F};
+    query_aabb.max = Vec3{-1e38F, -1e38F, -1e38F};
+    center_of_mass = Vec3{0.F, 0.F, 0.F};
+    weight = 0.F;
+  }
+  Vec3_f16 &p_min = query_aabb.min;
+  Vec3_f16 &p_max = query_aabb.max;
+  Vec3 weighted_com = center_of_mass * weight;
+
+#pragma unroll
+  for (int offset = 16; offset > 0; offset /= 2) {
+    p_min.x = __hmin(p_min.x, __shfl_xor_sync(0xFFFFFFFF, p_min.x, offset));
+    p_min.y = __hmin(p_min.y, __shfl_xor_sync(0xFFFFFFFF, p_min.y, offset));
+    p_min.z = __hmin(p_min.z, __shfl_xor_sync(0xFFFFFFFF, p_min.z, offset));
+
+    p_max.x = __hmax(p_max.x, __shfl_xor_sync(0xFFFFFFFF, p_max.x, offset));
+    p_max.y = __hmax(p_max.y, __shfl_xor_sync(0xFFFFFFFF, p_max.y, offset));
+    p_max.z = __hmax(p_max.z, __shfl_xor_sync(0xFFFFFFFF, p_max.z, offset));
+
+    weighted_com.x += __shfl_xor_sync(0xFFFFFFFF, weighted_com.x, offset);
+    weighted_com.y += __shfl_xor_sync(0xFFFFFFFF, weighted_com.y, offset);
+    weighted_com.z += __shfl_xor_sync(0xFFFFFFFF, weighted_com.z, offset);
+
+    weight += __shfl_xor_sync(0xFFFFFFFF, weight, offset);
+  }
+  // compute center of mass for leaf
+  center_of_mass = weight > 0.F ? (weighted_com / weight) : Vec3{0.F, 0.F, 0.F};
+  // find max distance of center of mass to any element inside
+  float dist_to_com =
+      is_thread_active ? query.max_distance_to(center_of_mass) : 0.F;
+#pragma unroll
+  for (int offset = 16; offset > 0; offset /= 2) {
+    dist_to_com =
+        fmaxf(dist_to_com, __shfl_xor_sync(0xFFFFFFFF, dist_to_com, offset));
+  }
+
+  uint32_t leaf_node_idx = leaf_idx + leaf_count - 1;
+
+  // write aggregated AABB for leaf (only lane 0)
+  if (lane_id == 0) {
+    binary_aabbs[leaf_idx + leaf_count - 1].min = p_min;
+    binary_aabbs[leaf_idx + leaf_count - 1].max = p_max;
+
+    binary_aabbs[leaf_idx + leaf_count - 1].center_of_mass = center_of_mass;
+    binary_aabbs[leaf_idx + leaf_count - 1].max_distance =
+        __float2half(dist_to_com);
+  }
+
+  // Compute backward tailor coefficients
+  float zero_order;
+  Vec3 first_order;
+  Mat3x3 second_order;
+
+  // Zero order
+  //\sum_{i=1}^m g_i
+  //
+  // First order
+  // \sum_{i=1}^m g_i*(x_i - center)
+  // second order
+  // \sum_{i=1}^m g_i (x_i - center)\otimes(x_i - center)
+  // For inactive threads result is 0 (neutral wrt +)
+  zero_order = query_idx < query_count ? out_grads[query_idx] : 0.F;
+  first_order = zero_order * (query - center_of_mass);
+  second_order = first_order.outer_product(
+      query - center); // TODO can be optimized due to symetry
+
+  // aggregate zero order
+  zero_order = warp_reduce_add_down(zero_order);
+  // write aggregated coefficient for leaf
+  if (lane_id == 0) {
+    leaf_coefficients[leaf_idx].zero_order = zero_order;
+  }
+  // aggregate first order
+  first_order.x = warp_reduce_add_down(first_order.x);
+  first_order.y = warp_reduce_add_down(first_order.y);
+  first_order.z = warp_reduce_add_down(first_order.z);
+  // write aggregated coefficient for leaf
+  if (lane_id == 0) {
+    leaf_coefficients[leaf_idx].first_order = first_order;
+  }
+// aggregate second order
+#pragma unroll
+  for (int i = 0; i < 9; ++i) {
+    second_order.data[i] = warp_reduce_add_down(second_order.data[i]);
+  }
+  // write aggregated coefficient for leaf
+  if (lane_id == 0) {
+    leaf_coefficients[leaf_idx].second_order = second_order;
+  }
+
+  // propagate the aabbs to the inner nodes (binary_aabbs)
+  // lane 0 handles the Leaf-to-Root Race
+  if (lane_id == 0) {
+    // prevent stall for degenerate leafs
+    float my_weight = (weight == 0.F) ? 1e-10 : weight;
+
+    uint32_t current_idx = leaf_node_idx;
+    uint32_t current_parent_idx = binary_parents[current_idx];
+    // If this leaf's parent is the root marker, we are done.
+    if (current_parent_idx == 0xFFFFFFFF) {
+      return;
+    }
+
+    // race to top
+    cuda::atomic_thread_fence(cuda::memory_order_seq_cst,
+                              cuda::thread_scope_device);
+    // get number of elements in other child of current parent
+    float other_weight =
+        atomicAdd(&atomic_weights[current_parent_idx], my_weight);
+    if (other_weight == 0.F) {
+      return; // this subtree arrived first and is done
+    }
+    // The thread that arrived here has both weights in registers
+    while (current_parent_idx != 0xFFFFFFFF) {
+      BinaryNode parent_node = binary_nodes[current_parent_idx];
+
+      float weight_left;
+      float weight_right;
+      // find out if my leaf is left or right
+      if (parent_node.left_child == current_idx) {
+        // I am the left child
+        weight_left = my_weight;
+        weight_right = other_weight;
+      } else {
+        // I am the right child
+        weight_left = other_weight;
+        weight_right = my_weight;
+      }
+
+      // merge child aabbs
+      binary_aabbs[current_parent_idx] = AABB::merge_weighted(
+          binary_aabbs[parent_node.left_child],
+          binary_aabbs[parent_node.right_child], weight_left, weight_right);
+      // make sure that aabb has been written before the counter is incremented
+      __threadfence();
+
+      // Move up to the next level
+      uint32_t next_parent = binary_parents[current_parent_idx];
+      if (next_parent == 0xFFFFFFFF) {
+        break;
+      }
+      // the combined weight becomes the new weight for this threads future race
+      my_weight = weight_left + weight_right;
+      other_weight = atomicAdd(&atomic_weights[next_parent], my_weight);
+      if (other_weight == 0.F) {
+        break; // Thread arrived first at next level, let other thread finish it
+      }
+      current_idx = current_parent_idx;
+      current_parent_idx = next_parent;
+    }
+  }
+}
+
+void populate_binary_tree_aabb_and_leaf_coefficients_backward(
+    const float *__restrict__ sorted_queries,
+    const float *__restrict__ grad_outputs,
+    BackwardTailorCoefficientsF16 *leaf_coefficients, const uint32_t leaf_count,
+    const BinaryNode *binary_nodes, AABB *binary_aabbs,
+    const uint32_t *binary_parents, float *atomic_counters,
+    const uint32_t query_count, const cudaStream_t &stream) {
+  if (query_count == 0) {
+    return;
+  }
+
+  const uint32_t threads = 256;
+  const uint32_t blocks = (leaf_count * 32 + threads - 1) / threads;
+  populate_binary_tree_aabb_and_leaf_coefficients_backward_kernel<<<
+      blocks, threads, 0, stream>>>(
+      SoAView<Vec3>{sorted_queries, query_count}, grad_outputs, leaf_coefficients, leaf_count,
+      binary_nodes, binary_aabbs, binary_parents, atomic_counters, query_count);
   CUDA_CHECK(cudaGetLastError());
 }
 

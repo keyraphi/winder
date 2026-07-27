@@ -1,6 +1,8 @@
 #pragma once
+#include "utils.h"
 #include "mat3x3.h"
 #include <cmath>
+#include <cstdint>
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime_api.h>
@@ -113,6 +115,22 @@ struct Vec3 {
 #endif
   }
 
+  __host__ __device__ __forceinline__ auto
+  max_distance_to(const Vec3 &pos) const -> float {
+    return (*this - pos).length();
+  }
+
+  __host__ __device__ __forceinline__ static auto load(const SoAView<Vec3> &view,
+                                                uint32_t idx, uint32_t count)
+      -> Vec3 {
+    if (idx < count) {
+      return Vec3{.x = view.base_ptr[0 * view.stride + idx],
+                  .y = view.base_ptr[1 * view.stride + idx],
+                  .z = view.base_ptr[2 * view.stride + idx]};
+    }
+    return Vec3{0.F, 0.F, 0.F};
+  }
+
   __host__ __device__ __forceinline__ auto operator+(const Vec3 &b) const
       -> Vec3 {
     return {x + b.x, y + b.y, z + b.z};
@@ -173,7 +191,9 @@ struct Vec3 {
     m.data[8] = z * b.z;
     return m;
   }
-  __host__ __device__ __forceinline__ friend auto operator*(const Mat3x3 &lhs, const Vec3 &v) -> Vec3 {
+  __host__ __device__ __forceinline__ friend auto operator*(const Mat3x3 &lhs,
+                                                            const Vec3 &v)
+      -> Vec3 {
     Vec3 result;
     result.x = lhs.data[0] * v.x + lhs.data[1] * v.y + lhs.data[2] * v.z;
     result.y = lhs.data[3] * v.x + lhs.data[4] * v.y + lhs.data[5] * v.z;

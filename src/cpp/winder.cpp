@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "geometry.h"
+#include "gradient_cuda.h"
 #include "utils.h"
 #include "winder_brute_force.h"
 #include "winder_cuda.h"
@@ -209,8 +210,19 @@ auto brute_force_gradients(const Scalar_t &grad_output,
 
 class GradientEngine {
 public:
-  GradientEngine(const Vec3_t &queries)
-      : m_impl{GradientBackend(queries.data(), queries.shape(0), queries.device_id())} {}
+  GradientEngine(const Vec3_t &queries, const Scalar_t &grad_output)
+      : m_impl{GradientBackend(queries.data(), grad_output.data(),
+                               queries.shape(0), queries.device_id())} {
+        // TODO initialize after the checks, not in the constructor!
+    if (queries.shape(0) != grad_output.shape(0)) {
+      throw std::runtime_error(
+          "There have to be the same number of queries as grad_output!");
+    }
+    if (queries.device_id() != grad_output.device_id()) {
+      throw std::runtime_error(
+          "queries and grad_output has to be on the same device.");
+    }
+  }
 
   // PointNormal
   auto compute(const Scalar_t &grad_output, const Vec3_t &points,
@@ -288,7 +300,8 @@ public:
     is_backend_triangle = true;
   }
 
-  WindingNumbersEngine(const Vec3_t &vertices, const TriangleIdx_t &triangle_indices) {
+  WindingNumbersEngine(const Vec3_t &vertices,
+                       const TriangleIdx_t &triangle_indices) {
     if (vertices.device_id() != triangle_indices.device_id()) {
       throw std::runtime_error(
           "Vertices and triangle_indices must be on the same CUDA device.");
@@ -359,9 +372,11 @@ private:
   std::unique_ptr<WindingNumbersBackend<Triangle>> m_impl_tri;
 
   // Internal constructor used by factory methods
-  explicit WindingNumbersEngine(std::unique_ptr<WindingNumbersBackend<PointNormal>> backend)
+  explicit WindingNumbersEngine(
+      std::unique_ptr<WindingNumbersBackend<PointNormal>> backend)
       : m_impl_pn(std::move(backend)) {}
-  explicit WindingNumbersEngine(std::unique_ptr<WindingNumbersBackend<Triangle>> backend)
+  explicit WindingNumbersEngine(
+      std::unique_ptr<WindingNumbersBackend<Triangle>> backend)
       : m_impl_tri(std::move(backend)) {}
 };
 
@@ -684,8 +699,8 @@ NB_MODULE(winder_module, m) {
             )doc")
 
       // --- Inference ---
-      .def("compute", &WindingNumbersEngine::compute, "queries"_a, "beta"_a = -1.F,
-           "epsilon"_a = -1.F, "stream"_a = 0,
+      .def("compute", &WindingNumbersEngine::compute, "queries"_a,
+           "beta"_a = -1.F, "epsilon"_a = -1.F, "stream"_a = 0,
            nb::sig(
                "def compute(self, queries: Array[M, 3; float32, cuda], beta: "
                "float32 = -1, epsilon: float32 = -1, stream: uint64_t = 0) -> "
@@ -721,15 +736,16 @@ NB_MODULE(winder_module, m) {
                 (M,) float32 CUDA array holding the winding numbers for the queries.
             )doc")
       // --- Utilities ---
-      .def("dump", &WindingNumbersEngine::dump, nb::sig("def dump(self) -> str"),
+      .def("dump", &WindingNumbersEngine::dump,
+           nb::sig("def dump(self) -> str"),
            R"doc(
             Returns a detailed string representation of the internal BVH8 Tree.
           )doc");
 
   nb::class_<GradientEngine>(m, "GradientEngine")
-      .def(nb::init<Vec3_t>(), "queries"_a,
-           nb::sig("def __init__(self, queries: Array[M, 3; float32, "
-                   "cuda]) -> None"),
+      .def(nb::init<Vec3_t>(), "queries"_a, "grad_output"_a,
+           nb::sig("def __init__(self, queries: Array[M, 3; float32, cuda], "
+                   "grad_output: Array[M; float32, cuda]) -> None"),
            R"doc(
                 Initialize the engine for fast gradient calculation from the given queries.
                 
@@ -739,16 +755,16 @@ NB_MODULE(winder_module, m) {
                     A (M, 3) float32 CUDA array holding M query positions (xyz).
                     The gradient is computed for a loss computed for the winding numbers
                     at those query locations.
-            )doc")
+                grad_output : Array
+                    (M,) float32 CUDA array representing the gradient of the loss 
+                    with respect to the winding numbers at the queries.
+                    )doc")
       // --- Gradients ---
       .def("compute",
-           nb::overload_cast<const Scalar_t &, const Vec3_t &,
-                             const TriangleIdx_t &, float, const uint64_t>(
-               &GradientEngine::compute),
-           "grad_output"_a, "vertices"_a, "triangle_indices"_a, "beta"_a = -1.F,
-           "stream"_a = 0,
-           nb::sig("def compute(self, grad_output: Array[M; "
-                   "float32, cuda], vertices: Array[K, 3; float32, cuda], "
+           nb::overload_cast<const Vec3_t &, const TriangleIdx_t &, float,
+                             const uint64_t>(&GradientEngine::compute),
+           "vertices"_a, "triangle_indices"_a, "beta"_a = -1.F, "stream"_a = 0,
+           nb::sig("def compute(self, vertices: Array[K, 3; float32, cuda], "
                    "triangle_indices: Array[N, 3; uint32, cuda], "
                    "beta: float32 = -1, stream: uint64_t = 0) "
                    "-> Array[K, 3; float32, cuda]"),
@@ -761,12 +777,6 @@ NB_MODULE(winder_module, m) {
 
                 Parameters
                 ----------
-                grad_output : Array
-                    (M,) float32 CUDA array representing the gradient of the loss 
-                    with respect to the winding numbers at the query location for which 
-                    the GradientEngine was built (dL/dw).
-                    NOTE: You have to make sure that the queries used to compute L are the ones
-                          used to build the GradientEngine!
                 vertices  : Array
                     (K, 3) float32 CUDA array representing the shared vertices used in the triangles
                     for which the winding numbers and loss were computed.
@@ -791,15 +801,15 @@ NB_MODULE(winder_module, m) {
                       with respect to the vertex i (dL/dv_i)
                       Calculated as: dL/dv_i = (dL/dw)^T * (dw/dv_i).
             )doc")
-      .def("compute",
-           nb::overload_cast<const Scalar_t &, const Triangle_t &, float,
-                             const uint64_t>(&GradientEngine::compute),
-           "grad_output"_a, "triangles"_a, "beta"_a = -1.F, "stream"_a = 0,
-           nb::sig("def compute(self, grad_output: Array[M; "
-                   "float32, cuda], triangles: Array[N, 3, 3; float32, cuda], "
-                   "beta: float32 = -1, stream: uint64_t = 0) "
-                   "-> Array[N, 3, 3; float32, cuda]"),
-           R"doc(
+      .def(
+          "compute",
+          nb::overload_cast<const Triangle_t &, float, const uint64_t>(
+              &GradientEngine::compute),
+          "triangles"_a, "beta"_a = -1.F, "stream"_a = 0,
+          nb::sig("def compute(self, triangles: Array[N, 3, 3; float32, cuda], "
+                  "beta: float32 = -1, stream: uint64_t = 0) "
+                  "-> Array[N, 3, 3; float32, cuda]"),
+          R"doc(
                 Compute the partial derivatives w.r.t. the given triangles vertex positions.
 
 
@@ -808,12 +818,6 @@ NB_MODULE(winder_module, m) {
 
                 Parameters
                 ----------
-                grad_output : Array
-                    (M,) float32 CUDA array representing the gradient of the loss 
-                    with respect to the winding numbers at the query location for which 
-                    the GradientEngine was built (dL/dw).
-                    NOTE: You have to make sure that the queries used to compute L are the ones
-                          used to build the GradientEngine!
                 triangles  : Array
                     (N, 3, 3) float32 CUDA array representing the triangles used 
                     to evaluate the winding numbers for which the winding numbers and loss was computed.
@@ -836,13 +840,11 @@ NB_MODULE(winder_module, m) {
                       Calculated as: dL/dv_j = (dL/dw)^T * (dw/dv_j).
             )doc")
       .def("compute",
-           nb::overload_cast<const Scalar_t &, const Vec3_t &, const Vec3_t &,
-                             float, float, const uint64_t>(
-               &GradientEngine::compute),
-           "grad_output"_a, "points"_a, "scaled_normals"_a, "beta"_a = -1.F,
-           "epsilon"_a = -1.F, "stream"_a = 0,
-           nb::sig("def compute(self, grad_output: Array[M; "
-                   "float32, cuda], points: Array[N, 3; float32, cuda], "
+           nb::overload_cast<const Vec3_t &, const Vec3_t &, float, float,
+                             const uint64_t>(&GradientEngine::compute),
+           "points"_a, "scaled_normals"_a, "beta"_a = -1.F, "epsilon"_a = -1.F,
+           "stream"_a = 0,
+           nb::sig("def compute(self, points: Array[N, 3; float32, cuda], "
                    "scaled_normals: Array[N, 3; float32, cuda], "
                    "beta: float32 = -1, epsilon: float32 = -1, stream: "
                    "uint64_t = 0) "
@@ -857,12 +859,6 @@ NB_MODULE(winder_module, m) {
 
                 Parameters
                 ----------
-                grad_output : Array
-                    (M,) float32 CUDA array representing the gradient of the loss 
-                    with respect to the winding numbers at the query location for which 
-                    the GradientEngine was built (dL/dw).
-                    NOTE: You have to make sure that the queries used to compute L are the ones
-                          used to build the GradientEngine!
                 points  : Array
                     (N, 3) float32 CUDA array representing the point positions for which the
                     winding numbers and loss were computed.

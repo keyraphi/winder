@@ -2,6 +2,7 @@
 #include "aabb.h"
 #include "mat3x3.h"
 #include "tensor3.h"
+#include "utils.h"
 #include "vec3.h"
 #include <cmath>
 #include <concepts>
@@ -13,11 +14,6 @@
 #include <math.h>
 #include <string>
 #include <vector_types.h>
-
-template <typename T> struct SoAView {
-  const float *base_ptr;
-  size_t stride;
-};
 
 // symmetric 3x3 matrix for tailor coefficient computation
 struct SymMat3x3 {
