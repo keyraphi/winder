@@ -41,6 +41,22 @@ struct SymMat3x3 {
 struct Triangle {
   Vec3 v0, v1, v2;
 
+  __host__ __device__ __forceinline__ auto
+  operator+(const Triangle &other) const -> Triangle {
+    return Triangle{v0 + other.v0, v1 + other.v1, v2 + other.v2};
+  }
+  __host__ __device__ __forceinline__ auto
+  operator-(const Triangle &other) const -> Triangle {
+    return Triangle{v0 - other.v0, v1 - other.v1, v2 - other.v2};
+  }
+  __host__ __device__ __forceinline__ auto operator+=(const Triangle &other)
+      -> Triangle & {
+    v0 += other.v0;
+    v1 += other.v1;
+    v2 += other.v2;
+    return *this;
+  }
+
   __host__ __device__ __forceinline__ auto get_aabb() const -> AABB {
     Vec3 min{
         fminf(v0.x, fminf(v1.x, v2.x)),
@@ -101,9 +117,8 @@ struct Triangle {
   __host__ __device__ __forceinline__ auto
   contributionToQuery(const Vec3 &query, float inf_epsilon) const -> float;
 
-  __host__ __device__ __forceinline__ void
-  gradContributionOfQuery(const Vec3 &q, float g, Vec3 &contrib_v0,
-                          Vec3 &contrib_v1, Vec3 &contrib_v2) const;
+  __host__ __device__ __forceinline__ auto
+  gradContributionOfQuery(const Vec3 &q, float g) const -> Triangle;
 
   [[nodiscard]] auto dump() const -> std::string {
     // Returns a compact, single-line representation safe for HTML labels
@@ -121,8 +136,13 @@ struct PointNormal {
   operator+(const PointNormal &other) const -> PointNormal {
     return PointNormal{p + other.p, n + other.n};
   }
+  __host__ __device__ __forceinline__ auto
+  operator-(const PointNormal &other) const -> PointNormal {
+    return PointNormal{p - other.p, n - other.n};
+  }
 
-  __host__ __device__ __forceinline__ auto operator+=(const PointNormal &other) -> PointNormal & {
+  __host__ __device__ __forceinline__ auto operator+=(const PointNormal &other)
+      -> PointNormal & {
     p += other.p;
     n += other.n;
     return *this;
@@ -153,10 +173,10 @@ struct PointNormal {
 
   __host__ __device__ __forceinline__ auto gradContributionOfQuery(
       const Vec3 &q, const float g, const float inv_epsilon,
-      const float reg_term_const,     // Precomputed: inv_epsilon3 * INV_PI_1_5
-      const float near_field_g_denum, // Precomputed: (1.f / (3.f * pi^1.5)) *
-                                      // inv_epsilon3
-      Vec3 &contrib_p, Vec3 &contrib_n) const -> void;
+      const float reg_term_const,    // Precomputed: inv_epsilon3 * INV_PI_1_5
+      const float near_field_g_denum // Precomputed: (1.f / (3.f * pi^1.5)) *
+                                     // inv_epsilon3
+  ) const -> PointNormal;
 
   [[nodiscard]] auto dump() const -> std::string {
     // Returns a compact, single-line representation safe for HTML labels
@@ -407,10 +427,9 @@ PointNormal::contributionToQuery(const Vec3 &query,
   return n.dot(d) * INV_FOUR_PI * s_over_dist3;
 }
 
-__host__ __device__ __forceinline__ void
-Triangle::gradContributionOfQuery(const Vec3 &q, const float g,
-                                  Vec3 &contrib_v0, Vec3 &contrib_v1,
-                                  Vec3 &contrib_v2) const {
+__host__ __device__ __forceinline__ auto
+Triangle::gradContributionOfQuery(const Vec3 &q, const float g) const
+    -> Triangle {
   // Relative vectors from query point to vertices
   const Vec3 a = v0 - q;
   const Vec3 b = v1 - q;
@@ -448,10 +467,9 @@ Triangle::gradContributionOfQuery(const Vec3 &q, const float g,
   // Scale-invariant singular boundary check using the normalized denominator
   const float denom_norm = det_norm * det_norm + div_norm * div_norm;
   if (denom_norm < 1e-12F) {
-    contrib_v0 = Vec3{0.F, 0.F, 0.F};
-    contrib_v1 = Vec3{0.F, 0.F, 0.F};
-    contrib_v2 = Vec3{0.F, 0.F, 0.F};
-    return;
+    return Triangle{.v0 = Vec3{0.F, 0.F, 0.F},
+                    .v1 = Vec3{0.F, 0.F, 0.F},
+                    .v2 = Vec3{0.F, 0.F, 0.F}};
   }
 
   // 1. Numerator Derivatives: dN / dv_k
@@ -476,18 +494,17 @@ Triangle::gradContributionOfQuery(const Vec3 &q, const float g,
   const float inv_L = inv_a * inv_b * inv_c;
   const float factor = g * INV_TWO_PI * (inv_L / denom_norm);
 
-  contrib_v0 = (dN_dv0 * div_norm - dD_dv0 * det_norm) * factor;
-  contrib_v1 = (dN_dv1 * div_norm - dD_dv1 * det_norm) * factor;
-  contrib_v2 = (dN_dv2 * div_norm - dD_dv2 * det_norm) * factor;
+  return Triangle{.v0 = (dN_dv0 * div_norm - dD_dv0 * det_norm) * factor,
+                  .v1 = (dN_dv1 * div_norm - dD_dv1 * det_norm) * factor,
+                  .v2 = (dN_dv2 * div_norm - dD_dv2 * det_norm) * factor};
 }
 
-__host__ __device__ __forceinline__ void PointNormal::gradContributionOfQuery(
+__host__ __device__ __forceinline__ auto PointNormal::gradContributionOfQuery(
     const Vec3 &q, const float g, const float inv_epsilon,
     const float reg_term_const,     // Precomputed: inv_epsilon3 * INV_PI_1_5
-    const float near_field_g_denum, // Precomputed: (1.f / (3.f * pi^1.5)) *
-                                    // inv_epsilon3
-    Vec3 &contrib_p, Vec3 &contrib_n) const {
-
+    const float near_field_g_denum) // Precomputed: (1.f / (3.f * pi^1.5)) *
+                                    // inv_epsilon3)
+    const -> PointNormal {
   const Vec3 d = p - q;
   const float dist2 = d.x * d.x + d.y * d.y + d.z * d.z;
 
@@ -534,15 +551,13 @@ __host__ __device__ __forceinline__ void PointNormal::gradContributionOfQuery(
     scale_d = g * shared_factor * (reg_term - 3.F * g_denum);
   }
 
+  PointNormal gradient{
+      .p = Vec3{.x = scale_n * n.x + scale_d * d.x,
+                .y = scale_n * n.y + scale_d * d.y,
+                .z = scale_n * n.z + scale_d * d.z},
+      .n = Vec3{.x = scale_n * d.x, .y = scale_n * d.y, .z = scale_n * d.z}};
   // Position gradient
-  contrib_p.x = scale_n * n.x + scale_d * d.x;
-  contrib_p.y = scale_n * n.y + scale_d * d.y;
-  contrib_p.z = scale_n * n.z + scale_d * d.z;
-
-  // Normal gradient
-  contrib_n.x = scale_n * d.x;
-  contrib_n.y = scale_n * d.y;
-  contrib_n.z = scale_n * d.z;
+  return gradient;
 }
 
 // Concept for Geometry template

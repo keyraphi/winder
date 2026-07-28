@@ -1,7 +1,7 @@
 #pragma once
 #include "aabb.h"
+#include "geometry.h"
 #include "mat3x3.h"
-#include "tailor_coefficients.h"
 #include "tensor3.h"
 #include "vec3.h"
 #include <cuda_bf16.h>
@@ -18,14 +18,16 @@ __device__ __forceinline__ auto should_node_be_approximated(const Vec3 &query,
          max_distance_to_center * max_distance_to_center * beta_2;
 }
 
-__device__ __forceinline__ auto to_bits(const half2 f16x2) -> uint32_t {
-  uint32_t result = *(uint32_t *)&f16x2;
-  return result;
-}
-
-__device__ __forceinline__ auto to_bits(const half f16) -> short {
-  short result = *(short *)&f16;
-  return result;
+template <IsGeometry Geometry>
+__device__ __forceinline__ auto
+should_node_be_approximated(const Geometry &geometry, const AABB &aabb,
+                            const float beta_2) -> bool {
+  float max_distance_to_center = __half2float(aabb.max_distance);
+  Vec3 com = aabb.center_of_mass;
+  float dist_query_to_com2 =
+      (geometry.centroid() - com).length2(); // TODO consider large triangles
+  return dist_query_to_com2 >
+         max_distance_to_center * max_distance_to_center * beta_2;
 }
 
 /**
@@ -325,4 +327,283 @@ __device__ __forceinline__ auto compute_node_approximation(
             factor_second;
 
   return result;
+}
+
+/**
+ * @brief Computes the unscaled Zero-Order Taylor contractions for the
+ * PointNormal gradients.
+ *
+ * Mathematical formulation:
+ * - grad_n_0 = G_0 * r_hat
+ * - grad_p_0 = G_0 * [ 3 * (r_hat · m) * r_hat - m ]
+ *
+ * @param G_0 Scalar zero-order query moment.
+ * @param r_hat Unit displacement vector from source position p to cluster
+ * center (||r_hat|| = 1).
+ * @param m Area-weighted normal / dipole moment vector of the point.
+ * @param out_c0_n Output unscaled contraction for normal gradient (FP16).
+ * @param out_c0_p Output unscaled contraction for position gradient (FP16).
+ */
+__device__ __forceinline__ void
+computeZeroOrderGradientContribution(const half &G_0, const Vec3_f16 &r_hat,
+                                     const Vec3_f16 &m, Vec3_f16 &out_c0_n,
+                                     Vec3_f16 &out_c0_p) {
+  // grad_n_0 = G_0 * r_hat
+  out_c0_n.x = __hmul(G_0, r_hat.x);
+  out_c0_n.y = __hmul(G_0, r_hat.y);
+  out_c0_n.z = __hmul(G_0, r_hat.z);
+
+  // Dot product: r_dot_m = r_hat . m
+  half2 r_xy = __halves2half2(r_hat.x, r_hat.y);
+  half2 m_xy = __halves2half2(m.x, m.y);
+  half2 prod_xy = __hmul2(r_xy, m_xy);
+  half r_dot_m = __hadd(__hadd(__low2half(prod_xy), __high2half(prod_xy)),
+                        __hmul(r_hat.z, m.z));
+
+  half three_r_dot_m = __hmul(r_dot_m, __float2half(3.0f));
+
+  // 3 * (r_hat . m) * r_hat - m
+  half2 r_xy_scaled =
+      __hmul2(r_xy, __halves2half2(three_r_dot_m, three_r_dot_m));
+  half2 grad_p0_xy = __hsub2(r_xy_scaled, m_xy);
+  half grad_p0_z = __hsub(__hmul(r_hat.z, three_r_dot_m), m.z);
+
+  // Scale by G_0
+  out_c0_p.x = __hmul(G_0, __low2half(grad_p0_xy));
+  out_c0_p.y = __hmul(G_0, __high2half(grad_p0_xy));
+  out_c0_p.z = __hmul(G_0, grad_p0_z);
+}
+
+/**
+ * @brief Computes the unscaled First-Order Taylor contractions for the
+ * PointNormal gradients.
+ *
+ * Mathematical formulation:
+ * - grad_n_1 = G_1 - 3 * (r_hat · G_1) * r_hat
+ * - grad_p_1 = 3 * (r_hat · m) * G_1 + 3 * (G_1 · m) * r_hat + 3 * (r_hat ·
+ * G_1) * m
+ *              - 15 * (r_hat · G_1) * (r_hat · m) * r_hat
+ *
+ * @param G_1 Vector first-order query moment.
+ * @param r_hat Unit displacement vector from source position p to cluster
+ * center.
+ * @param m Area-weighted normal / dipole moment vector.
+ * @param out_c1_n Output unscaled contraction for normal gradient (FP16).
+ * @param out_c1_p Output unscaled contraction for position gradient (FP16).
+ */
+__device__ __forceinline__ void
+computeFirstOrderGradientContribution(const Vec3_f16 &G_1,
+                                      const Vec3_f16 &r_hat, const Vec3_f16 &m,
+                                      Vec3_f16 &out_c1_n, Vec3_f16 &out_c1_p) {
+  half2 r_xy = __halves2half2(r_hat.x, r_hat.y);
+  half2 G_1_xy = __halves2half2(G_1.x, G_1.y);
+  half2 m_xy = __halves2half2(m.x, m.y);
+
+  // Compute inner products
+  half2 prod_r_q1 = __hmul2(r_xy, G_1_xy);
+  half r_dot_q1 = __hadd(__hadd(__low2half(prod_r_q1), __high2half(prod_r_q1)),
+                         __hmul(r_hat.z, G_1.z));
+
+  half2 prod_r_m = __hmul2(r_xy, m_xy);
+  half r_dot_m = __hadd(__hadd(__low2half(prod_r_m), __high2half(prod_r_m)),
+                        __hmul(r_hat.z, m.z));
+
+  half2 prod_q1_m = __hmul2(G_1_xy, m_xy);
+  half q1_dot_m = __hadd(__hadd(__low2half(prod_q1_m), __high2half(prod_q1_m)),
+                         __hmul(G_1.z, m.z));
+
+  // --- Normal Gradient (grad_n_1) ---
+  half three_r_dot_q1 = __hmul(r_dot_q1, __float2half(3.0f));
+  half2 proj_n1_xy =
+      __hmul2(r_xy, __halves2half2(three_r_dot_q1, three_r_dot_q1));
+  half2 grad_n1_xy = __hsub2(G_1_xy, proj_n1_xy);
+  half grad_n1_z = __hsub(G_1.z, __hmul(r_hat.z, three_r_dot_q1));
+
+  out_c1_n.x = __low2half(grad_n1_xy);
+  out_c1_n.y = __high2half(grad_n1_xy);
+  out_c1_n.z = grad_n1_z;
+
+  // --- Position Gradient (grad_p_1) ---
+  half three_r_dot_m = __hmul(r_dot_m, __float2half(3.0f));
+  half three_q1_dot_m = __hmul(q1_dot_m, __float2half(3.0f));
+  half fifteen_prod = __hmul(__hmul(r_dot_q1, r_dot_m), __float2half(15.0f));
+
+  // 3*(r_hat·m)*G_1 + 3*(G_1·m)*r_hat + 3*(r_hat·G_1)*m -
+  // 15*(r_hat·G_1)*(r_hat·m)*r_hat
+  half2 term_q1 = __hmul2(G_1_xy, __halves2half2(three_r_dot_m, three_r_dot_m));
+  half2 term_r = __hmul2(r_xy, __halves2half2(three_q1_dot_m, three_q1_dot_m));
+  half2 term_m = __hmul2(m_xy, __halves2half2(three_r_dot_q1, three_r_dot_q1));
+  half2 term_sub = __hmul2(r_xy, __halves2half2(fifteen_prod, fifteen_prod));
+
+  half2 grad_p1_xy =
+      __hsub2(__hadd2(__hadd2(term_q1, term_r), term_m), term_sub);
+
+  half grad_p1_z = __hsub(__hadd(__hadd(__hmul(G_1.z, three_r_dot_m),
+                                        __hmul(r_hat.z, three_q1_dot_m)),
+                                 __hmul(m.z, three_r_dot_q1)),
+                          __hmul(r_hat.z, fifteen_prod));
+
+  out_c1_p.x = __low2half(grad_p1_xy);
+  out_c1_p.y = __high2half(grad_p1_xy);
+  out_c1_p.z = grad_p1_z;
+}
+
+/**
+ * @brief Computes the unscaled Second-Order Taylor contractions for the
+ * PointNormal gradients.
+ *
+ * Performs matrix-vector contractions between the rank-2 moment matrix G_2,
+ * unit vector r_hat, and normal vector m.
+ *
+ * @param G_2 Symmetric second-order query moment tensor (3x3 matrix).
+ * @param r_hat Unit displacement vector.
+ * @param m Area-weighted normal / dipole moment vector.
+ * @param out_c2_n Output unscaled contraction for normal gradient (FP16).
+ * @param out_c2_p Output unscaled contraction for position gradient (FP16).
+ */
+__device__ __forceinline__ void
+computeSecondOrderGradientContribution(const Mat3x3_f16 &G_2,
+                                       const Vec3_f16 &r_hat, const Vec3_f16 &m,
+                                       Vec3_f16 &out_c2_n, Vec3_f16 &out_c2_p) {
+  // Matrix-vector product: G_2 * r_hat
+  Vec3_f16 G_2_r;
+  G_2_r.x =
+      __hadd(__hadd(__hmul(G_2.data[0], r_hat.x), __hmul(G_2.data[1], r_hat.y)),
+             __hmul(G_2.data[2], r_hat.z));
+  G_2_r.y =
+      __hadd(__hadd(__hmul(G_2.data[3], r_hat.x), __hmul(G_2.data[4], r_hat.y)),
+             __hmul(G_2.data[5], r_hat.z));
+  G_2_r.z =
+      __hadd(__hadd(__hmul(G_2.data[6], r_hat.x), __hmul(G_2.data[7], r_hat.y)),
+             __hmul(G_2.data[8], r_hat.z));
+
+  // Matrix-vector product: G_2 * m
+  Vec3_f16 G_2_m;
+  G_2_m.x = __hadd(__hadd(__hmul(G_2.data[0], m.x), __hmul(G_2.data[1], m.y)),
+                   __hmul(G_2.data[2], m.z));
+  G_2_m.y = __hadd(__hadd(__hmul(G_2.data[3], m.x), __hmul(G_2.data[4], m.y)),
+                   __hmul(G_2.data[5], m.z));
+  G_2_m.z = __hadd(__hadd(__hmul(G_2.data[6], m.x), __hmul(G_2.data[7], m.y)),
+                   __hmul(G_2.data[8], m.z));
+
+  // Scalars
+  half trace_G_2 = __hadd(__hadd(G_2.data[0], G_2.data[4]), G_2.data[8]);
+
+  // Quadratic forms
+  half q_rr = __hadd(__hadd(__hmul(r_hat.x, G_2_r.x), __hmul(r_hat.y, G_2_r.y)),
+                     __hmul(r_hat.z, G_2_r.z));
+  half q_rm = __hadd(__hadd(__hmul(r_hat.x, G_2_m.x), __hmul(r_hat.y, G_2_m.y)),
+                     __hmul(r_hat.z, G_2_m.z));
+  half m_r = __hadd(__hadd(__hmul(r_hat.x, m.x), __hmul(r_hat.y, m.y)),
+                    __hmul(r_hat.z, m.z));
+
+  // --- Normal Gradient Contraction ---
+  // c_nr = 7.5 * q_rr - 1.5 * trace_G_2
+  half c_nr = __hsub(__hmul(q_rr, __float2half(7.5f)),
+                     __hmul(trace_G_2, __float2half(1.5f)));
+
+  // grad_n_2 = c_nr * r_hat - 3 * (G_2 * r_hat)
+  out_c2_n.x =
+      __hsub(__hmul(r_hat.x, c_nr), __hmul(G_2_r.x, __float2half(3.0f)));
+  out_c2_n.y =
+      __hsub(__hmul(r_hat.y, c_nr), __hmul(G_2_r.y, __float2half(3.0f)));
+  out_c2_n.z =
+      __hsub(__hmul(r_hat.z, c_nr), __hmul(G_2_r.z, __float2half(3.0f)));
+
+  // --- Position Gradient Contraction ---
+  // c_r_p = 15 * q_rm + (7.5 * trace_G_2 - 52.5 * q_rr) * m_r
+  half c_r_p = __hadd(__hmul(q_rm, __float2half(15.0f)),
+                      __hmul(__hsub(__hmul(trace_G_2, __float2half(7.5f)),
+                                    __hmul(q_rr, __float2half(52.5f))),
+                             m_r));
+
+  half fifteen_m_r = __hmul(m_r, __float2half(15.0f));
+
+  // grad_p_2 = 15*m_r*(G_2*r) + c_r_p*r_hat + c_nr*m - 3*(G_2*m)
+  out_c2_p.x = __hsub(
+      __hadd(__hadd(__hmul(G_2_r.x, fifteen_m_r), __hmul(r_hat.x, c_r_p)),
+             __hmul(m.x, c_nr)),
+      __hmul(G_2_m.x, __float2half(3.0f)));
+  out_c2_p.y = __hsub(
+      __hadd(__hadd(__hmul(G_2_r.y, fifteen_m_r), __hmul(r_hat.y, c_r_p)),
+             __hmul(m.y, c_nr)),
+      __hmul(G_2_m.y, __float2half(3.0f)));
+  out_c2_p.z = __hsub(
+      __hadd(__hadd(__hmul(G_2_r.z, fifteen_m_r), __hmul(r_hat.z, c_r_p)),
+             __hmul(m.z, c_nr)),
+      __hmul(G_2_m.z, __float2half(3.0f)));
+}
+
+/**
+ * @brief Computes the complete multi-order Taylor approximation of loss
+ * gradients for a PointNormal primitive w.r.t. position (p) and normal dipole
+ * (n).
+ *
+ * @param geometry Source primitive containing position p and normal dipole n.
+ * @param center_of_mass Cluster centroid of the query group (q_tilde).
+ * @param G_0 Scalar zero-order query moment (G0).
+ * @param G_1 Vector first-order query moment (G1).
+ * @param G_2 Matrix second-order query moment (G2).
+ * @return PointNormalGrad Struct containing grad_p and grad_n evaluated in
+ * FP32.
+ */
+__device__ __forceinline__ auto compute_node_gradient_approximation(
+    const PointNormal &geometry, const Vec3 &center_of_mass, const half &G_0,
+    const Vec3_f16 &G_1, const Mat3x3_f16 &G_2) -> PointNormal {
+  Vec3 r = center_of_mass - geometry.p;
+  float inv_norm_r = r.inv_length();
+
+  Vec3_f16 r_hat_f16 = Vec3_f16::from_float(r * inv_norm_r);
+  Vec3_f16 m_f16 = Vec3_f16::from_float(geometry.n);
+
+  float inv_norm_r2 = inv_norm_r * inv_norm_r;
+  float inv_norm_r3 = inv_norm_r2 * inv_norm_r;
+  float inv_norm_r4 = inv_norm_r3 * inv_norm_r;
+  float inv_norm_r5 = inv_norm_r4 * inv_norm_r;
+
+  constexpr float inv_4pi = 0.07957747154F;
+
+  // Dipole scale factors: 1/(4pi*R^2), 1/(4pi*R^3), 1/(4pi*R^4)
+  float factor_n_0 = inv_4pi * inv_norm_r2;
+  float factor_n_1 = inv_4pi * inv_norm_r3;
+  float factor_n_2 = inv_4pi * inv_norm_r4;
+
+  // Position scale factors: 1/(4pi*R^3), 1/(4pi*R^4), 1/(4pi*R^5)
+  float factor_p_0 = factor_n_1;
+  float factor_p_1 = factor_n_2;
+  float factor_p_2 = inv_4pi * inv_norm_r5;
+
+  Vec3_f16 c0_n, c0_p;
+  Vec3_f16 c1_n, c1_p;
+  Vec3_f16 c2_n, c2_p;
+
+  computeZeroOrderGradientContribution(G_0, r_hat_f16, m_f16, c0_n, c0_p);
+  computeFirstOrderGradientContribution(G_1, r_hat_f16, m_f16, c1_n, c1_p);
+  computeSecondOrderGradientContribution(G_2, r_hat_f16, m_f16, c2_n, c2_p);
+
+  PointNormal grad;
+
+  // Accumulate normal gradient in FP32
+  grad.n.x = __half2float(c0_n.x) * factor_n_0 +
+             __half2float(c1_n.x) * factor_n_1 +
+             __half2float(c2_n.x) * factor_n_2;
+  grad.n.y = __half2float(c0_n.y) * factor_n_0 +
+             __half2float(c1_n.y) * factor_n_1 +
+             __half2float(c2_n.y) * factor_n_2;
+  grad.n.z = __half2float(c0_n.z) * factor_n_0 +
+             __half2float(c1_n.z) * factor_n_1 +
+             __half2float(c2_n.z) * factor_n_2;
+
+  // Accumulate position gradient in FP32
+  grad.p.x = __half2float(c0_p.x) * factor_p_0 +
+             __half2float(c1_p.x) * factor_p_1 +
+             __half2float(c2_p.x) * factor_p_2;
+  grad.p.y = __half2float(c0_p.y) * factor_p_0 +
+             __half2float(c1_p.y) * factor_p_1 +
+             __half2float(c2_p.y) * factor_p_2;
+  grad.p.z = __half2float(c0_p.z) * factor_p_0 +
+             __half2float(c1_p.z) * factor_p_1 +
+             __half2float(c2_p.z) * factor_p_2;
+
+  return grad;
 }

@@ -131,3 +131,8 @@ auto initializeMortonCodes(const PrimitiveGeometry *geometry,
                     geometry_morton_codes,
                     GeometryToMorton<PrimitiveGeometry>{});
 }
+
+
+template void initializeMortonCodes<Vec3>(const Vec3 *geometry, uint64_t *geometry_morton_codes, size_t count, cudaStream_t stream);
+
+template void initializeMortonCodes<Triangle>(const Triangle *geometry, uint64_t *geometry_morton_codes, size_t count, cudaStream_t stream);

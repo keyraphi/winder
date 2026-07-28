@@ -192,11 +192,9 @@ __global__ void gradients_brute_force_point_normals_kernel(
   const auto *queries_float = reinterpret_cast<const float *>(queries);
   auto *tile_q_float = reinterpret_cast<float *>(tile_q);
 
-  Vec3 my_p_grad = Vec3::zero();
-  Vec3 my_n_grad = Vec3::zero();
+  PointNormal my_grad{.p = Vec3::zero(), .n = Vec3::zero()};
 
-  Vec3 c_p = Vec3::zero();
-  Vec3 c_n = Vec3::zero();
+  PointNormal c{.p = Vec3::zero(), .n = Vec3::zero()};
 
   // Loop-Invariant Constants
   constexpr float INV_PI_1_5 = 0.179587122F; // 1.0 / (pi^1.5)
@@ -226,21 +224,13 @@ __global__ void gradients_brute_force_point_normals_kernel(
       if (pn_idx < geometry_count) {
 #pragma unroll 4
         for (uint32_t j = 0; j < BlockSize; ++j) {
-          Vec3 contrib_p;
-          Vec3 contrib_n;
-
-          my_point_normal.gradContributionOfQuery(
+          PointNormal contrib = my_point_normal.gradContributionOfQuery(
               tile_q[j], tile_g[j], inv_epsilon, reg_term_const,
-              near_field_g_denum, contrib_p, contrib_n);
-
-          contrib_p = contrib_p - c_p;
-          contrib_n = contrib_n - c_n;
-          Vec3 t_p = my_p_grad + contrib_p;
-          Vec3 t_n = my_n_grad + contrib_n;
-          c_p = (t_p - my_p_grad) - contrib_p;
-          c_n = (t_n - my_n_grad) - contrib_n;
-          my_p_grad = t_p;
-          my_n_grad = t_n;
+              near_field_g_denum);
+          contrib = contrib - c;
+          PointNormal t = my_grad + contrib;
+          c = (t - my_grad) - contrib;
+          my_grad = t;
         }
       }
     } else {
@@ -259,21 +249,13 @@ __global__ void gradients_brute_force_point_normals_kernel(
       // Fallback for the trailing partial tile
       if (pn_idx < geometry_count) {
         for (uint32_t j = 0; j < num_elements_in_tile; ++j) {
-          Vec3 contrib_p;
-          Vec3 contrib_n;
-
-          my_point_normal.gradContributionOfQuery(
+          PointNormal contrib = my_point_normal.gradContributionOfQuery(
               tile_q[j], tile_g[j], inv_epsilon, reg_term_const,
-              near_field_g_denum, contrib_p, contrib_n);
-
-          contrib_p = contrib_p - c_p;
-          contrib_n = contrib_n - c_n;
-          Vec3 t_p = my_p_grad + contrib_p;
-          Vec3 t_n = my_n_grad + contrib_n;
-          c_p = (t_p - my_p_grad) - contrib_p;
-          c_n = (t_n - my_n_grad) - contrib_n;
-          my_p_grad = t_p;
-          my_n_grad = t_n;
+              near_field_g_denum);
+          contrib = contrib - c;
+          PointNormal t = my_grad + contrib;
+          c = (t - my_grad) - contrib;
+          my_grad = t;
         }
       }
     }
@@ -283,12 +265,12 @@ __global__ void gradients_brute_force_point_normals_kernel(
   // Write out result
   if (pn_idx < geometry_count) {
     uint32_t out_base = 6 * pn_idx;
-    out_gradients[out_base] = my_n_grad.x;
-    out_gradients[out_base + 1] = my_n_grad.y;
-    out_gradients[out_base + 2] = my_n_grad.z;
-    out_gradients[out_base + 3] = my_p_grad.x;
-    out_gradients[out_base + 4] = my_p_grad.y;
-    out_gradients[out_base + 5] = my_p_grad.z;
+    out_gradients[out_base] = my_grad.n.x;
+    out_gradients[out_base + 1] = my_grad.n.y;
+    out_gradients[out_base + 2] = my_grad.n.z;
+    out_gradients[out_base + 3] = my_grad.p.x;
+    out_gradients[out_base + 4] = my_grad.p.y;
+    out_gradients[out_base + 5] = my_grad.p.z;
   }
 }
 
@@ -331,13 +313,8 @@ __global__ void gradients_brute_force_triangles_kernel(
   const auto *queries_float = reinterpret_cast<const float *>(queries);
   auto *tile_q_float = reinterpret_cast<float *>(tile_q);
 
-  Vec3 my_v0_grad = Vec3::zero();
-  Vec3 my_v1_grad = Vec3::zero();
-  Vec3 my_v2_grad = Vec3::zero();
-
-  Vec3 c_v0 = Vec3::zero();
-  Vec3 c_v1 = Vec3::zero();
-  Vec3 c_v2 = Vec3::zero();
+  Triangle my_grad{.v0 = Vec3::zero(), .v1 = Vec3::zero(), .v2 = Vec3::zero()};
+  Triangle c{.v0 = Vec3::zero(), .v1 = Vec3::zero(), .v2 = Vec3::zero()};
 
   Triangle my_triangle;
   if (triangle_idx < geometry_count) {
@@ -361,25 +338,12 @@ __global__ void gradients_brute_force_triangles_kernel(
       if (triangle_idx < geometry_count) {
 #pragma unroll 4
         for (uint32_t j = 0; j < BlockSize; ++j) {
-          Vec3 contrib_v0;
-          Vec3 contrib_v1;
-          Vec3 contrib_v2;
-
-          my_triangle.gradContributionOfQuery(tile_q[j], tile_g[j], contrib_v0,
-                                              contrib_v1, contrib_v2);
-
-          contrib_v0 = contrib_v0 - c_v0;
-          contrib_v1 = contrib_v1 - c_v1;
-          contrib_v2 = contrib_v2 - c_v2;
-          Vec3 t_v0 = my_v0_grad + contrib_v0;
-          Vec3 t_v1 = my_v1_grad + contrib_v1;
-          Vec3 t_v2 = my_v2_grad + contrib_v2;
-          c_v0 = (t_v0 - my_v0_grad) - contrib_v0;
-          c_v1 = (t_v1 - my_v1_grad) - contrib_v1;
-          c_v2 = (t_v2 - my_v2_grad) - contrib_v2;
-          my_v0_grad = t_v0;
-          my_v1_grad = t_v1;
-          my_v2_grad = t_v2;
+          Triangle contrib =
+              my_triangle.gradContributionOfQuery(tile_q[j], tile_g[j]);
+          contrib = contrib - c;
+          Triangle t = my_grad + contrib;
+          c = (t - my_grad) - contrib;
+          my_grad = t;
         }
       }
     } else {
@@ -398,25 +362,12 @@ __global__ void gradients_brute_force_triangles_kernel(
       // Fallback for the trailing partial tile
       if (triangle_idx < geometry_count) {
         for (uint32_t j = 0; j < num_elements_in_tile; ++j) {
-          Vec3 contrib_v0;
-          Vec3 contrib_v1;
-          Vec3 contrib_v2;
-
-          my_triangle.gradContributionOfQuery(tile_q[j], tile_g[j], contrib_v0,
-                                              contrib_v1, contrib_v2);
-
-          contrib_v0 = contrib_v0 - c_v0;
-          contrib_v1 = contrib_v1 - c_v1;
-          contrib_v2 = contrib_v2 - c_v2;
-          Vec3 t_v0 = my_v0_grad + contrib_v0;
-          Vec3 t_v1 = my_v1_grad + contrib_v1;
-          Vec3 t_v2 = my_v2_grad + contrib_v2;
-          c_v0 = (t_v0 - my_v0_grad) - contrib_v0;
-          c_v1 = (t_v1 - my_v1_grad) - contrib_v1;
-          c_v2 = (t_v2 - my_v2_grad) - contrib_v2;
-          my_v0_grad = t_v0;
-          my_v1_grad = t_v1;
-          my_v2_grad = t_v2;
+          Triangle contrib =
+              my_triangle.gradContributionOfQuery(tile_q[j], tile_g[j]);
+          contrib = contrib - c;
+          Triangle t = my_grad + contrib;
+          c = (t - my_grad) - contrib;
+          my_grad = t;
         }
       }
     }
@@ -426,15 +377,15 @@ __global__ void gradients_brute_force_triangles_kernel(
   // Write out result
   if (triangle_idx < geometry_count) {
     uint32_t out_base = 9 * triangle_idx;
-    out_gradients[out_base] = my_v0_grad.x;
-    out_gradients[out_base + 1] = my_v0_grad.y;
-    out_gradients[out_base + 2] = my_v0_grad.z;
-    out_gradients[out_base + 3] = my_v1_grad.x;
-    out_gradients[out_base + 4] = my_v1_grad.y;
-    out_gradients[out_base + 5] = my_v1_grad.z;
-    out_gradients[out_base + 6] = my_v2_grad.x;
-    out_gradients[out_base + 7] = my_v2_grad.y;
-    out_gradients[out_base + 8] = my_v2_grad.z;
+    out_gradients[out_base] = my_grad.v0.x;
+    out_gradients[out_base + 1] = my_grad.v0.y;
+    out_gradients[out_base + 2] = my_grad.v0.z;
+    out_gradients[out_base + 3] = my_grad.v1.x;
+    out_gradients[out_base + 4] = my_grad.v1.y;
+    out_gradients[out_base + 5] = my_grad.v1.z;
+    out_gradients[out_base + 6] = my_grad.v2.x;
+    out_gradients[out_base + 7] = my_grad.v2.y;
+    out_gradients[out_base + 8] = my_grad.v2.z;
   }
 }
 
@@ -463,7 +414,8 @@ __global__ void accumulate_vertice_gradients_kernel(
   const uint32_t gtid = blockIdx.x * blockDim.x + threadIdx.x;
   const uint32_t stride = blockDim.x * gridDim.x;
 
-  const auto* triangle_results_float3 = reinterpret_cast<const float3*>(triangle_results);
+  const auto *triangle_results_float3 =
+      reinterpret_cast<const float3 *>(triangle_results);
 
   for (uint32_t i = gtid; i < total_local_vertices; i += stride) {
 
