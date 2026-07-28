@@ -35,9 +35,9 @@ struct alignas(128) TailorCoefficients {
 // ###### BACKWARD ########################
 // 26 byte content aligned to 32 byte
 struct alignas(32) BackwardTailorCoefficientsF16 {
-  half zero_order;
-  Vec3_f16 first_order;
-  Mat3x3_f16 second_order;
+  Mat3x3_f16 second_order; // 20
+  Vec3_f16 first_order; // 8
+  half zero_order; // 2
 };
 
 // For m2m

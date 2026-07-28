@@ -17,30 +17,125 @@ struct Vec3_f16 {
   __host__ __device__ __forceinline__ static auto from_float(const Vec3 &v)
       -> Vec3_f16;
 
+  // --- Vector Addition ---
   __host__ __device__ __forceinline__ auto operator+(const Vec3_f16 &b) const
       -> Vec3_f16 {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 530
+    half2 xy = __hadd2(__halves2half2(x, y), __halves2half2(b.x, b.y));
+    return {__low2half(xy), __high2half(xy), __hadd(z, b.z)};
+#else
     return {x + b.x, y + b.y, z + b.z};
-  }
-  __host__ __device__ __forceinline__ auto operator-(const Vec3_f16 &b) const
-      -> Vec3_f16 {
-    return {x - b.x, y - b.y, z - b.z};
-  }
-  __host__ __device__ __forceinline__ auto operator*(const Vec3_f16 &b) const
-      -> Vec3_f16 {
-    return {x * b.x, y * b.y, z * b.z};
-  }
-  __host__ __device__ __forceinline__ auto operator*(half s) const -> Vec3_f16 {
-    return {x * s, y * s, z * s};
+#endif
   }
 
-  __host__ __device__ __forceinline__ auto length2() const -> half;
-  __device__ __forceinline__ auto length() const -> half;
+  // --- Vector Subtraction ---
+  __host__ __device__ __forceinline__ auto operator-(const Vec3_f16 &b) const
+      -> Vec3_f16 {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 530
+    half2 xy = __hsub2(__halves2half2(x, y), __halves2half2(b.x, b.y));
+    return {__low2half(xy), __high2half(xy), __hsub(z, b.z)};
+#else
+    return {x - b.x, y - b.y, z - b.z};
+#endif
+  }
+
+  // --- Elementwise Vector Multiplication ---
+  __host__ __device__ __forceinline__ auto operator*(const Vec3_f16 &b) const
+      -> Vec3_f16 {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 530
+    half2 xy = __hmul2(__halves2half2(x, y), __halves2half2(b.x, b.y));
+    return {__low2half(xy), __high2half(xy), __hmul(z, b.z)};
+#else
+    return {x * b.x, y * b.y, z * b.z};
+#endif
+  }
+
+  // --- Scalar Multiplication ---
+  __host__ __device__ __forceinline__ auto operator*(half s) const -> Vec3_f16 {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 530
+    half2 xy = __hmul2(__halves2half2(x, y), __halves2half2(s, s));
+    return {__low2half(xy), __high2half(xy), __hmul(z, s)};
+#else
+    return {x * s, y * s, z * s};
+#endif
+  }
+
+  // --- Unary Negation ---
+  __host__ __device__ __forceinline__ auto operator-() const -> Vec3_f16 {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 530
+    half2 xy = __hneg2(__halves2half2(x, y));
+    return {__low2half(xy), __high2half(xy), __hneg(z)};
+#else
+    return {-x, -y, -z};
+#endif
+  }
+
+  // --- Dot Product ---
+  __host__ __device__ __forceinline__ auto dot(const Vec3_f16 &b) const
+      -> half {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 530
+    half2 prod_xy = __hmul2(__halves2half2(x, y), __halves2half2(b.x, b.y));
+    return __hadd(__hadd(__low2half(prod_xy), __high2half(prod_xy)),
+                  __hmul(z, b.z));
+#else
+    return x * b.x + y * b.y + z * b.z;
+#endif
+  }
+
+  // --- Cross Product ---
+  __host__ __device__ __forceinline__ auto cross(const Vec3_f16 &b) const
+      -> Vec3_f16 {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 530
+    half2 a_yz = __halves2half2(y, z);
+    half2 b_zy = __halves2half2(b.z, b.y);
+    half2 p1 = __hmul2(a_yz, b_zy);
+    half cx = __hsub(__low2half(p1), __high2half(p1));
+
+    half2 a_zx = __halves2half2(z, x);
+    half2 b_xz = __halves2half2(b.x, b.z);
+    half2 p2 = __hmul2(a_zx, b_xz);
+    half cy = __hsub(__low2half(p2), __high2half(p2));
+
+    half2 a_xy = __halves2half2(x, y);
+    half2 b_yx = __halves2half2(b.y, b.x);
+    half2 p3 = __hmul2(a_xy, b_yx);
+    half cz = __hsub(__low2half(p3), __high2half(p3));
+
+    return {cx, cy, cz};
+#else
+    return {y * b.z - z * b.y, z * b.x - x * b.z, x * b.y - y * b.x};
+#endif
+  }
+
+  // Fused Multiply-Add (v * s + a)
+  __host__ __device__ __forceinline__ static auto fma(const Vec3_f16 &v, half s,
+                                                      const Vec3_f16 &a)
+      -> Vec3_f16 {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 530
+    half2 v_xy = __halves2half2(v.x, v.y);
+    half2 a_xy = __halves2half2(a.x, a.y);
+    half2 s2 = __halves2half2(s, s);
+    half2 res_xy = __hfma2(v_xy, s2, a_xy);
+    return {__low2half(res_xy), __high2half(res_xy), __hfma(v.z, s, a.z)};
+#else
+    return {v.x * s + a.x, v.y * s + a.y, v.z * s + a.z};
+#endif
+  }
+
+  __host__ __device__ __forceinline__ auto length2() const -> half {
+    return dot(*this);
+  }
+
+  __device__ __forceinline__ auto length() const -> half {
+#if defined(__CUDACC__) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 530
+    return hsqrt(length2());
+#else
+    return sqrtf(float(length2()));
+#endif
+  }
 
   __host__ __device__ __forceinline__ auto
   outer_product(const Vec3_f16 &b) const -> Mat3x3_f16 {
-    // x*b.x, x*b.y, x*b.z
-    // y*b.x, y*b.y, y*b.z
-    // z*b.x, z*b.y, z*b.z
     Mat3x3_f16 m;
     m.data[0] = x * b.x;
     m.data[1] = x * b.y;
@@ -108,7 +203,7 @@ struct Vec3 {
   }
   __host__ __device__ __forceinline__ auto inv_length() const -> float {
 
-#ifdef __CUDACC__
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 530
     return rsqrtf(length2());
 #else
     return 1.F / length();
@@ -120,9 +215,8 @@ struct Vec3 {
     return (*this - pos).length();
   }
 
-  __host__ __device__ __forceinline__ static auto load(const SoAView<Vec3> &view,
-                                                uint32_t idx, uint32_t count)
-      -> Vec3 {
+  __host__ __device__ __forceinline__ static auto
+  load(const SoAView<Vec3> &view, uint32_t idx, uint32_t count) -> Vec3 {
     if (idx < count) {
       return Vec3{.x = view.base_ptr[0 * view.stride + idx],
                   .y = view.base_ptr[1 * view.stride + idx],
@@ -239,13 +333,40 @@ __host__ __device__ __forceinline__ auto Vec3_f16::from_float(const Vec3 &v)
   return result;
 }
 
-__host__ __device__ __forceinline__ auto Vec3_f16::length2() const -> half {
-  return x * x + y * y + z * z;
-}
+__host__ __device__ __forceinline__ auto
+Mat3x3_f16::quadric_form(const Vec3_f16 &v) const -> half {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 530
+  // Broadcast vector components into half2 pairs
+  half2 vx2 = __half2half2(v.x);
+  half2 vy2 = __half2half2(v.y);
+  half2 vz2 = __half2half2(v.z);
 
-// only for cuda compiler:
-#ifdef __CUDACC__
-__device__ __forceinline__ auto Vec3_f16::length() const -> half {
-  return hsqrt(length2());
-}
+  // Pack column pairs for Rows 0 and 1: [m00, m10], [m01, m11], [m02, m12]
+  half2 m01_x = make_half2(data[0], data[3]);
+  half2 m01_y = make_half2(data[1], data[4]);
+  half2 m01_z = make_half2(data[2], data[5]);
+
+  // Compute (M*v)_0 and (M*v)_1 simultaneously in 2 SIMD instructions:
+  // Mv_01 = m01_x * v.x + m01_y * v.y + m01_z * v.z
+  half2 Mv_01 = __hfma2(m01_x, vx2, __hfma2(m01_y, vy2, __hmul2(m01_z, vz2)));
+
+  // Compute (M*v)_2 scalar term
+  half Mv_2 = __hfma(data[6], v.x, __hfma(data[7], v.y, __hmul(data[8], v.z)));
+
+  // Inner product v^T * (M*v) = v_x*(Mv)_0 + v_y*(Mv)_1 + v_z*(Mv)_2
+  half2 v_01 = make_half2(v.x, v.y);
+  half2 prod_01 = __hmul2(v_01, Mv_01);
+  half sum_01 = __hadd(prod_01.x, prod_01.y);
+
+  return __hfma(v.z, Mv_2, sum_01);
+#else
+  half Mv_0 = __hadd(__hmul(data[0], v.x),
+                     __hadd(__hmul(data[1], v.y), __hmul(data[2], v.z)));
+  half Mv_1 = __hadd(__hmul(data[3], v.x),
+                     __hadd(__hmul(data[4], v.y), __hmul(data[5], v.z)));
+  half Mv_2 = __hadd(__hmul(data[6], v.x),
+                     __hadd(__hmul(data[7], v.y), __hmul(data[8], v.z)));
+  return __hadd(__hmul(v.x, Mv_0),
+                __hadd(__hmul(v.y, Mv_1), __hmul(v.z, Mv_2)));
 #endif
+}

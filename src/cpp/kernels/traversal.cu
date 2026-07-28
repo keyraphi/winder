@@ -445,6 +445,7 @@ __global__ void compute_point_normal_gradient_single_leaf_kernel(
   gradients[original_idx * 6 + 5] = my_grad.p.z;
 }
 
+// Parameter struct to save registers
 struct PointNormalGradientKernelParams {
   const Vec3 *points;
   const Vec3 *normals;
@@ -669,12 +670,18 @@ __global__ void __launch_bounds__(128) compute_point_normal_gradient_kernel(
                 detailed_leaf_evaluation_mask & (~(1U << current_leader));
             PointNormal shared_geometry;
             // Get the geometry from leader
-            shared_geometry.p.x = __shfl_sync(0xFFFFFFFF, my_geometry.p.x, current_leader);
-            shared_geometry.p.y = __shfl_sync(0xFFFFFFFF, my_geometry.p.y, current_leader);
-            shared_geometry.p.z = __shfl_sync(0xFFFFFFFF, my_geometry.p.z, current_leader);
-            shared_geometry.n.x = __shfl_sync(0xFFFFFFFF, my_geometry.p.x, current_leader);
-            shared_geometry.n.y = __shfl_sync(0xFFFFFFFF, my_geometry.p.y, current_leader);
-            shared_geometry.n.z = __shfl_sync(0xFFFFFFFF, my_geometry.p.z, current_leader);
+            shared_geometry.p.x =
+                __shfl_sync(0xFFFFFFFF, my_geometry.p.x, current_leader);
+            shared_geometry.p.y =
+                __shfl_sync(0xFFFFFFFF, my_geometry.p.y, current_leader);
+            shared_geometry.p.z =
+                __shfl_sync(0xFFFFFFFF, my_geometry.p.z, current_leader);
+            shared_geometry.n.x =
+                __shfl_sync(0xFFFFFFFF, my_geometry.n.x, current_leader);
+            shared_geometry.n.y =
+                __shfl_sync(0xFFFFFFFF, my_geometry.n.y, current_leader);
+            shared_geometry.n.z =
+                __shfl_sync(0xFFFFFFFF, my_geometry.n.z, current_leader);
             // compute the gradient contribution from my query
             PointNormal my_contribution{.p = Vec3::zero(), .n = Vec3::zero()};
             if (is_my_query_in_bounds) {
@@ -728,9 +735,9 @@ void compute_point_normal_gradients(
 
   float inv_epsilon = 1.F / params.epsilon;
   // There is no tree if there is only one leaf
-  if (params.geometry_count <= 32) {
+  if (params.query_count <= 32) {
     uint32_t threads = 256;
-    uint32_t blocks = (params.query_count + threads - 1) / threads;
+    uint32_t blocks = (params.geometry_count + threads - 1) / threads;
     compute_point_normal_gradient_single_leaf_kernel<<<blocks, threads, 0,
                                                        stream>>>(
         params.points, params.normals, params.sort_indirections,
@@ -775,6 +782,394 @@ void compute_point_normal_gradients(
       .beta_2 = beta_2,
       .inv_epsilon = inv_epsilon};
   compute_point_normal_gradient_kernel<<<blocks, threads, 0, stream>>>(
+      kernel_params);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+__global__ void compute_triangle_gradient_single_leaf_kernel(
+    const Triangle *__restrict__ triangles,
+    const uint32_t *__restrict__ sort_indirections,
+    const SoAView<Vec3> sorted_queries,
+    const float *__restrict__ sorted_grad_outputs, const uint32_t query_count,
+    const uint32_t geometry_count, float *__restrict__ gradients) {
+  // Global index of the geometry this thread is responsible for
+  uint32_t my_geometry_idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+  __shared__ Vec3 shared_query[32];
+  __shared__ float shared_grad_output[32];
+  if (threadIdx.x < query_count) {
+    shared_query[threadIdx.x] =
+        Vec3::load(sorted_queries, threadIdx.x, query_count);
+    shared_grad_output[threadIdx.x] = sorted_grad_outputs[threadIdx.x];
+  }
+  __syncthreads();
+
+  if (my_geometry_idx >= geometry_count) {
+    return;
+  }
+
+  // Load geometry
+  uint32_t original_idx = sort_indirections[my_geometry_idx];
+  const Triangle my_geometry = triangles[original_idx];
+  Triangle my_grad{.v0 = Vec3::zero(), .v1 = Vec3::zero(), .v2 = Vec3::zero()};
+
+  // Since there is only one leaf, all queries (1-32 elements)
+  // are stored at the beginning of sorted_queries.
+  // Every thread iterates through all available queries for its
+  // PointNormal.
+  for (uint32_t i = 0; i < query_count; ++i) {
+    Triangle contrib = my_geometry.gradContributionOfQuery(
+        shared_query[i], shared_grad_output[i]);
+    my_grad += contrib;
+  }
+
+  // Write out results
+  gradients[original_idx * 9] = my_grad.v0.x;
+  gradients[original_idx * 9 + 1] = my_grad.v0.y;
+  gradients[original_idx * 9 + 2] = my_grad.v0.z;
+  gradients[original_idx * 9 + 3] = my_grad.v1.x;
+  gradients[original_idx * 9 + 4] = my_grad.v1.y;
+  gradients[original_idx * 9 + 5] = my_grad.v1.z;
+  gradients[original_idx * 9 + 6] = my_grad.v2.x;
+  gradients[original_idx * 9 + 7] = my_grad.v2.y;
+  gradients[original_idx * 9 + 8] = my_grad.v2.z;
+}
+
+// Parameter struct to save registers
+struct TriangleGradientKernelParams {
+  const Triangle *triangles;
+  const uint32_t *sort_indirections;
+  const BVH8Node *bvh8_nodes;
+  const LeafPointers *bvh8_leaf_pointers;
+  const BackwardTailorCoefficientsF16 *node_coefficients;
+  const BackwardTailorCoefficientsF16 *leaf_coefficients;
+  const AABB *leaf_aabbs;
+  const float *sorted_grad_outputs;
+  float *gradients;
+  uint32_t *global_device_counter;
+  SoAView<Vec3> sorted_queries;
+  uint32_t query_count;
+  uint32_t geometry_count;
+  float beta_2;
+};
+
+// Kernel signature using __grid_constant__
+__global__ void __launch_bounds__(128) compute_triangle_gradient_kernel(
+    __grid_constant__ const TriangleGradientKernelParams params) {
+  const uint32_t warp_id = threadIdx.x / 32;
+  const uint32_t lane_id = threadIdx.x % 32;
+
+  // We split the geometry into tiles of 32 threads.
+  // Each warp of 32 threads works on one tile at a time.
+  // 4 warps per block
+  // Each warp has its own shared traversal stack.
+  __shared__ uint32_t shared_stack[4][64];
+  __shared__ BVH8Node current_node_cache[4];
+  __shared__ BackwardTailorCoefficientsF16 current_taylor_coefficients_cache[4];
+  __shared__ LeafPointers shared_leaf_ptrs[4];
+  uint32_t warp_tile_base;
+
+  while (true) {
+    // Claim a tile
+    // Dynamic work balancing. Not all blocks will need the same amount of time
+    // for their queries
+    if (lane_id == 0) {
+      warp_tile_base = atomicAdd(params.global_device_counter, 32);
+    }
+    warp_tile_base = __shfl_sync(0xFFFFFFFF, warp_tile_base, 0);
+
+    if (warp_tile_base >= params.geometry_count) {
+      // No more work for this warp
+      break;
+    }
+
+    // keep track of what subtrees have been approximated for this geometry item
+    int my_required_stack_depth = std::numeric_limits<int>::max();
+
+    uint32_t my_geometry_idx = warp_tile_base + lane_id;
+
+    Triangle my_geometry{Vec3::zero(), Vec3::zero(), Vec3::zero()};
+    uint32_t original_geometry_idx = 0xFFFFFFFF;
+    if (my_geometry_idx >= params.geometry_count) {
+      // This thread has no geometry, but still needs to help the others in the
+      // warp with their computations
+      my_required_stack_depth = -1;
+    } else {
+      // load geometry with sort indirections
+      original_geometry_idx = params.sort_indirections[my_geometry_idx];
+      my_geometry = params.triangles[original_geometry_idx];
+    }
+    Triangle my_gradient{
+        .v0 = Vec3::zero(), .v1 = Vec3::zero(), .v2 = Vec3::zero()};
+
+    // Always start traversal on root
+    int stack_ptr = 0;
+    if (lane_id == 0) {
+      shared_stack[warp_id][stack_ptr] = 0;
+    }
+    stack_ptr++; // increment stack pointer for all lanes
+
+    // Do traversal as full warps
+    while (true) {
+      // Check if stack is empty
+      uint32_t stack_not_empty_mask = __ballot_sync(0xFFFFFFFF, stack_ptr > 0);
+      // stop if all warps are done
+      if (stack_not_empty_mask == 0) {
+        break; // this tile is done
+      }
+      // warp leader pops next node into cache
+      uint32_t current_node_idx;
+      --stack_ptr; // decrement stack pointer for all lanes
+      if (lane_id == 0) {
+        current_node_idx = shared_stack[warp_id][stack_ptr];
+      }
+      // share current_node_idx with the rest
+      current_node_idx = __shfl_sync(0xFFFFFFFF, current_node_idx, 0);
+      // load current node to shared cache
+      load_shared_cooperative<BVH8Node>(&current_node_cache[warp_id],
+                                        params.bvh8_nodes + current_node_idx,
+                                        lane_id);
+      __syncwarp();
+
+      const BVH8Node &current_node = current_node_cache[warp_id];
+
+      // Check if this thread needs to process the current node
+      bool is_active = stack_ptr < my_required_stack_depth;
+      if (is_active) {
+        // this node is interested in the current subtree and will also have to
+        // look at everything that will be put onto the stack to traverse this
+        // subtree.
+        my_required_stack_depth = std::numeric_limits<int>::max();
+      }
+
+      // process current node
+      // Check the nodes parent_aabb. If it is too far away approximate using
+      // taylor coefficients
+      bool need_taylor_coefficients =
+          is_active && should_node_be_approximated(
+                           my_geometry, current_node.getAABB(), params.beta_2);
+
+      uint32_t load_taylor_coefficients_mask =
+          __ballot_sync(0xFFFFFFFF, need_taylor_coefficients);
+      if (load_taylor_coefficients_mask > 0) {
+        load_shared_cooperative<BackwardTailorCoefficientsF16>(
+            &current_taylor_coefficients_cache[warp_id],
+            params.node_coefficients + current_node_idx, lane_id);
+        __syncwarp();
+      }
+      if (need_taylor_coefficients) {
+        BackwardTailorCoefficientsF16 &current_node_coefficients =
+            current_taylor_coefficients_cache[warp_id];
+        AABB parent_aabb = current_node.getAABB();
+        // Do approximation
+        Triangle approx_grad_contribution = compute_node_gradient_approximation(
+            my_geometry, parent_aabb.center_of_mass,
+            current_node_coefficients.zero_order,
+            current_node_coefficients.first_order,
+            current_node_coefficients.second_order);
+        my_gradient += approx_grad_contribution;
+
+        // Remember that I have the full contribution of this node already.
+        my_required_stack_depth = stack_ptr;
+      }
+      bool is_still_active = my_required_stack_depth > stack_ptr;
+      uint32_t interest_mask = __ballot_sync(0xFFFFFFFF, is_still_active);
+      if (interest_mask == 0) {
+        // This subtree is done for all threads in the warp.
+        continue;
+      }
+      // load leaf ptrs to shared memory
+      bool is_leaf = lane_id < 8
+                         ? current_node.getChildMeta(lane_id) == ChildType::LEAF
+                         : false;
+      uint32_t leaf_mask = __ballot_sync(0xFFFFFFFF, is_leaf);
+      if (leaf_mask > 0) {
+        load_shared_cooperative(&shared_leaf_ptrs[warp_id],
+                                &params.bvh8_leaf_pointers[current_node_idx],
+                                lane_id);
+        __syncwarp();
+      }
+
+      // Go through all childs together
+      uint32_t added_inner_node_counter = 0;
+      for (uint32_t child_idx = 0; child_idx < 8; ++child_idx) {
+        ChildType child_type = current_node.getChildMeta(child_idx);
+        if (child_type == ChildType::EMPTY) {
+          continue;
+        }
+        if (child_type == ChildType::LEAF) {
+          uint32_t leaf_idx = shared_leaf_ptrs[warp_id].indices[child_idx];
+          AABB child_aabb = params.leaf_aabbs[leaf_idx];
+
+          bool need_taylor_coefficients =
+              is_still_active && should_node_be_approximated(
+                                     my_geometry, child_aabb, params.beta_2);
+          uint32_t load_taylor_coefficients_mask =
+              __ballot_sync(0xFFFFFFFF, need_taylor_coefficients);
+          if (load_taylor_coefficients_mask > 0) {
+            load_shared_cooperative<BackwardTailorCoefficientsF16>(
+                &current_taylor_coefficients_cache[warp_id],
+                params.leaf_coefficients + leaf_idx, lane_id);
+            __syncwarp();
+          }
+          bool is_detail_eval_needed = true;
+          if (need_taylor_coefficients) {
+            const BackwardTailorCoefficientsF16 &current_leaf_coefficients =
+                current_taylor_coefficients_cache[warp_id];
+            const Vec3 leaf_center_of_mass = child_aabb.center_of_mass;
+            Triangle approx_contribution = compute_node_gradient_approximation(
+                my_geometry, leaf_center_of_mass,
+                current_leaf_coefficients.zero_order,
+                current_leaf_coefficients.first_order,
+                current_leaf_coefficients.second_order);
+            my_gradient += approx_contribution;
+            is_detail_eval_needed = false;
+          }
+          uint32_t detailed_leaf_evaluation_mask = __ballot_sync(
+              0xFFFFFFFF, is_detail_eval_needed && is_still_active);
+
+          if (detailed_leaf_evaluation_mask == 0) {
+            // leaf contribution was approximated by all interested threads.
+            // Continue with next child.
+            continue;
+          }
+          // Detailed evaluation of leaf is needed for some threads.
+          uint32_t my_query_idx = leaf_idx * 32 + lane_id;
+          bool is_my_query_in_bounds = my_query_idx < params.query_count;
+          Vec3 my_query = Vec3::load(params.sorted_queries, my_query_idx,
+                                     params.query_count);
+          float my_grad_output = my_query_idx < params.query_count
+                                     ? params.sorted_grad_outputs[my_query_idx]
+                                     : 0.F;
+          // Use full warp to compute contributions of interested geometry one
+          // by one.
+          while (detailed_leaf_evaluation_mask > 0) {
+            int current_leader = __ffs(detailed_leaf_evaluation_mask) - 1;
+            // set current leader bit to 0
+            detailed_leaf_evaluation_mask =
+                detailed_leaf_evaluation_mask & (~(1U << current_leader));
+            Triangle shared_geometry;
+            // Get the geometry from leader
+            shared_geometry.v0.x =
+                __shfl_sync(0xFFFFFFFF, my_geometry.v0.x, current_leader);
+            shared_geometry.v0.y =
+                __shfl_sync(0xFFFFFFFF, my_geometry.v0.y, current_leader);
+            shared_geometry.v0.z =
+                __shfl_sync(0xFFFFFFFF, my_geometry.v0.z, current_leader);
+            shared_geometry.v1.x =
+                __shfl_sync(0xFFFFFFFF, my_geometry.v1.x, current_leader);
+            shared_geometry.v1.y =
+                __shfl_sync(0xFFFFFFFF, my_geometry.v1.y, current_leader);
+            shared_geometry.v1.z =
+                __shfl_sync(0xFFFFFFFF, my_geometry.v1.z, current_leader);
+            shared_geometry.v2.x =
+                __shfl_sync(0xFFFFFFFF, my_geometry.v2.x, current_leader);
+            shared_geometry.v2.y =
+                __shfl_sync(0xFFFFFFFF, my_geometry.v2.y, current_leader);
+            shared_geometry.v2.z =
+                __shfl_sync(0xFFFFFFFF, my_geometry.v2.z, current_leader);
+            // compute the gradient contribution from my query
+            Triangle my_contribution{
+                .v0 = Vec3::zero(), .v1 = Vec3::zero(), .v2 = Vec3::zero()};
+            if (is_my_query_in_bounds) {
+              my_contribution = shared_geometry.gradContributionOfQuery(
+                  my_query, my_grad_output);
+            }
+            // sum up all contributions in warp
+            Triangle total_contribution;
+            total_contribution.v0.x = warp_reduce_add_xor(my_contribution.v0.x);
+            total_contribution.v0.y = warp_reduce_add_xor(my_contribution.v0.y);
+            total_contribution.v0.z = warp_reduce_add_xor(my_contribution.v0.z);
+            total_contribution.v1.x = warp_reduce_add_xor(my_contribution.v1.x);
+            total_contribution.v1.y = warp_reduce_add_xor(my_contribution.v1.y);
+            total_contribution.v1.z = warp_reduce_add_xor(my_contribution.v1.z);
+            total_contribution.v2.x = warp_reduce_add_xor(my_contribution.v2.x);
+            total_contribution.v2.y = warp_reduce_add_xor(my_contribution.v2.y);
+            total_contribution.v2.z = warp_reduce_add_xor(my_contribution.v2.z);
+            // only leader adds that contribution
+            if ((int)lane_id == current_leader) {
+              my_gradient += total_contribution;
+            }
+          }
+        } else {
+          // Child is inner node
+          uint32_t child_node_idx =
+              current_node.child_base + added_inner_node_counter;
+          added_inner_node_counter++;
+          if (lane_id == 0) {
+            shared_stack[warp_id][stack_ptr] = child_node_idx;
+          }
+          stack_ptr++; // increment stack pointer for all lanes
+        }
+      } // child for
+    } // traversal while
+    // winding number computation is complete
+    if (my_required_stack_depth >= 0) {
+      params.gradients[original_geometry_idx * 9] = my_gradient.v0.x;
+      params.gradients[original_geometry_idx * 9 + 1] = my_gradient.v0.y;
+      params.gradients[original_geometry_idx * 9 + 2] = my_gradient.v0.z;
+      params.gradients[original_geometry_idx * 9 + 3] = my_gradient.v1.x;
+      params.gradients[original_geometry_idx * 9 + 4] = my_gradient.v1.y;
+      params.gradients[original_geometry_idx * 9 + 5] = my_gradient.v1.z;
+      params.gradients[original_geometry_idx * 9 + 6] = my_gradient.v2.x;
+      params.gradients[original_geometry_idx * 9 + 7] = my_gradient.v2.y;
+      params.gradients[original_geometry_idx * 9 + 8] = my_gradient.v2.z;
+    }
+  } // grid while
+}
+
+void compute_triangle_gradients(const ComputeGradientsTriangleParams &params,
+                                int device_id, const cudaStream_t &stream) {
+  if (params.geometry_count == 0) {
+    return;
+  }
+
+  // There is no tree if there is only one leaf
+  if (params.query_count <= 32) {
+    uint32_t threads = 256;
+    uint32_t blocks = (params.geometry_count + threads - 1) / threads;
+    compute_triangle_gradient_single_leaf_kernel<<<blocks, threads, 0,
+                                                   stream>>>(
+        params.triangles, params.sort_indirections, params.sorted_queries,
+        params.sorted_grad_outputs, params.query_count, params.geometry_count,
+        params.gradients);
+    return;
+  }
+
+  float beta_2 = params.beta * params.beta;
+
+  int threads = 128;
+  int blocks_per_sm = 0;
+
+  // Set global counter to 0
+  uint32_t global_device_counter_reset = 0;
+  CUDA_CHECK(cudaMemcpyAsync(params.global_device_counter,
+                             &global_device_counter_reset, sizeof(uint32_t),
+                             cudaMemcpyHostToDevice, stream));
+
+  cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+      &blocks_per_sm, compute_triangle_gradient_kernel, threads, 0);
+
+  cudaDeviceProp deviceProp;
+  cudaGetDeviceProperties(&deviceProp, device_id);
+  int blocks = blocks_per_sm * deviceProp.multiProcessorCount;
+
+  TriangleGradientKernelParams kernel_params{
+      .triangles = params.triangles,
+      .sort_indirections = params.sort_indirections,
+      .bvh8_nodes = params.bvh8_nodes,
+      .bvh8_leaf_pointers = params.bvh8_leaf_pointers,
+      .node_coefficients = params.node_coefficients,
+      .leaf_coefficients = params.leaf_coefficients,
+      .leaf_aabbs = params.leaf_aabbs,
+      .sorted_grad_outputs = params.sorted_grad_outputs,
+      .gradients = params.gradients,
+      .global_device_counter = params.global_device_counter,
+      .sorted_queries = params.sorted_queries,
+      .query_count = params.query_count,
+      .geometry_count = params.geometry_count,
+      .beta_2 = beta_2};
+  compute_triangle_gradient_kernel<<<blocks, threads, 0, stream>>>(
       kernel_params);
   CUDA_CHECK(cudaGetLastError());
 }

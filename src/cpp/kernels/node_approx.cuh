@@ -360,7 +360,7 @@ computeZeroOrderGradientContribution(const half &G_0, const Vec3_f16 &r_hat,
   half r_dot_m = __hadd(__hadd(__low2half(prod_xy), __high2half(prod_xy)),
                         __hmul(r_hat.z, m.z));
 
-  half three_r_dot_m = __hmul(r_dot_m, __float2half(3.0f));
+  half three_r_dot_m = __hmul(r_dot_m, __float2half(3.F));
 
   // 3 * (r_hat . m) * r_hat - m
   half2 r_xy_scaled =
@@ -413,7 +413,7 @@ computeFirstOrderGradientContribution(const Vec3_f16 &G_1,
                          __hmul(G_1.z, m.z));
 
   // --- Normal Gradient (grad_n_1) ---
-  half three_r_dot_q1 = __hmul(r_dot_q1, __float2half(3.0f));
+  half three_r_dot_q1 = __hmul(r_dot_q1, __float2half(3.F));
   half2 proj_n1_xy =
       __hmul2(r_xy, __halves2half2(three_r_dot_q1, three_r_dot_q1));
   half2 grad_n1_xy = __hsub2(G_1_xy, proj_n1_xy);
@@ -424,9 +424,9 @@ computeFirstOrderGradientContribution(const Vec3_f16 &G_1,
   out_c1_n.z = grad_n1_z;
 
   // --- Position Gradient (grad_p_1) ---
-  half three_r_dot_m = __hmul(r_dot_m, __float2half(3.0f));
-  half three_q1_dot_m = __hmul(q1_dot_m, __float2half(3.0f));
-  half fifteen_prod = __hmul(__hmul(r_dot_q1, r_dot_m), __float2half(15.0f));
+  half three_r_dot_m = __hmul(r_dot_m, __float2half(3.F));
+  half three_q1_dot_m = __hmul(q1_dot_m, __float2half(3.F));
+  half fifteen_prod = __hmul(__hmul(r_dot_q1, r_dot_m), __float2half(15.F));
 
   // 3*(r_hat·m)*G_1 + 3*(G_1·m)*r_hat + 3*(r_hat·G_1)*m -
   // 15*(r_hat·G_1)*(r_hat·m)*r_hat
@@ -499,39 +499,39 @@ computeSecondOrderGradientContribution(const Mat3x3_f16 &G_2,
 
   // --- Normal Gradient Contraction ---
   // c_nr = 7.5 * q_rr - 1.5 * trace_G_2
-  half c_nr = __hsub(__hmul(q_rr, __float2half(7.5f)),
-                     __hmul(trace_G_2, __float2half(1.5f)));
+  half c_nr = __hsub(__hmul(q_rr, __float2half(7.5F)),
+                     __hmul(trace_G_2, __float2half(1.5F)));
 
   // grad_n_2 = c_nr * r_hat - 3 * (G_2 * r_hat)
   out_c2_n.x =
-      __hsub(__hmul(r_hat.x, c_nr), __hmul(G_2_r.x, __float2half(3.0f)));
+      __hsub(__hmul(r_hat.x, c_nr), __hmul(G_2_r.x, __float2half(3.F)));
   out_c2_n.y =
-      __hsub(__hmul(r_hat.y, c_nr), __hmul(G_2_r.y, __float2half(3.0f)));
+      __hsub(__hmul(r_hat.y, c_nr), __hmul(G_2_r.y, __float2half(3.F)));
   out_c2_n.z =
-      __hsub(__hmul(r_hat.z, c_nr), __hmul(G_2_r.z, __float2half(3.0f)));
+      __hsub(__hmul(r_hat.z, c_nr), __hmul(G_2_r.z, __float2half(3.F)));
 
   // --- Position Gradient Contraction ---
   // c_r_p = 15 * q_rm + (7.5 * trace_G_2 - 52.5 * q_rr) * m_r
-  half c_r_p = __hadd(__hmul(q_rm, __float2half(15.0f)),
-                      __hmul(__hsub(__hmul(trace_G_2, __float2half(7.5f)),
-                                    __hmul(q_rr, __float2half(52.5f))),
+  half c_r_p = __hadd(__hmul(q_rm, __float2half(15.F)),
+                      __hmul(__hsub(__hmul(trace_G_2, __float2half(7.5F)),
+                                    __hmul(q_rr, __float2half(52.5F))),
                              m_r));
 
-  half fifteen_m_r = __hmul(m_r, __float2half(15.0f));
+  half fifteen_m_r = __hmul(m_r, __float2half(15.F));
 
   // grad_p_2 = 15*m_r*(G_2*r) + c_r_p*r_hat + c_nr*m - 3*(G_2*m)
   out_c2_p.x = __hsub(
       __hadd(__hadd(__hmul(G_2_r.x, fifteen_m_r), __hmul(r_hat.x, c_r_p)),
              __hmul(m.x, c_nr)),
-      __hmul(G_2_m.x, __float2half(3.0f)));
+      __hmul(G_2_m.x, __float2half(3.F)));
   out_c2_p.y = __hsub(
       __hadd(__hadd(__hmul(G_2_r.y, fifteen_m_r), __hmul(r_hat.y, c_r_p)),
              __hmul(m.y, c_nr)),
-      __hmul(G_2_m.y, __float2half(3.0f)));
+      __hmul(G_2_m.y, __float2half(3.F)));
   out_c2_p.z = __hsub(
       __hadd(__hadd(__hmul(G_2_r.z, fifteen_m_r), __hmul(r_hat.z, c_r_p)),
              __hmul(m.z, c_nr)),
-      __hmul(G_2_m.z, __float2half(3.0f)));
+      __hmul(G_2_m.z, __float2half(3.F)));
 }
 
 /**
@@ -606,4 +606,219 @@ __device__ __forceinline__ auto compute_node_gradient_approximation(
              __half2float(c2_p.z) * factor_p_2;
 
   return grad;
+}
+
+/**
+ * @brief Helper to reconstruct an FP32 vertex gradient from scaled FP16 order
+ * terms.
+ */
+__device__ __forceinline__ Vec3 reconstruct_vertex(
+    const Vec3_f16 &term0, float scale_0th, const Vec3_f16 &term1,
+    float scale_1st, const Vec3_f16 &term2, float scale_2nd) {
+  return Vec3{
+      __half2float(term0.x) * scale_0th + __half2float(term1.x) * scale_1st +
+          __half2float(term2.x) * scale_2nd,
+      __half2float(term0.y) * scale_0th + __half2float(term1.y) * scale_1st +
+          __half2float(term2.y) * scale_2nd,
+      __half2float(term0.z) * scale_0th + __half2float(term1.z) * scale_1st +
+          __half2float(term2.z) * scale_2nd};
+}
+
+/**
+ * @brief Scale-invariant 0th + 1st + 2nd order Taylor approximation of loss
+ * gradients for a Triangle primitive with respect to its vertices.
+ */
+__device__ __forceinline__ auto compute_node_gradient_approximation(
+    const Triangle &geometry, const Vec3 &center_of_mass, const half &G_0,
+    const Vec3_f16 &G_1, const Mat3x3_f16 &G_2) -> Triangle {
+
+  // 1. Reference Scale Extraction (FP32)
+  Vec3 r0_f = geometry.v0 - center_of_mass;
+  Vec3 r1_f = geometry.v1 - center_of_mass;
+  Vec3 r2_f = geometry.v2 - center_of_mass;
+
+  float d0_f = r0_f.length();
+  float d1_f = r1_f.length();
+  float d2_f = r2_f.length();
+
+  float L_ref = max(d0_f, max(d1_f, max(d2_f, 1e-7F)));
+  float inv_L_ref = 1.F / L_ref;
+  float inv_L_ref2 = inv_L_ref * inv_L_ref;
+
+  // 2. Normalized Mapping to FP16 Domain
+  Vec3_f16 r0 = Vec3_f16::from_float(r0_f * inv_L_ref);
+  Vec3_f16 r1 = Vec3_f16::from_float(r1_f * inv_L_ref);
+  Vec3_f16 r2 = Vec3_f16::from_float(r2_f * inv_L_ref);
+
+  Vec3_f16 G1_bar = Vec3_f16::from_float(Vec3::from_f16(G_1) * inv_L_ref);
+  Mat3x3_f16 G2_bar = G_2 * __float2half(inv_L_ref2);
+
+  half d0 = r0.length();
+  half d1 = r1.length();
+  half d2 = r2.length();
+
+  half inv_d0 = hrcp(__hmax(d0, __float2half(1e-4F)));
+  half inv_d1 = hrcp(__hmax(d1, __float2half(1e-4F)));
+  half inv_d2 = hrcp(__hmax(d2, __float2half(1e-4F)));
+
+  Vec3_f16 r0_hat = r0 * inv_d0;
+  Vec3_f16 r1_hat = r1 * inv_d1;
+  Vec3_f16 r2_hat = r2 * inv_d2;
+
+  // 3. Pairwise & Geometric Quantities
+  half r0_dot_r1 = r0.dot(r1);
+  half r1_dot_r2 = r1.dot(r2);
+  half r2_dot_r0 = r2.dot(r0);
+
+  Vec3_f16 U0 = r1.cross(r2);
+  Vec3_f16 U1 = r2.cross(r0);
+  Vec3_f16 U2 = r0.cross(r1);
+
+  half N = r0.dot(U0);
+
+  half alpha0 = __hadd(__hmul(d1, d2), r1_dot_r2);
+  half alpha1 = __hadd(__hmul(d2, d0), r2_dot_r0);
+  half alpha2 = __hadd(__hmul(d0, d1), r0_dot_r1);
+
+  half d012 = __hmul(d0, __hmul(d1, d2));
+  half D = __hadd(d012,
+                  __hadd(__hmul(r0_dot_r1, d2),
+                         __hadd(__hmul(r1_dot_r2, d0), __hmul(r2_dot_r0, d1))));
+
+  Vec3_f16 V0 = Vec3_f16::fma(r0_hat, alpha0, Vec3_f16::fma(r1, d2, r2 * d1));
+  Vec3_f16 V1 = Vec3_f16::fma(r1_hat, alpha1, Vec3_f16::fma(r2, d0, r0 * d2));
+  Vec3_f16 V2 = Vec3_f16::fma(r2_hat, alpha2, Vec3_f16::fma(r0, d1, r1 * d0));
+
+  half S = __hadd(__hmul(N, N), __hmul(D, D));
+  half inv_S = hrcp(__hmax(S, __float2half(1e-6F)));
+  half inv_S2 = __hmul(inv_S, inv_S);
+  half inv_S3 = __hmul(inv_S2, inv_S);
+
+  half neg_N = __hneg(N);
+  Vec3_f16 W0 = Vec3_f16::fma(U0, D, V0 * neg_N);
+  Vec3_f16 W1 = Vec3_f16::fma(U1, D, V1 * neg_N);
+  Vec3_f16 W2 = Vec3_f16::fma(U2, D, V2 * neg_N);
+
+  // 4. 0th Order Evaluation
+  half factor_2_over_S = __hmul(__float2half(2.F), inv_S);
+  half coeff_W_0th = __hmul(G_0, factor_2_over_S);
+
+  Vec3_f16 term0_v0 = W0 * coeff_W_0th;
+  Vec3_f16 term0_v1 = W1 * coeff_W_0th;
+  Vec3_f16 term0_v2 = W2 * coeff_W_0th;
+
+  // 5. 1st Order Contractions with G1_bar
+  half s_U0 = U0.dot(G1_bar);
+  half s_U1 = U1.dot(G1_bar);
+  half s_U2 = U2.dot(G1_bar);
+  half s_V0 = V0.dot(G1_bar);
+  half s_V1 = V1.dot(G1_bar);
+  half s_V2 = V2.dot(G1_bar);
+  half s_r0_hat = r0_hat.dot(G1_bar);
+  half s_r1_hat = r1_hat.dot(G1_bar);
+  half s_r2_hat = r2_hat.dot(G1_bar);
+  half s_r0 = r0.dot(G1_bar);
+  half s_r1 = r1.dot(G1_bar);
+  half s_r2 = r2.dot(G1_bar);
+
+  half S_U = __hadd(s_U0, __hadd(s_U1, s_U2));
+  half S_V = __hadd(s_V0, __hadd(s_V1, s_V2));
+
+  Vec3_f16 dU0_sum = G1_bar.cross(r2 - r1);
+  Vec3_f16 dU1_sum = G1_bar.cross(r0 - r2);
+  Vec3_f16 dU2_sum = G1_bar.cross(r1 - r0);
+
+  half alpha0_over_d0 = __hmul(alpha0, inv_d0);
+  half alpha1_over_d1 = __hmul(alpha1, inv_d1);
+  half alpha2_over_d2 = __hmul(alpha2, inv_d2);
+
+  half c_G1_0 = __hadd(alpha0_over_d0, __hadd(d1, d2));
+  half c_G1_1 = __hadd(alpha1_over_d1, __hadd(d2, d0));
+  half c_G1_2 = __hadd(alpha2_over_d2, __hadd(d0, d1));
+
+  half c_r0_hat =
+      __hadd(__hmul(__hneg(alpha0_over_d0), s_r0_hat),
+             __hadd(__hmul(d2, s_r1_hat),
+                    __hadd(__hmul(d1, s_r2_hat), __hadd(s_r1, s_r2))));
+  half c_r1_hat =
+      __hadd(__hmul(__hneg(alpha1_over_d1), s_r1_hat),
+             __hadd(__hmul(d0, s_r2_hat),
+                    __hadd(__hmul(d2, s_r0_hat), __hadd(s_r2, s_r0))));
+  half c_r2_hat =
+      __hadd(__hmul(__hneg(alpha2_over_d2), s_r2_hat),
+             __hadd(__hmul(d1, s_r0_hat),
+                    __hadd(__hmul(d0, s_r1_hat), __hadd(s_r0, s_r1))));
+
+  Vec3_f16 dV0_sum =
+      Vec3_f16::fma(G1_bar, c_G1_0,
+                    Vec3_f16::fma(r0_hat, c_r0_hat,
+                                  Vec3_f16::fma(r1, s_r2_hat, r2 * s_r1_hat)));
+  Vec3_f16 dV1_sum =
+      Vec3_f16::fma(G1_bar, c_G1_1,
+                    Vec3_f16::fma(r1_hat, c_r1_hat,
+                                  Vec3_f16::fma(r2, s_r0_hat, r0 * s_r2_hat)));
+  Vec3_f16 dV2_sum =
+      Vec3_f16::fma(G1_bar, c_G1_2,
+                    Vec3_f16::fma(r2_hat, c_r2_hat,
+                                  Vec3_f16::fma(r0, s_r1_hat, r1 * s_r0_hat)));
+
+  half factor_4_over_S2 = __hmul(__float2half(4.F), inv_S2);
+  half N_SU_plus_D_SV = __hadd(__hmul(N, S_U), __hmul(D, S_V));
+  half coeff_W_1st = __hmul(N_SU_plus_D_SV, factor_4_over_S2);
+
+  Vec3_f16 dW0_sum = (dV0_sum * N + V0 * S_U) - (dU0_sum * D + U0 * S_V);
+  Vec3_f16 dW1_sum = (dV1_sum * N + V1 * S_U) - (dU1_sum * D + U1 * S_V);
+  Vec3_f16 dW2_sum = (dV2_sum * N + V2 * S_U) - (dU2_sum * D + U2 * S_V);
+
+  Vec3_f16 term1_v0 = Vec3_f16::fma(dW0_sum, factor_2_over_S, W0 * coeff_W_1st);
+  Vec3_f16 term1_v1 = Vec3_f16::fma(dW1_sum, factor_2_over_S, W1 * coeff_W_1st);
+  Vec3_f16 term1_v2 = Vec3_f16::fma(dW2_sum, factor_2_over_S, W2 * coeff_W_1st);
+
+  // 6. 2nd Order Hessian Contractions with G2_bar
+  Vec3_f16 grad_S_0 = (U0 * N + V0 * D) * __float2half(2.F);
+  Vec3_f16 grad_S_1 = (U1 * N + V1 * D) * __float2half(2.F);
+  Vec3_f16 grad_S_2 = (U2 * N + V2 * D) * __float2half(2.F);
+
+  half gS_G2_gS_0 = G2_bar.quadric_form(grad_S_0);
+  half gS_G2_gS_1 = G2_bar.quadric_form(grad_S_1);
+  half gS_G2_gS_2 = G2_bar.quadric_form(grad_S_2);
+
+  half quad_S_sum = __hadd(gS_G2_gS_0, __hadd(gS_G2_gS_1, gS_G2_gS_2));
+
+  half lap_S_0 = __hmul(__float2half(2.F), __hadd(U0.dot(U0), V0.dot(V0)));
+  half lap_S_1 = __hmul(__float2half(2.F), __hadd(U1.dot(U1), V1.dot(V1)));
+  half lap_S_2 = __hmul(__float2half(2.F), __hadd(U2.dot(U2), V2.dot(V2)));
+
+  half lap_S_G2_sum =
+      __hmul(G2_bar.trace(), __hadd(lap_S_0, __hadd(lap_S_1, lap_S_2)));
+
+  half factor_8_over_S3 = __hmul(__float2half(8.F), inv_S3);
+  half coeff_W_2nd = __hsub(__hmul(quad_S_sum, factor_8_over_S3),
+                            __hmul(lap_S_G2_sum, factor_4_over_S2));
+
+  Vec3_f16 dW_G2_gS_0 = dW0_sum * grad_S_0.dot(G1_bar);
+  Vec3_f16 dW_G2_gS_1 = dW1_sum * grad_S_1.dot(G1_bar);
+  Vec3_f16 dW_G2_gS_2 = dW2_sum * grad_S_2.dot(G1_bar);
+
+  Vec3_f16 cross_term_sum = dW_G2_gS_0 + dW_G2_gS_1 + dW_G2_gS_2;
+
+  Vec3_f16 term2_v0 =
+      Vec3_f16::fma(W0, coeff_W_2nd, cross_term_sum * factor_4_over_S2);
+  Vec3_f16 term2_v1 =
+      Vec3_f16::fma(W1, coeff_W_2nd, cross_term_sum * factor_4_over_S2);
+  Vec3_f16 term2_v2 =
+      Vec3_f16::fma(W2, coeff_W_2nd, cross_term_sum * factor_4_over_S2);
+
+  // 7. Final Scale Reconstruction in FP32
+  constexpr float inv_4pi = 0.07957747154F;
+  float scale_0th = inv_4pi * inv_L_ref;
+  float scale_1st = inv_4pi * inv_L_ref2;
+  float scale_2nd = inv_4pi * (inv_L_ref2 * inv_L_ref);
+
+  return Triangle{reconstruct_vertex(term0_v0, scale_0th, term1_v0, scale_1st,
+                                     term2_v0, scale_2nd),
+                  reconstruct_vertex(term0_v1, scale_0th, term1_v1, scale_1st,
+                                     term2_v1, scale_2nd),
+                  reconstruct_vertex(term0_v2, scale_0th, term1_v2, scale_1st,
+                                     term2_v2, scale_2nd)};
 }

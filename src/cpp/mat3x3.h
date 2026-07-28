@@ -3,10 +3,52 @@
 #include <cuda_runtime_api.h>
 
 struct Mat3x3;
-struct Tensor3;
-
+struct Vec3_f16;
+/**
+ * @brief 3x3 FP16 Matrix structure with SIMD (half2) vector intrinsics.
+ */
 struct Mat3x3_f16 {
-  half data[9];
+  half data[9]; // Stored in row-major order: [m00, m01, m02, m10, m11, m12,
+                // m20, m21, m22]
+
+  __host__ __device__ __forceinline__ auto operator*(half s) const
+      -> Mat3x3_f16 {
+    Mat3x3_f16 res;
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 530
+    half2 s2 = __half2half2(s);
+
+    half2 p0 = __hmul2(make_half2(data[0], data[1]), s2);
+    half2 p1 = __hmul2(make_half2(data[2], data[3]), s2);
+    half2 p2 = __hmul2(make_half2(data[4], data[5]), s2);
+    half2 p3 = __hmul2(make_half2(data[6], data[7]), s2);
+
+    res.data[0] = p0.x;
+    res.data[1] = p0.y;
+    res.data[2] = p1.x;
+    res.data[3] = p1.y;
+    res.data[4] = p2.x;
+    res.data[5] = p2.y;
+    res.data[6] = p3.x;
+    res.data[7] = p3.y;
+    res.data[8] = __hmul(data[8], s);
+#else
+    for (int i = 0; i < 9; ++i) {
+      res.data[i] = __hmul(data[i], s);
+    }
+#endif
+    return res;
+  }
+
+  // Trace: Tr(M) = m00 + m11 + m22
+  __host__ __device__ __forceinline__ auto trace() const -> half {
+    return __hadd(__hadd(data[0], data[4]), data[8]);
+  }
+
+  // Quadratic Form: v^T * M * v
+  // Packs Rows 0 and 1 to evaluate (M*v)_0 and (M*v)_1 in parallel using half2
+  // FMA.
+  __host__ __device__ __forceinline__ auto quadric_form(const Vec3_f16 &v) const
+      -> half;
 
   __host__ __device__ __forceinline__ static auto from_float(const Mat3x3 &v)
       -> Mat3x3_f16;
@@ -24,8 +66,8 @@ struct Mat3x3 {
     return Mat3x3{1.F, 0.F, 0.F, 0.F, 1.F, 0.F, 0.F, 0.F, 1.F};
   }
 
-  __host__ __device__ __forceinline__ static auto
-  from_f16(const Mat3x3_f16 &m) -> Mat3x3 {
+  __host__ __device__ __forceinline__ static auto from_f16(const Mat3x3_f16 &m)
+      -> Mat3x3 {
     Mat3x3 result;
     for (int i = 0; i < 9; i++) {
       result.data[i] = __half2float(m.data[i]);
@@ -72,8 +114,8 @@ __host__ __device__ __forceinline__ auto operator*(const float n,
   return m * n;
 }
 
-__host__ __device__ __forceinline__ auto
-Mat3x3_f16::from_float(const Mat3x3 &m) -> Mat3x3_f16 {
+__host__ __device__ __forceinline__ auto Mat3x3_f16::from_float(const Mat3x3 &m)
+    -> Mat3x3_f16 {
   Mat3x3_f16 result;
   for (int i = 0; i < 9; i++) {
     result.data[i] = __float2half(m.data[i]);
