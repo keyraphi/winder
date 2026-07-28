@@ -7,10 +7,13 @@
 #include <driver_types.h>
 
 // Gather kernel to read queries into SoA format
-void gather_queries_soa(const float *__restrict__ queries,
-                      const uint32_t *__restrict__ indices,
-                      float *__restrict__ out_queries, uint32_t count,
-                      const cudaStream_t &stream);
+void gather_queries_and_grad_output_soa(const float *__restrict__ queries,
+                                       const float *__restrict__ grad_outputs,
+                                       const uint32_t *__restrict__ indices,
+                                       float *__restrict__ sorted_queries_soa,
+                                       float *__restrict__ sorted_grad_outputs,
+                                       uint32_t count,
+                                       const cudaStream_t &stream);
 
 // Gather kernel to read PointNormals into SoA format
 void gather_point_normals_soa(const float *__restrict__ points,
@@ -39,7 +42,7 @@ void populate_binary_tree_aabb_and_leaf_coefficients(
 
 void populate_binary_tree_aabb_and_leaf_coefficients_backward(
     const float *__restrict__ sorted_queries,
-    const float *__restrict__ grad_outputs,
+    const float *__restrict__ sorted_grad_outputs,
     BackwardTailorCoefficientsF16 *leaf_coefficients, uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, float *atomic_counters,

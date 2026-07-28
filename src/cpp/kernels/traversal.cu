@@ -4,6 +4,7 @@
 #include "geometry.h"
 #include "mat3x3.h"
 #include "node_approx.cuh"
+#include "soa.h"
 #include "tailor_coefficients.h"
 #include "tensor3.h"
 #include "traversal.cuh"
@@ -15,6 +16,7 @@
 #include <cub/block/block_scan.cuh>
 #include <cub/util_type.cuh>
 #include <cuda_device_runtime_api.h>
+#include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
 #include <device_atomic_functions.h>
@@ -44,19 +46,17 @@ load_shared_cooperative(T *shared_dst, const T *global_src, uint32_t lane_id) {
     if (lane_id < 16) {
       dst_u32[lane_id] = src_u32[lane_id];
     }
-  }
-  else if constexpr (words == 8) { // BVH8Node / LeafPointers (32 bytes)
+  } else if constexpr (words == 8) { // BVH8Node / LeafPointers /
+                                     // BackwardTailorCoefficientsF16 (32 bytes)
     if (lane_id < 8) {
       dst_u32[lane_id] = src_u32[lane_id];
     }
-  }
-  else { // Generic fallback
+  } else { // Generic fallback
     for (uint32_t i = lane_id; i < words; i += 32) {
       dst_u32[i] = src_u32[i];
     }
   }
 }
-
 
 template <IsGeometry Geometry>
 __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
@@ -388,6 +388,387 @@ void compute_winding_numbers(
       params.leaf_coefficients, params.leaf_aabbs, params.sorted_geometry,
       params.query_count, params.geometry_count, params.winding_numbers,
       params.global_device_counter, beta_2, inv_epsilon);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+__global__ void compute_point_normal_gradient_single_leaf_kernel(
+    const Vec3 *__restrict__ points, const Vec3 *__restrict__ normals,
+    const uint32_t *__restrict__ sort_indirections,
+    const SoAView<Vec3> sorted_queries,
+    const float *__restrict__ sorted_grad_outputs, const uint32_t query_count,
+    const uint32_t geometry_count, float *__restrict__ gradients,
+    const float inv_epsilon) {
+  // Global index of the geometry this thread is responsible for
+  uint32_t my_geometry_idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+  __shared__ Vec3 shared_query[32];
+  __shared__ float shared_grad_output[32];
+  if (threadIdx.x < query_count) {
+    shared_query[threadIdx.x] =
+        Vec3::load(sorted_queries, threadIdx.x, query_count);
+    shared_grad_output[threadIdx.x] = sorted_grad_outputs[threadIdx.x];
+  }
+  __syncthreads();
+
+  if (my_geometry_idx >= geometry_count) {
+    return;
+  }
+
+  // Load geometry
+  uint32_t original_idx = sort_indirections[my_geometry_idx];
+  const auto my_geometry =
+      PointNormal{.p = points[original_idx], .n = normals[original_idx]};
+  Vec3 my_dn = Vec3::zero();
+  Vec3 my_dp = Vec3::zero();
+
+  constexpr float INV_PI_1_5 = 0.179587122F; // 1.0 / (pi^1.5)
+  const float inv_epsilon3 = inv_epsilon * inv_epsilon * inv_epsilon;
+  const float reg_term_const = inv_epsilon3 * INV_PI_1_5;
+  const float near_field_g_denum = (INV_PI_1_5 / 3.F) * inv_epsilon3;
+
+  // Since there is only one leaf, all queries (1-32 elements)
+  // are stored at the beginning of sorted_queries.
+  // Every thread iterates through all available queries for its
+  // PointNormal.
+  Vec3 contrib_n, contrib_p;
+  for (uint32_t i = 0; i < query_count; ++i) {
+    my_geometry.gradContributionOfQuery(
+        shared_query[i], shared_grad_output[i], inv_epsilon, reg_term_const,
+        near_field_g_denum, contrib_p, contrib_n);
+    my_dn += contrib_n;
+    my_dp += contrib_p;
+  }
+
+  // Write out results
+  gradients[original_idx * 6] = my_dn.x;
+  gradients[original_idx * 6 + 1] = my_dn.y;
+  gradients[original_idx * 6 + 2] = my_dn.z;
+  gradients[original_idx * 6 + 3] = my_dp.x;
+  gradients[original_idx * 6 + 4] = my_dp.y;
+  gradients[original_idx * 6 + 5] = my_dp.z;
+}
+
+__global__ void __launch_bounds__(128) compute_point_normal_gradient_kernel(
+    const Vec3 *__restrict__ points, const Vec3 *__restrict__ normals,
+    const uint32_t *__restrict__ sort_indirections,
+    const BVH8Node *__restrict__ bvh8_nodes,
+    const LeafPointers *__restrict__ bvh8_leaf_pointers,
+    const BackwardTailorCoefficientsF16 *__restrict__ node_coefficients,
+    const BackwardTailorCoefficientsF16 *__restrict__ leaf_coefficients,
+    const AABB *__restrict__ leaf_aabbs, const SoAView<Vec3> sorted_queries,
+    const float *__restrict__ sorted_grad_outputs, const uint32_t query_count,
+    const uint32_t geometry_count, float *__restrict__ gradients,
+    uint32_t *__restrict__ global_device_counter, const float beta_2,
+    const float inv_epsilon) {
+
+  const uint32_t warp_id = threadIdx.x / 32;
+  const uint32_t lane_id = threadIdx.x % 32;
+
+  // We split the queries into tiles of 32 threads.
+  // Each warp of 32 threads works on one tile at a time.
+  // 4 warps per block
+  // Each warp has its own shared traversal stack.
+  __shared__ uint32_t shared_stack[4][64];
+  __shared__ BVH8Node current_node_cache[4];
+  __shared__ BackwardTailorCoefficientsF16 current_tailor_coefficients_cache[4];
+  __shared__ LeafPointers shared_leaf_ptrs[4];
+  uint32_t warp_tile_base;
+
+  while (true) {
+    // Claim a tile
+    // Dynamic work balancing. Not all blocks will need the same amount of time
+    // for their queries
+    if (lane_id == 0) {
+      warp_tile_base = atomicAdd(global_device_counter, 32);
+    }
+    warp_tile_base = __shfl_sync(0xFFFFFFFF, warp_tile_base, 0);
+
+    if (warp_tile_base >= query_count) {
+      // No more work for this warp
+      break;
+    }
+
+    // keep track of what subtrees have been approximated for this query
+    int my_required_stack_depth = std::numeric_limits<int>::max();
+
+    uint32_t my_geometry_idx = warp_tile_base + lane_id;
+
+    PointNormal my_geometry{Vec3::zero(), Vec3::zero()};
+    uint32_t original_geometry_idx = 0xFFFFFFFF;
+    if (my_geometry_idx >= geometry_count) {
+      // This thread has no geometry, but still needs to help the others in the
+      // warp with their computations
+      my_required_stack_depth = -1;
+    } else {
+      // load geometry with sort indirections
+      original_geometry_idx = sort_indirections[my_geometry_idx];
+      my_geometry = PointNormal{.p = points[original_geometry_idx],
+                                .n = normals[original_geometry_idx]};
+    }
+    PointNormal my_gradient{.p = Vec3::zero(), .n = Vec3::zero()};
+
+    constexpr float INV_PI_1_5 = 0.179587122F; // 1.0 / (pi^1.5)
+    const float inv_epsilon3 = inv_epsilon * inv_epsilon * inv_epsilon;
+    const float reg_term_const = inv_epsilon3 * INV_PI_1_5;
+    const float near_field_g_denum = (INV_PI_1_5 / 3.F) * inv_epsilon3;
+
+    // Always start traversal on root
+    int stack_ptr = 0;
+    if (lane_id == 0) {
+      shared_stack[warp_id][stack_ptr] = 0;
+    }
+    stack_ptr++; // increment stack pointer for all lanes
+
+    // Do traversal as full warps
+    while (true) {
+      // Check if stack is empty
+      uint32_t stack_not_empty_mask = __ballot_sync(0xFFFFFFFF, stack_ptr > 0);
+      // stop if all warps are done
+      if (stack_not_empty_mask == 0) {
+        break; // this tile is done
+      }
+      // warp leader pops next node into cache
+      uint32_t current_node_idx;
+      --stack_ptr; // decrement stack pointer for all lanes
+      if (lane_id == 0) {
+        current_node_idx = shared_stack[warp_id][stack_ptr];
+      }
+      // share current_node_idx with the rest
+      current_node_idx = __shfl_sync(0xFFFFFFFF, current_node_idx, 0);
+      // load current node to shared cache
+      load_shared_cooperative<BVH8Node>(&current_node_cache[warp_id],
+                                        bvh8_nodes + current_node_idx, lane_id);
+      __syncwarp();
+
+      const BVH8Node &current_node = current_node_cache[warp_id];
+
+      // Check if this thread needs to process the current node
+      bool is_active = stack_ptr < my_required_stack_depth;
+      if (is_active) {
+        // this node is interested in the current subtree and will also have to
+        // look at everything that will be put onto the stack to traverse this
+        // subtree.
+        my_required_stack_depth = std::numeric_limits<int>::max();
+      }
+
+      // process current node
+      // Check the nodes parent_aabb. If it is too far away approximate using
+      // taylor coefficients
+      bool need_taylor_coefficients =
+          is_active && should_node_be_approximated( // TODO
+                           my_geometry, current_node.getAABB(), beta_2);
+
+      uint32_t load_tailor_coefficients_mask =
+          __ballot_sync(0xFFFFFFFF, need_taylor_coefficients);
+      if (load_tailor_coefficients_mask > 0) {
+        load_shared_cooperative<BackwardTailorCoefficientsF16>(
+            &current_tailor_coefficients_cache[warp_id],
+            node_coefficients + current_node_idx, lane_id);
+        __syncwarp();
+      }
+      if (need_taylor_coefficients) {
+        // tailor_coefficients dequantization
+        BackwardTailorCoefficientsF16 &current_node_coefficients =
+            current_tailor_coefficients_cache[warp_id];
+        // Zero Order
+        half zero_order_coeff = current_node_coefficients.zero_order;
+        // First Order
+        Vec3_f16 first_order_coeff = current_node_coefficients.first_order;
+        // Second order
+        Mat3x3_f16 second_order_coeff = current_node_coefficients.second_order;
+
+        AABB parent_aabb = current_node.getAABB();
+
+        // Do approximation
+        PointNormal approx_grad_contribution =
+            compute_node_gradient_approximation(
+                my_geometry, parent_aabb.center_of_mass, zero_order_coeff,
+                first_order_coeff, second_order_coeff);
+        my_gradient += approx_grad_contribution;
+
+        // Remember that I have the full contribution of this node already.
+        my_required_stack_depth = stack_ptr;
+      }
+      bool is_still_active = my_required_stack_depth > stack_ptr;
+      uint32_t interest_mask = __ballot_sync(0xFFFFFFFF, is_still_active);
+      if (interest_mask == 0) {
+        // This subtree is done for all threads in the warp.
+        continue;
+      }
+      // load leaf ptrs to shared memory
+      bool is_leaf = lane_id < 8
+                         ? current_node.getChildMeta(lane_id) == ChildType::LEAF
+                         : false;
+      uint32_t leaf_mask = __ballot_sync(0xFFFFFFFF, is_leaf);
+      if (leaf_mask > 0) {
+        load_shared_cooperative(&shared_leaf_ptrs[warp_id],
+                                &bvh8_leaf_pointers[current_node_idx], lane_id);
+        __syncwarp();
+      }
+
+      // Go through all childs together
+      uint32_t added_inner_node_counter = 0;
+      for (uint32_t child_idx = 0; child_idx < 8; ++child_idx) {
+        ChildType child_type = current_node.getChildMeta(child_idx);
+        if (child_type == ChildType::EMPTY) {
+          continue;
+        }
+        if (child_type == ChildType::LEAF) {
+          uint32_t leaf_idx = shared_leaf_ptrs[warp_id].indices[child_idx];
+          AABB child_aabb = leaf_aabbs[leaf_idx];
+
+          bool need_tailor_coefficients =
+              is_still_active &
+              should_node_be_approximated(my_geometry, child_aabb, beta_2); // TODO
+          uint32_t load_tailor_coefficients_mask =
+              __ballot_sync(0xFFFFFFFF, need_tailor_coefficients);
+          if (load_tailor_coefficients_mask > 0) {
+            load_shared_cooperative<BackwardTailorCoefficientsF16>(
+                &current_tailor_coefficients_cache[warp_id],
+                leaf_coefficients + leaf_idx, lane_id);
+            __syncwarp();
+          }
+          bool is_detail_eval_needed = true;
+          if (need_tailor_coefficients) {
+            const BackwardTailorCoefficientsF16 &current_leaf_coefficients =
+                current_tailor_coefficients_cache[warp_id];
+            const Vec3 leaf_center_of_mass = child_aabb.center_of_mass;
+            PointNormal approx_contribution =
+                compute_node_gradient_approximation(
+                    my_geometry, leaf_center_of_mass,
+                    current_leaf_coefficients.zero_order,
+                    current_leaf_coefficients.first_order,
+                    current_leaf_coefficients.second_order);
+            my_gradient += approx_contribution;
+            is_detail_eval_needed = false;
+          }
+          uint32_t detailed_leaf_evaluation_mask = __ballot_sync(
+              0xFFFFFFFF, is_detail_eval_needed && is_still_active);
+
+          if (detailed_leaf_evaluation_mask == 0) {
+            // leaf contribution was approximated by all interested threads.
+            // Continue with next child.
+            continue;
+          }
+          // Detailed evaluation of leaf is needed for some threads.
+          uint32_t my_query_idx = leaf_idx * 32 + lane_id;
+          bool is_my_query_in_bounds = my_query_idx < query_count;
+          Vec3 my_query = Vec3::load(sorted_queries, my_query_idx, query_count);
+          float my_grad_output = my_query_idx < query_count
+                                     ? sorted_grad_outputs[my_query_idx]
+                                     : 0.F;
+          // Use full warp to compute contributions of interested queries one
+          // by one
+          PointNormal shared_geometry;
+          while (detailed_leaf_evaluation_mask > 0) {
+            int current_leader = __ffs(detailed_leaf_evaluation_mask) - 1;
+            // set current leader bit to 0
+            detailed_leaf_evaluation_mask =
+                detailed_leaf_evaluation_mask & (~(1u << current_leader));
+            // Get the geometry from leader
+            shared_geometry.p.x =
+                __shfl_sync(0xFFFFFFFF, my_geometry.p.x, current_leader);
+            shared_geometry.p.y =
+                __shfl_sync(0xFFFFFFFF, my_geometry.p.y, current_leader);
+            shared_geometry.p.z =
+                __shfl_sync(0xFFFFFFFF, my_geometry.p.z, current_leader);
+            shared_geometry.n.x =
+                __shfl_sync(0xFFFFFFFF, my_geometry.n.x, current_leader);
+            shared_geometry.n.y =
+                __shfl_sync(0xFFFFFFFF, my_geometry.n.y, current_leader);
+            shared_geometry.n.z =
+                __shfl_sync(0xFFFFFFFF, my_geometry.n.z, current_leader);
+            // compute the winding number contribution from my geometry
+            PointNormal my_contribution{Vec3::zero(), Vec3::zero()};
+            if (is_my_query_in_bounds) {
+              my_contribution = my_geometry.gradContributionOfQuery(
+                  shared_query, shared_grad_output, inv_epsilon, reg_term_const,
+                  near_field_g_denum, my_contribution.p, my_contribution.n);
+            }
+            // sum up all contributions in warp
+            PointNormal total_contribution;
+            auto *my_contribution_ptr =
+                reinterpret_cast<float *>(&my_contribution);
+            auto *total_contribution_ptr =
+                reinterpret_cast<float *>(&total_contribution);
+#pragma unroll
+            for (int i = 0; i < 6; ++i) {
+              total_contribution_ptr[i] =
+                  warp_reduce_add_xor(my_contribution_ptr[i]);
+            }
+            // only leader adds that contribution
+            if ((int)lane_id == current_leader) {
+              my_gradient += total_contribution;
+            }
+          }
+        } else {
+          // Child is inner node
+          uint32_t child_node_idx =
+              current_node.child_base + added_inner_node_counter;
+          added_inner_node_counter++;
+          if (lane_id == 0) {
+            shared_stack[warp_id][stack_ptr] = child_node_idx;
+          }
+          stack_ptr++; // increment stack pointer for all lanes
+        }
+      } // child for
+    } // traversal while
+    // winding number computation is complete
+    if (my_required_stack_depth >= 0) {
+      gradients[original_geometry_idx * 6] = my_gradient.n.x;
+      gradients[original_geometry_idx * 6 + 1] = my_gradient.n.y;
+      gradients[original_geometry_idx * 6 + 2] = my_gradient.n.z;
+      gradients[original_geometry_idx * 6 + 3] = my_gradient.p.x;
+      gradients[original_geometry_idx * 6 + 4] = my_gradient.p.y;
+      gradients[original_geometry_idx * 6 + 5] = my_gradient.p.z;
+    }
+  } // grid while
+}
+
+void compute_point_normal_gradients(
+    const ComputeGradientsPointNormalParams &params, int device_id,
+    const cudaStream_t &stream) {
+  if (params.geometry_count == 0) {
+    return;
+  }
+
+  float inv_epsilon = 1.F / params.epsilon;
+  // There is no tree if there is only one leaf
+  if (params.geometry_count <= 32) {
+    uint32_t threads = 256;
+    uint32_t blocks = (params.query_count + threads - 1) / threads;
+    compute_point_normal_gradient_single_leaf_kernel<<<blocks, threads, 0,
+                                                       stream>>>(
+        params.points, params.normals, params.sort_indirections,
+        params.sorted_queries, params.sorted_grad_outputs, params.query_count,
+        params.geometry_count, params.gradients, inv_epsilon);
+    return;
+  }
+
+  float beta_2 = params.beta * params.beta;
+
+  int threads = 128;
+  int blocks_per_sm = 0;
+
+  // Set global counter to 0
+  uint32_t global_device_counter_reset = 0;
+  CUDA_CHECK(cudaMemcpyAsync(params.global_device_counter,
+                             &global_device_counter_reset, sizeof(uint32_t),
+                             cudaMemcpyHostToDevice, stream));
+
+  cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+      &blocks_per_sm, compute_point_normal_gradient_kernel, threads, 0);
+
+  cudaDeviceProp deviceProp;
+  cudaGetDeviceProperties(&deviceProp, device_id);
+  int blocks = blocks_per_sm * deviceProp.multiProcessorCount;
+
+  compute_point_normal_gradient_kernel<<<blocks, threads, 0, stream>>>(
+      params.points, params.normals, params.sort_indirections,
+      params.bvh8_nodes, params.bvh8_leaf_pointers, params.node_coefficients,
+      params.leaf_coefficients, params.leaf_aabbs, params.sorted_queries,
+      params.sorted_grad_outputs, params.query_count, params.geometry_count,
+      params.gradients, params.global_device_counter, beta_2, inv_epsilon);
   CUDA_CHECK(cudaGetLastError());
 }
 

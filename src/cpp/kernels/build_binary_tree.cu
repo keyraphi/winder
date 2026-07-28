@@ -22,10 +22,12 @@
 #include <vector_types.h>
 
 __global__ void __launch_bounds__(256)
-    gather_queries_soa_kernel(const float *__restrict__ queries_aos,
-                              const uint32_t *__restrict__ indices,
-                              float *__restrict__ out_queries_soa,
-                              const uint32_t count) {
+    gather_queries_and_grad_outputs_soa_kernel(
+        const float *__restrict__ queries_aos,
+        const float *__restrict__ grad_outputs_aos,
+        const uint32_t *__restrict__ indices,
+        float *__restrict__ out_queries_soa,
+        float *__restrict__ sorted_grad_outputs, const uint32_t count) {
   const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= count) {
     return;
@@ -47,20 +49,25 @@ __global__ void __launch_bounds__(256)
   for (uint32_t i = 0; i < float_count; ++i) {
     out_queries_soa[i * count + idx] = values[i];
   }
+
+  sorted_grad_outputs[idx] = grad_outputs_aos[src_idx];
 }
 
-void gather_queries_soa(const float *__restrict__ queries,
-                        const uint32_t *__restrict__ indices,
-                        float *__restrict__ out_queries, const uint32_t count,
-                        const cudaStream_t &stream) {
+void gather_queries_and_grad_outputs_soa(
+    const float *__restrict__ queries, const float *__restrict__ grad_outputs,
+    const uint32_t *__restrict__ indices,
+    float *__restrict__ sorted_queries_soa,
+    float *__restrict__ sorted_grad_outputs, const uint32_t count,
+    const cudaStream_t &stream) {
   if (count < 1) {
     return;
   }
-  // one thread per point
+  // one thread per query
   const uint32_t threads = 256;
   const uint32_t blocks = (count + threads - 1) / threads;
-  gather_queries_soa_kernel<<<blocks, threads, 0, stream>>>(queries, indices,
-                                                            out_queries, count);
+  gather_queries_and_grad_outputs_soa_kernel<<<blocks, threads, 0, stream>>>(
+      queries, grad_outputs, indices, sorted_queries_soa, sorted_grad_outputs,
+      count);
   CUDA_CHECK(cudaGetLastError());
 }
 
@@ -508,15 +515,16 @@ void populate_binary_tree_aabb_and_leaf_coefficients(
 }
 
 __global__ void populate_binary_tree_aabb_and_leaf_coefficients_backward_kernel(
-    const SoAView<Vec3> sorted_queries, const float *__restrict__ out_grads,
+    const SoAView<Vec3> sorted_queries, const float *__restrict__ sorted_grad_outputs,
     BackwardTailorCoefficientsF16 *leaf_coefficients, const uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, float *atomic_weights,
     const uint32_t query_count) {
   uint32_t query_idx = threadIdx.x + blockIdx.x * blockDim.x;
   uint32_t leaf_idx = query_idx / 32;
-  if (leaf_idx >= leaf_count)
+  if (leaf_idx >= leaf_count) {
     return;
+  }
 
   uint32_t lane_id = query_idx % 32;
 
@@ -593,10 +601,10 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_backward_kernel(
   // second order
   // \sum_{i=1}^m g_i (x_i - center)\otimes(x_i - center)
   // For inactive threads result is 0 (neutral wrt +)
-  zero_order = query_idx < query_count ? out_grads[query_idx] : 0.F;
+  zero_order = query_idx < query_count ? sorted_grad_outputs[query_idx] : 0.F;
   first_order = zero_order * (query - center_of_mass);
   second_order = first_order.outer_product(
-      query - center); // TODO can be optimized due to symetry
+      query - center_of_mass); // TODO can be optimized due to symmetry
 
   // aggregate zero order
   zero_order = warp_reduce_add_down(zero_order);
@@ -687,7 +695,7 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_backward_kernel(
 
 void populate_binary_tree_aabb_and_leaf_coefficients_backward(
     const float *__restrict__ sorted_queries,
-    const float *__restrict__ grad_outputs,
+    const float *__restrict__ sorted_grad_outputs,
     BackwardTailorCoefficientsF16 *leaf_coefficients, const uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, float *atomic_counters,
@@ -699,9 +707,10 @@ void populate_binary_tree_aabb_and_leaf_coefficients_backward(
   const uint32_t threads = 256;
   const uint32_t blocks = (leaf_count * 32 + threads - 1) / threads;
   populate_binary_tree_aabb_and_leaf_coefficients_backward_kernel<<<
-      blocks, threads, 0, stream>>>(
-      SoAView<Vec3>{sorted_queries, query_count}, grad_outputs, leaf_coefficients, leaf_count,
-      binary_nodes, binary_aabbs, binary_parents, atomic_counters, query_count);
+      blocks, threads, 0, stream>>>(SoAView<Vec3>{sorted_queries, query_count},
+                                    sorted_grad_outputs, leaf_coefficients, leaf_count,
+                                    binary_nodes, binary_aabbs, binary_parents,
+                                    atomic_counters, query_count);
   CUDA_CHECK(cudaGetLastError());
 }
 

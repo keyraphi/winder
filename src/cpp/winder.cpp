@@ -13,10 +13,10 @@
 #include <utility>
 
 #include "geometry.h"
-#include "gradient_cuda.h"
+#include "gradient_backend.h"
 #include "utils.h"
 #include "winder_brute_force.h"
-#include "winder_cuda.h"
+#include "winding_numbers_backend.h"
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -211,8 +211,7 @@ auto brute_force_gradients(const Scalar_t &grad_output,
 class GradientEngine {
 public:
   GradientEngine(const Vec3_t &queries, const Scalar_t &grad_output)
-      : m_impl{GradientBackend(queries.data(), grad_output.data(),
-                               queries.shape(0), queries.device_id())} {
+      : m_impl{GradientBackend(queries.shape(0), queries.device_id())} {
         // TODO initialize after the checks, not in the constructor!
     if (queries.shape(0) != grad_output.shape(0)) {
       throw std::runtime_error(
@@ -222,16 +221,17 @@ public:
       throw std::runtime_error(
           "queries and grad_output has to be on the same device.");
     }
+    m_impl.init(queries.data(), grad_output.data());
   }
 
   // PointNormal
-  auto compute(const Scalar_t &grad_output, const Vec3_t &points,
+  auto compute(const Vec3_t &points,
                const Vec3_t &scaled_normals, float beta = -1.F,
                float epsilon = -1.F, const uint64_t stream = 0)
       -> GradResult_t {
     CudaUniquePtr<float> raw_ptr_unique = m_impl.compute(
-        grad_output.data(), points.data(), scaled_normals.data(),
-        grad_output.shape(0), points.shape(0), beta, epsilon, stream);
+        points.data(), scaled_normals.data(),
+        points.shape(0), beta, epsilon, stream);
 
     CudaDeleter deleter = raw_ptr_unique.get_deleter();
     float *raw_ptr = raw_ptr_unique.release();
@@ -247,12 +247,12 @@ public:
   }
 
   // Mesh
-  auto compute(const Scalar_t &grad_output, const Vec3_t &vertices,
+  auto compute(const Vec3_t &vertices,
                const TriangleIdx_t &triangle_indices, float beta = -1.F,
                const uint64_t stream = 0) -> GradResult_t {
     CudaUniquePtr<float> raw_ptr_unique = m_impl.compute(
-        grad_output.data(), vertices.data(), triangle_indices.data(),
-        grad_output.shape(0), vertices.shape(0), triangle_indices.shape(0),
+        vertices.data(), triangle_indices.data(),
+        vertices.shape(0), triangle_indices.shape(0),
         beta, stream);
 
     CudaDeleter deleter = raw_ptr_unique.get_deleter();
@@ -268,11 +268,11 @@ public:
     return {raw_ptr, {vertices.shape(0), 3, 3}, owner};
   }
   // Triangles
-  auto compute(const Scalar_t &grad_output, const Triangle_t &triangles,
+  auto compute(const Triangle_t &triangles,
                float beta = -1.F, const uint64_t stream = 0) -> GradResult_t {
     CudaUniquePtr<float> raw_ptr_unique =
-        m_impl.compute(grad_output.data(), triangles.data(),
-                       grad_output.shape(0), triangles.shape(0), beta, stream);
+        m_impl.compute(triangles.data(),
+                       triangles.shape(0), beta, stream);
 
     CudaDeleter deleter = raw_ptr_unique.get_deleter();
     float *raw_ptr = raw_ptr_unique.release();
@@ -743,7 +743,7 @@ NB_MODULE(winder_module, m) {
           )doc");
 
   nb::class_<GradientEngine>(m, "GradientEngine")
-      .def(nb::init<Vec3_t>(), "queries"_a, "grad_output"_a,
+      .def(nb::init<Vec3_t, Scalar_t>(), "queries"_a, "grad_output"_a,
            nb::sig("def __init__(self, queries: Array[M, 3; float32, cuda], "
                    "grad_output: Array[M; float32, cuda]) -> None"),
            R"doc(

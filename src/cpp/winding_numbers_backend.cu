@@ -54,7 +54,7 @@
 #include "tailor_coefficients.h"
 #include "utils.h"
 #include "vec3.h"
-#include "winder_cuda.h"
+#include "winding_numbers_backend.h"
 
 namespace cg = cooperative_groups;
 
@@ -67,10 +67,6 @@ namespace cg = cooperative_groups;
     }                                                                          \
   } while (0)
 
-struct SceneParams {
-  float scale;
-  AABB bounds;
-};
 __constant__ SceneParams d_scene_params;
 
 void CudaDeleter::operator()(void *ptr) const {
@@ -190,32 +186,6 @@ template <IsPrimitiveGeometry PrimitiveGeometry> struct GeometryToMorton {
   }
 };
 
-template <IsGeometry Geometry>
-template <IsPrimitiveGeometry PrimitiveGeometry>
-auto WindingNumbersBackend<Geometry>::initializeMortonCodes(
-    const PrimitiveGeometry *geometry, uint64_t *geometry_morton_codes)
-    -> void {
-  // compute scene bound
-  auto aabb_transform = thrust::make_transform_iterator(
-      geometry, GeometryToAABB<PrimitiveGeometry>{});
-
-  AABB scene_bounds =
-      thrust::reduce(m_build_stream_policy, aabb_transform,
-                     aabb_transform + m_count, AABB::empty(), MergeAABB{});
-  // create morton codes for each primitive
-  Vec3 extent = Vec3::from_f16(scene_bounds.diagonal());
-  float max_dim = fmaxf(extent.x, fmaxf(extent.y, extent.z));
-  float scale = (max_dim > 1e-9F) ? 1.F / max_dim : 0.F;
-
-  SceneParams scen_params{scale, scene_bounds};
-  CUDA_CHECK(cudaMemcpyToSymbolAsync(d_scene_params, &scen_params,
-                                     sizeof(SceneParams), 0,
-                                     cudaMemcpyHostToDevice, m_build_stream));
-
-  thrust::transform(m_build_stream_policy, geometry, geometry + m_count,
-                    geometry_morton_codes,
-                    GeometryToMorton<PrimitiveGeometry>{});
-}
 
 template <>
 void WindingNumbersBackend<Triangle>::initialize_triangle_data(
@@ -227,7 +197,7 @@ void WindingNumbersBackend<Triangle>::initialize_triangle_data(
   uint64_t *geometry_morton_codes;
   CUDA_CHECK(cudaMallocAsync(&geometry_morton_codes, m_count * sizeof(uint64_t),
                              m_build_stream));
-  initializeMortonCodes(triangles_tri, geometry_morton_codes);
+  initializeMortonCodes(triangles_tri, geometry_morton_codes, m_count, m_build_stream);
 
   // sort by morton codes
   thrust::sequence(m_build_stream_policy, m_to_internal,
@@ -373,7 +343,7 @@ void WindingNumbersBackend<PointNormal>::initialize_point_data(
   uint64_t *geometry_morton_codes;
   CUDA_CHECK(cudaMallocAsync(&geometry_morton_codes, m_count * sizeof(uint64_t),
                              m_build_stream));
-  initializeMortonCodes<Vec3>(points_v3, geometry_morton_codes);
+  initializeMortonCodes(points_v3, geometry_morton_codes, m_count, m_build_stream);
 
   // sort by morton codes
   thrust::sequence(m_build_stream_policy, m_to_internal,
@@ -509,12 +479,6 @@ void WindingNumbersBackend<PointNormal>::initialize_point_data(
       cudaEventRecord(m_tree_construction_finished_event, m_build_stream));
 }
 
-template <typename T> struct GeometryTraits {
-  static constexpr float default_beta = 2.3F;
-};
-template <> struct GeometryTraits<PointNormal> {
-  static constexpr float default_beta = 2.0F;
-};
 
 template <IsGeometry Geometry>
 auto WindingNumbersBackend<Geometry>::compute(const float *queries,
@@ -664,17 +628,6 @@ auto WindingNumbersBackend<Triangle>::CreateFromMesh(
   CUDA_CHECK(cudaFreeAsync(triangles, self->m_build_stream));
   return self;
 }
-
-// template <IsGeometry Geometry>
-// auto WinderBackend<Geometry>::compute(
-//     [[maybe_unused]] const float *queries,
-//     [[maybe_unused]] const float *grad_output,
-//     [[maybe_unused]] size_t query_count, [[maybe_unused]] float beta,
-//     [[maybe_unused]] float epsilon, [[maybe_unused]] size_t stream) const
-//     -> CudaUniquePtr<float> {
-//   throw std::runtime_error(
-//       "get_gradients is not yet implemented Work In Proress!");
-// }
 
 template <IsGeometry Geometry>
 auto WindingNumbersBackend<Geometry>::dump() const -> std::string {
@@ -944,5 +897,5 @@ auto WindingNumbersBackend<Geometry>::dump() const -> std::string {
   return result;
 }
 
-template class WinderBackend<PointNormal>;
-template class WinderBackend<Triangle>;
+template class WindingNumbersBackend<PointNormal>;
+template class WindingNumbersBackend<Triangle>;

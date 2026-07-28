@@ -272,3 +272,4 @@ auto brute_force_mesh_gradient_impl(
 
   return result;
 }
+

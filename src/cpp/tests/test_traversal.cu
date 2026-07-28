@@ -2,7 +2,7 @@
 #include "utils.h"
 #include "vec3.h"
 #include "winder_brute_force.h"
-#include "winder_cuda.h"
+#include "winding_numbers_backend.h"
 #include <cstddef>
 #include <cstdio>
 #include <cuda_runtime_api.h>

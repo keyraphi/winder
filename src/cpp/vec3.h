@@ -1,6 +1,6 @@
 #pragma once
-#include "utils.h"
 #include "mat3x3.h"
+#include "soa.h"
 #include <cmath>
 #include <cstdint>
 #include <cuda_bf16.h>

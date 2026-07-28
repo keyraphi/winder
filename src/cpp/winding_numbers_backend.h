@@ -1,6 +1,5 @@
 #pragma once
 #include "aabb.h"
-#include "binary_node.h"
 #include "bvh8.h"
 #include "geometry.h"
 #include "tailor_coefficients.h"
@@ -87,8 +86,4 @@ public: // TODO DEBUG  make private!
                                       // (for traversal)
 
 private: // TODO DEBUG
-  // private helpers
-  template <IsPrimitiveGeometry PrimitiveGeometry>
-  auto initializeMortonCodes(const PrimitiveGeometry *geometry,
-                             uint64_t *geometry_morton_codes) -> void;
 };

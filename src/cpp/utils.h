@@ -1,6 +1,8 @@
 #pragma once
 #include <cstddef>
+#include <cstdint>
 #include <cuda_runtime_api.h>
+#include <driver_types.h>
 #include <memory>
 #include "aabb.h"
 #include "geometry.h"
@@ -47,12 +49,14 @@ struct SceneParams {
 };
 
 
-template <typename T> struct SoAView {
-  const float *base_ptr;
-  size_t stride;
-};
-
 template <IsPrimitiveGeometry PrimitiveGeometry>
 auto initializeMortonCodes(const PrimitiveGeometry *geometry,
                            uint64_t *geometry_morton_codes, size_t count,
                            cudaStream_t stream) -> void;
+
+template <typename T> struct GeometryTraits {
+  static constexpr float default_beta = 2.3F;
+};
+template <> struct GeometryTraits<PointNormal> {
+  static constexpr float default_beta = 2.0F;
+};

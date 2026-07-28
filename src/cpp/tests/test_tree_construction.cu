@@ -3,7 +3,7 @@
 #include "kernels/common.cuh"
 #include "tailor_coefficients.h"
 #include "vec3.h"
-#include "winder_cuda.h"
+#include "winding_numbers_backend.h"
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>

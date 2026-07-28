@@ -2,7 +2,7 @@
 #include "geometry.h"
 #include "kernels/common.cuh"
 #include "vec3.h"
-#include "winder_cuda.h"
+#include "winding_numbers_backend.h"
 #include <cstddef>
 #include <cstdint>
 #include <driver_types.h>

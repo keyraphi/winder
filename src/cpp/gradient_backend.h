@@ -6,22 +6,22 @@
 #include "utils.h"
 #include <cstddef>
 #include <cstdint>
+#include <driver_types.h>
 
 class GradientBackend {
 public:
-  GradientBackend(const float *queries, size_t query_count, int device_id);
+  GradientBackend(size_t query_count, int device_id);
   ~GradientBackend();
 
-  auto compute(const float *grad_output, const float *points,
-               const float *scaled_normals, size_t grad_count,
+  void init(const float *queries, const float *grad_output);
+
+  auto compute(const float *points, const float *scaled_normals,
                size_t geometry_count, float beta = -1, float epsilon = -1,
                uint64_t stream = 0) -> CudaUniquePtr<float>;
-  auto compute(const float *grad_output, const float *vertices,
-               const uint32_t *triangle_indices, size_t grad_count,
+  auto compute(const float *vertices, const uint32_t *triangle_indices,
                size_t vertex_count, size_t geometry_count, float beta = -1,
                uint64_t stream = 0) -> CudaUniquePtr<float>;
-  auto compute(const float *grad_output, const float *triangles,
-               size_t grad_count, size_t geometry_count, float beta = -1,
+  auto compute(const float *triangles, size_t geometry_count, float beta = -1,
                uint64_t stream = 0) -> CudaUniquePtr<float>;
 
 private:
@@ -32,6 +32,7 @@ private:
 
   uint32_t *m_to_internal;
   float *m_sorted_queries;
+  float *m_sorted_grad_outputs;
 
   AABB *m_binary_aabbs;
   uint32_t *m_bvh8_node_count;
@@ -39,5 +40,6 @@ private:
   BackwardTailorCoefficientsF16 *m_tailor_coefficients;
   BackwardTailorCoefficientsF16 *m_leaf_coefficients;
   LeafPointers *m_bvh8_leaf_pointers;
-  
+
+  cudaEvent_t m_tree_construction_finished_event;
 };

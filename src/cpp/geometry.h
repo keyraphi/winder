@@ -1,8 +1,8 @@
 #pragma once
 #include "aabb.h"
 #include "mat3x3.h"
+#include "soa.h"
 #include "tensor3.h"
-#include "utils.h"
 #include "vec3.h"
 #include <cmath>
 #include <concepts>
@@ -116,6 +116,17 @@ struct Triangle {
 struct PointNormal {
   Vec3 p;
   Vec3 n;
+
+  __host__ __device__ __forceinline__ auto
+  operator+(const PointNormal &other) const -> PointNormal {
+    return PointNormal{p + other.p, n + other.n};
+  }
+
+  __host__ __device__ __forceinline__ auto operator+=(const PointNormal &other) -> PointNormal & {
+    p += other.p;
+    n += other.n;
+    return *this;
+  }
 
   __host__ __device__ __forceinline__ static auto
   load(const SoAView<PointNormal> &view, uint32_t idx, uint32_t count)
@@ -553,26 +564,3 @@ concept IsPrimitiveGeometry = requires(T g) {
   { g.get_aabb() } -> std::same_as<AABB>;
   { g.centroid() } -> std::same_as<Vec3>;
 };
-
-// TODO move this somewhere else maybe?
-// template <IsGeometry Geometry>
-// __host__ __device__ __forceinline__ auto
-// Geometry::get_taylor_terms_backward(const Vec3 &q_center, const bool
-// is_active,
-//                                     const Vec3 &query_pos, float g_j,
-//                                     float &zero_order, Vec3 &first_order,
-//                                     Mat3x3 &second_order) -> void {
-//   if (!is_active) {
-//     zero_order = 0.F;
-//     first_order.x = 0.F;
-//     first_order.y = 0.F;
-//     first_order.z = 0.F;
-//     second_order = Mat3x3::zero();
-//     return;
-//   }
-//
-//   zero_order = g_j;
-//   Vec3 u = query_pos - q_center;
-//   first_order = g_j * u;
-//   second_order = g_j * u.outer_product(u);
-// }

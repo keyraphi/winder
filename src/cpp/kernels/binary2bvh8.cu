@@ -3,6 +3,8 @@
 #include "binary_node.h"
 #include "bvh8.h"
 #include "common.cuh"
+#include "soa.h"
+#include "cub/warp/warp_reduce.cuh"
 #include "geometry.h"
 #include "vec3.h"
 #include <cmath>
@@ -336,7 +338,7 @@ quantize_bvh8_distances_kernel(BVH8Node *nodes,
   }
 }
 
-template <IsGeometry Geometry>
+template <HasMaxDistance Geometry>
 void compute_max_distances(BVH8Node *__restrict__ nodes, const float *geometry,
                            const uint32_t *__restrict__ leaf_parents,
                            const uint32_t *__restrict__ internal_parent_map,

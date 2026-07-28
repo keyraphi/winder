@@ -1,6 +1,6 @@
 #pragma once
-#include "kernels/common.cuh"
 #include "vec3.h"
+#include "kernels/common.cuh"
 #include <cmath>
 #include <cstdint>
 #include <cuda_runtime_api.h>

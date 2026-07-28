@@ -5,7 +5,6 @@
 #include "tailor_coefficients.h"
 #include "tensor3.h"
 #include "vec3.h"
-#include "winder_cuda.h"
 #include <cooperative_groups.h>
 #include <cooperative_groups/scan.h>
 #include <cstdint>
@@ -199,7 +198,7 @@ void compute_internal_tailor_coefficients_m2m(
   CUDA_CHECK(cudaGetLastError());
 }
 
-__global__ void compute_internal_tailor_coefficients_m2m_kernel(
+__global__ void compute_internal_tailor_coefficients_m2m_backward_kernel(
     BVH8Node *nodes, const uint32_t *internal_parent_map,
     const AABB *leaf_aabbs,
     const BackwardTailorCoefficientsF16 *leaf_coefficients,
@@ -270,39 +269,25 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
       // second order
       // M_2' = M_2 + M_1 (x) v + v (x) M_1 + M_0 * (v (x) v)
       const Mat3x3 &child_second = child_coefficients.second_order;
-      second_order.data[0] += child_second.data[0] +
-                              2.0f * child_first.x * shift_vector.x +
-                              zero_child * shift_vector.x * shift_vector.x;
-      second_order.data[1] += child_second.data[1] +
-                              child_first.x * shift_vector.y +
-                              shift_vector.x * child_first.y +
-                              zero_child * shift_vector.x * shift_vector.y;
-      second_order.data[2] += child_second.data[2] +
-                              child_first.x * shift_vector.z +
-                              shift_vector.x * child_first.z +
-                              zero_child * shift_vector.x * shift_vector.z;
-      second_order.data[3] += child_second.data[3] +
-                              child_first.y * shift_vector.x +
-                              shift_vector.y * child_first.x +
-                              zero_child * shift_vector.y * shift_vector.x;
-      second_order.data[4] += child_second.data[4] +
-                              2.0f * child_first.y * shift_vector.y +
-                              zero_child * shift_vector.y * shift_vector.y;
-      second_order.data[5] += child_second.data[5] +
-                              child_first.y * shift_vector.z +
-                              shift_vector.y * child_first.z +
-                              zero_child * shift_vector.y * shift_vector.z;
-      second_order.data[6] += child_second.data[6] +
-                              child_first.z * shift_vector.x +
-                              shift_vector.z * child_first.x +
-                              zero_child * shift_vector.z * shift_vector.x;
-      second_order.data[7] += child_second.data[7] +
-                              child_first.z * shift_vector.y +
-                              shift_vector.z * child_first.y +
-                              zero_child * shift_vector.z * shift_vector.y;
-      second_order.data[8] += child_second.data[8] +
-                              2.0f * child_first.z * shift_vector.z +
-                              zero_child * shift_vector.z * shift_vector.z;
+      const float *c2 = child_second.data;
+      const float vx = shift_vector.x;
+      const float vy = shift_vector.y;
+      const float vz = shift_vector.z;
+      const float g1x = child_first.x;
+      const float g1y = child_first.y;
+      const float g1z = child_first.z;
+      const float g0 = zero_child;
+
+      // We rely on nvccs CSE here
+      second_order.data[0] += c2[0] + 2.0f * g1x * vx + g0 * vx * vx;
+      second_order.data[1] += c2[1] + g1x * vy + vx * g1y + g0 * vx * vy;
+      second_order.data[2] += c2[2] + g1x * vz + vx * g1z + g0 * vx * vz;
+      second_order.data[3] += c2[3] + g1y * vx + vy * g1x + g0 * vy * vx;
+      second_order.data[4] += c2[4] + 2.0f * g1y * vy + g0 * vy * vy;
+      second_order.data[5] += c2[5] + g1y * vz + vy * g1z + g0 * vy * vz;
+      second_order.data[6] += c2[6] + g1z * vx + vz * g1x + g0 * vz * vx;
+      second_order.data[7] += c2[7] + g1z * vy + vz * g1y + g0 * vz * vy;
+      second_order.data[8] += c2[8] + 2.0f * g1z * vz + g0 * vz * vz;
     }
     // store accumulated coefficients
     node_tailor_coefficients[current_node_idx].zero_order = zero_order;
