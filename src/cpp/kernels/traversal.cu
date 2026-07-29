@@ -854,7 +854,7 @@ struct TriangleGradientKernelParams {
 };
 
 // Kernel signature using __grid_constant__
-__global__ void __launch_bounds__(128) compute_triangle_gradient_kernel(
+__global__ void __launch_bounds__(128, 4) compute_triangle_gradient_kernel(
     __grid_constant__ const TriangleGradientKernelParams params) {
   const uint32_t warp_id = threadIdx.x / 32;
   const uint32_t lane_id = threadIdx.x % 32;
@@ -867,6 +867,7 @@ __global__ void __launch_bounds__(128) compute_triangle_gradient_kernel(
   __shared__ BVH8Node current_node_cache[4];
   __shared__ BackwardTailorCoefficientsF16 current_taylor_coefficients_cache[4];
   __shared__ LeafPointers shared_leaf_ptrs[4];
+  __shared__ Triangle shared_warp_geometry[4][32]; // Here not as registers
   uint32_t warp_tile_base;
 
   while (true) {
@@ -888,19 +889,23 @@ __global__ void __launch_bounds__(128) compute_triangle_gradient_kernel(
 
     uint32_t my_geometry_idx = warp_tile_base + lane_id;
 
-    Triangle my_geometry{Vec3::zero(), Vec3::zero(), Vec3::zero()};
-    uint32_t original_geometry_idx = 0xFFFFFFFF;
     if (my_geometry_idx >= params.geometry_count) {
       // This thread has no geometry, but still needs to help the others in the
       // warp with their computations
       my_required_stack_depth = -1;
+      shared_warp_geometry[warp_id][lane_id] =
+          Triangle{.v0 = Vec3::zero(), .v1 = Vec3::zero(), .v2 = Vec3::zero()};
     } else {
       // load geometry with sort indirections
-      original_geometry_idx = params.sort_indirections[my_geometry_idx];
-      my_geometry = params.triangles[original_geometry_idx];
+      uint32_t original_geometry_idx =
+          params.sort_indirections[my_geometry_idx];
+      shared_warp_geometry[warp_id][lane_id] =
+          params.triangles[original_geometry_idx];
     }
     Triangle my_gradient{
         .v0 = Vec3::zero(), .v1 = Vec3::zero(), .v2 = Vec3::zero()};
+
+    __syncwarp();
 
     // Always start traversal on root
     int stack_ptr = 0;
@@ -946,8 +951,9 @@ __global__ void __launch_bounds__(128) compute_triangle_gradient_kernel(
       // Check the nodes parent_aabb. If it is too far away approximate using
       // taylor coefficients
       bool need_taylor_coefficients =
-          is_active && should_node_be_approximated(
-                           my_geometry, current_node.getAABB(), params.beta_2);
+          is_active &&
+          should_node_be_approximated(shared_warp_geometry[warp_id][lane_id],
+                                      current_node.getAABB(), params.beta_2);
 
       uint32_t load_taylor_coefficients_mask =
           __ballot_sync(0xFFFFFFFF, need_taylor_coefficients);
@@ -963,7 +969,7 @@ __global__ void __launch_bounds__(128) compute_triangle_gradient_kernel(
         AABB parent_aabb = current_node.getAABB();
         // Do approximation
         Triangle approx_grad_contribution = compute_node_gradient_approximation(
-            my_geometry, parent_aabb.center_of_mass,
+            shared_warp_geometry[warp_id][lane_id], parent_aabb.center_of_mass,
             current_node_coefficients.zero_order,
             current_node_coefficients.first_order,
             current_node_coefficients.second_order);
@@ -1003,7 +1009,8 @@ __global__ void __launch_bounds__(128) compute_triangle_gradient_kernel(
 
           bool need_taylor_coefficients =
               is_still_active && should_node_be_approximated(
-                                     my_geometry, child_aabb, params.beta_2);
+                                     shared_warp_geometry[warp_id][lane_id],
+                                     child_aabb, params.beta_2);
           uint32_t load_taylor_coefficients_mask =
               __ballot_sync(0xFFFFFFFF, need_taylor_coefficients);
           if (load_taylor_coefficients_mask > 0) {
@@ -1018,7 +1025,7 @@ __global__ void __launch_bounds__(128) compute_triangle_gradient_kernel(
                 current_taylor_coefficients_cache[warp_id];
             const Vec3 leaf_center_of_mass = child_aabb.center_of_mass;
             Triangle approx_contribution = compute_node_gradient_approximation(
-                my_geometry, leaf_center_of_mass,
+                shared_warp_geometry[warp_id][lane_id], leaf_center_of_mass,
                 current_leaf_coefficients.zero_order,
                 current_leaf_coefficients.first_order,
                 current_leaf_coefficients.second_order);
@@ -1048,47 +1055,27 @@ __global__ void __launch_bounds__(128) compute_triangle_gradient_kernel(
             // set current leader bit to 0
             detailed_leaf_evaluation_mask =
                 detailed_leaf_evaluation_mask & (~(1U << current_leader));
-            Triangle shared_geometry;
             // Get the geometry from leader
-            shared_geometry.v0.x =
-                __shfl_sync(0xFFFFFFFF, my_geometry.v0.x, current_leader);
-            shared_geometry.v0.y =
-                __shfl_sync(0xFFFFFFFF, my_geometry.v0.y, current_leader);
-            shared_geometry.v0.z =
-                __shfl_sync(0xFFFFFFFF, my_geometry.v0.z, current_leader);
-            shared_geometry.v1.x =
-                __shfl_sync(0xFFFFFFFF, my_geometry.v1.x, current_leader);
-            shared_geometry.v1.y =
-                __shfl_sync(0xFFFFFFFF, my_geometry.v1.y, current_leader);
-            shared_geometry.v1.z =
-                __shfl_sync(0xFFFFFFFF, my_geometry.v1.z, current_leader);
-            shared_geometry.v2.x =
-                __shfl_sync(0xFFFFFFFF, my_geometry.v2.x, current_leader);
-            shared_geometry.v2.y =
-                __shfl_sync(0xFFFFFFFF, my_geometry.v2.y, current_leader);
-            shared_geometry.v2.z =
-                __shfl_sync(0xFFFFFFFF, my_geometry.v2.z, current_leader);
-            // compute the gradient contribution from my query
+            const Triangle &leader_geometry =
+                shared_warp_geometry[warp_id][current_leader];
+
             Triangle my_contribution{
                 .v0 = Vec3::zero(), .v1 = Vec3::zero(), .v2 = Vec3::zero()};
             if (is_my_query_in_bounds) {
-              my_contribution = shared_geometry.gradContributionOfQuery(
+              my_contribution = leader_geometry.gradContributionOfQuery(
                   my_query, my_grad_output);
             }
             // sum up all contributions in warp
-            Triangle total_contribution;
-            total_contribution.v0.x = warp_reduce_add_xor(my_contribution.v0.x);
-            total_contribution.v0.y = warp_reduce_add_xor(my_contribution.v0.y);
-            total_contribution.v0.z = warp_reduce_add_xor(my_contribution.v0.z);
-            total_contribution.v1.x = warp_reduce_add_xor(my_contribution.v1.x);
-            total_contribution.v1.y = warp_reduce_add_xor(my_contribution.v1.y);
-            total_contribution.v1.z = warp_reduce_add_xor(my_contribution.v1.z);
-            total_contribution.v2.x = warp_reduce_add_xor(my_contribution.v2.x);
-            total_contribution.v2.y = warp_reduce_add_xor(my_contribution.v2.y);
-            total_contribution.v2.z = warp_reduce_add_xor(my_contribution.v2.z);
-            // only leader adds that contribution
-            if ((int)lane_id == current_leader) {
-              my_gradient += total_contribution;
+            auto *my_gradient_ptr = reinterpret_cast<float *>(&my_gradient);
+            const auto *my_contribution_ptr =
+                reinterpret_cast<const float *>(&my_contribution);
+#pragma unroll 9 
+            for (int i = 0; i < 9; ++i) {
+              float reduced = warp_reduce_add_xor(my_contribution_ptr[i]);
+              // Accumulate result of all warps only for current_leader
+              if ((int)lane_id == current_leader) {
+                my_gradient_ptr[i] += reduced;
+              }
             }
           }
         } else {
@@ -1105,15 +1092,14 @@ __global__ void __launch_bounds__(128) compute_triangle_gradient_kernel(
     } // traversal while
     // winding number computation is complete
     if (my_required_stack_depth >= 0) {
-      params.gradients[original_geometry_idx * 9] = my_gradient.v0.x;
-      params.gradients[original_geometry_idx * 9 + 1] = my_gradient.v0.y;
-      params.gradients[original_geometry_idx * 9 + 2] = my_gradient.v0.z;
-      params.gradients[original_geometry_idx * 9 + 3] = my_gradient.v1.x;
-      params.gradients[original_geometry_idx * 9 + 4] = my_gradient.v1.y;
-      params.gradients[original_geometry_idx * 9 + 5] = my_gradient.v1.z;
-      params.gradients[original_geometry_idx * 9 + 6] = my_gradient.v2.x;
-      params.gradients[original_geometry_idx * 9 + 7] = my_gradient.v2.y;
-      params.gradients[original_geometry_idx * 9 + 8] = my_gradient.v2.z;
+      uint32_t original_geometry_idx =
+          params.sort_indirections[my_geometry_idx];
+      float *out_ptr = params.gradients + original_geometry_idx * 9;
+      const auto *grad_ptr = reinterpret_cast<const float *>(&my_gradient);
+#pragma unroll
+      for (int i = 0; i < 9; ++i) {
+        out_ptr[i] = grad_ptr[i];
+      }
     }
   } // grid while
 }

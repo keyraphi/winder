@@ -131,7 +131,7 @@ void GradientBackend::init(const float *queries, const float *grad_outputs) {
   thrust::sort_by_key(build_stream_policy, query_morton_codes,
                       query_morton_codes + m_query_count, m_to_internal);
 
-  gather_queries_and_grad_output_soa(queries, grad_outputs, m_to_internal,
+  gather_queries_and_grad_outputs_soa(queries, grad_outputs, m_to_internal,
                                      m_sorted_queries, m_sorted_grad_outputs,
                                      m_query_count, m_build_stream);
 

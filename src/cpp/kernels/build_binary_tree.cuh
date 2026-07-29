@@ -7,7 +7,7 @@
 #include <driver_types.h>
 
 // Gather kernel to read queries into SoA format
-void gather_queries_and_grad_output_soa(const float *__restrict__ queries,
+void gather_queries_and_grad_outputs_soa(const float *__restrict__ queries,
                                        const float *__restrict__ grad_outputs,
                                        const uint32_t *__restrict__ indices,
                                        float *__restrict__ sorted_queries_soa,

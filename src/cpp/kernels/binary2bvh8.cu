@@ -26,7 +26,7 @@
 namespace cg = cooperative_groups;
 
 __global__ void
-convert_binary_tree_to_bvh8_kernel(ConvertBinary2BVH8Params params) {
+convert_binary_tree_to_bvh8_kernel(__grid_constant__ const ConvertBinary2BVH8Params params) {
 
   cg::grid_group grid = cg::this_grid();
   cg::thread_block block = cg::this_thread_block();
@@ -378,6 +378,13 @@ template void compute_max_distances<PointNormal>(
     const uint32_t bvh8_node_count, const cudaStream_t &stream);
 
 template void compute_max_distances<Triangle>(
+    BVH8Node *__restrict__ nodes, const float *geometry,
+    const uint32_t *__restrict__ leaf_parents,
+    const uint32_t *__restrict__ internal_parent_map,
+    float *__restrict__ tmp_max_distances, const uint32_t geometry_count,
+    const uint32_t bvh8_node_count, const cudaStream_t &stream);
+
+template void compute_max_distances<Vec3>(
     BVH8Node *__restrict__ nodes, const float *geometry,
     const uint32_t *__restrict__ leaf_parents,
     const uint32_t *__restrict__ internal_parent_map,
