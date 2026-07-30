@@ -613,38 +613,9 @@ __global__ void __launch_bounds__(128) compute_point_normal_gradient_kernel(
         }
         if (child_type == ChildType::LEAF) {
           uint32_t leaf_idx = shared_leaf_ptrs[warp_id].indices[child_idx];
-          AABB child_aabb = params.leaf_aabbs[leaf_idx];
 
-          bool need_taylor_coefficients =
-              is_still_active &&
-              should_node_be_approximated(my_geometry, child_aabb,
-                                          params.beta_2, params.inv_epsilon);
-          uint32_t load_taylor_coefficients_mask =
-              __ballot_sync(0xFFFFFFFF, need_taylor_coefficients);
-          if (load_taylor_coefficients_mask > 0) {
-            load_shared_cooperative<BackwardTaylorCoefficientsF16>(
-                &current_taylor_coefficients_cache[warp_id],
-                params.leaf_coefficients + leaf_idx, lane_id);
-            __syncwarp();
-          }
-          bool is_detail_eval_needed = true;
-          if (need_taylor_coefficients) {
-            // TODO probably not worth it for the gradient - still we keep it
-            // for now to debug the last almost empty leaf problem
-            const BackwardTaylorCoefficientsF16 &current_leaf_coefficients =
-                current_taylor_coefficients_cache[warp_id];
-            const Vec3 leaf_center_of_mass = child_aabb.center_of_mass;
-            PointNormal approx_contribution =
-                compute_node_gradient_approximation(
-                    my_geometry, leaf_center_of_mass,
-                    current_leaf_coefficients.zero_order,
-                    current_leaf_coefficients.first_order,
-                    current_leaf_coefficients.second_order);
-            my_gradient += approx_contribution;
-            is_detail_eval_needed = false;
-          }
           uint32_t detailed_leaf_evaluation_mask = __ballot_sync(
-              0xFFFFFFFF, is_detail_eval_needed && is_still_active);
+              0xFFFFFFFF, is_still_active);
 
           if (detailed_leaf_evaluation_mask == 0) {
             // leaf contribution was approximated by all interested threads.
@@ -969,8 +940,6 @@ __global__ void __launch_bounds__(128, 4) compute_triangle_gradient_kernel(
         __syncwarp();
       }
       if (need_taylor_coefficients) {
-        // TODO probably not worth it for the gradient - still we keep it
-        // for now to debug the last almost empty leaf problem
         BackwardTaylorCoefficientsF16 &current_node_coefficients =
             current_taylor_coefficients_cache[warp_id];
         AABB parent_aabb = current_node.getAABB();
@@ -1012,35 +981,9 @@ __global__ void __launch_bounds__(128, 4) compute_triangle_gradient_kernel(
         }
         if (child_type == ChildType::LEAF) {
           uint32_t leaf_idx = shared_leaf_ptrs[warp_id].indices[child_idx];
-          AABB child_aabb = params.leaf_aabbs[leaf_idx];
 
-          bool need_taylor_coefficients =
-              is_still_active && should_node_be_approximated(
-                                     shared_warp_geometry[warp_id][lane_id],
-                                     child_aabb, params.beta_2);
-          uint32_t load_taylor_coefficients_mask =
-              __ballot_sync(0xFFFFFFFF, need_taylor_coefficients);
-          if (load_taylor_coefficients_mask > 0) {
-            load_shared_cooperative<BackwardTaylorCoefficientsF16>(
-                &current_taylor_coefficients_cache[warp_id],
-                params.leaf_coefficients + leaf_idx, lane_id);
-            __syncwarp();
-          }
-          bool is_detail_eval_needed = true;
-          if (need_taylor_coefficients) {
-            const BackwardTaylorCoefficientsF16 &current_leaf_coefficients =
-                current_taylor_coefficients_cache[warp_id];
-            const Vec3 leaf_center_of_mass = child_aabb.center_of_mass;
-            Triangle approx_contribution = compute_node_gradient_approximation(
-                shared_warp_geometry[warp_id][lane_id], leaf_center_of_mass,
-                current_leaf_coefficients.zero_order,
-                current_leaf_coefficients.first_order,
-                current_leaf_coefficients.second_order);
-            my_gradient += approx_contribution;
-            is_detail_eval_needed = false;
-          }
           uint32_t detailed_leaf_evaluation_mask = __ballot_sync(
-              0xFFFFFFFF, is_detail_eval_needed && is_still_active);
+              0xFFFFFFFF, is_still_active);
 
           if (detailed_leaf_evaluation_mask == 0) {
             // leaf contribution was approximated by all interested threads.

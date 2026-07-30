@@ -118,12 +118,23 @@ def test_triangle_gradients(
     grad_output = torch.randn([query_count], dtype=torch.float32, device="cuda:0")
     queries = generate_queries(vertices, query_mode, query_count)
     queries_torch = torch.from_numpy(queries).to(torch.float32).to("cuda:0")
+    torch.cuda.synchronize()
+    t0 = time()
     gt_grads = torch.from_dlpack(
         winder.brute_force_gradients(grad_output, triangles_torch, queries_torch)
     )
+    torch.cuda.synchronize()
+    print(f"Brute Force took {time()-t0} sec")
 
+
+    t0 = time()
     grad_engine = winder.GradientEngine(queries_torch, grad_output)
+    torch.cuda.synchronize()
+    print(f"Building Engine took {time()-t0} sec")
+    t0 = time()
     grads = torch.from_dlpack(grad_engine.compute(triangles_torch))
+    torch.cuda.synchronize()
+    print(f"Fast variant took {time()-t0} sec")
 
     validate_gradients(grads.cpu().numpy(), gt_grads.cpu().numpy(), "Triangle")
 
@@ -204,6 +215,7 @@ if __name__ == "__main__":
     print(f"Loading mesh structural data from: {args.obj_file}")
     vertices, _, _, indices, _, _ = igl.readOBJ(args.obj_file)
 
+    print(f"INFO: object has {len(indices)} Triangles/PointNormals")
 
     if args.geometry_type in ["PointNormal", "both"]:
         points, normals, areas = mesh_to_point_surfels(vertices, indices)
