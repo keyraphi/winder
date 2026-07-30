@@ -2,7 +2,7 @@
 #include "bvh8.h"
 #include "geometry.h"
 #include "soa.h"
-#include "tailor_coefficients.h"
+#include "taylor_coefficients.h"
 #include "vec3.h"
 #include <cstdint>
 #include <driver_types.h>
@@ -12,8 +12,8 @@ template <IsGeometry Geometry> struct ComputeWindingNumbersParams {
   const uint32_t *sort_indirections;
   const BVH8Node *bvh8_nodes;
   const LeafPointers *bvh8_leaf_pointers;
-  const TailorCoefficientsF16 *node_coefficients;
-  const TailorCoefficientsF16 *leaf_coefficients;
+  const TaylorCoefficientsF16 *node_coefficients;
+  const TaylorCoefficientsF16 *leaf_coefficients;
   const AABB *leaf_aabbs;
   const SoAView<Geometry> sorted_geometry;
   uint32_t query_count;
@@ -35,8 +35,8 @@ struct ComputeGradientsPointNormalParams {
   const uint32_t *sort_indirections;
   const BVH8Node *bvh8_nodes;
   const LeafPointers *bvh8_leaf_pointers;
-  const BackwardTailorCoefficientsF16 *node_coefficients;
-  const BackwardTailorCoefficientsF16 *leaf_coefficients;
+  const BackwardTaylorCoefficientsF16 *node_coefficients;
+  const BackwardTaylorCoefficientsF16 *leaf_coefficients;
   const AABB *leaf_aabbs;
   const SoAView<Vec3> sorted_queries;
   const float* sorted_grad_outputs;
@@ -57,8 +57,8 @@ struct ComputeGradientsTriangleParams {
   const uint32_t *sort_indirections;
   const BVH8Node *bvh8_nodes;
   const LeafPointers *bvh8_leaf_pointers;
-  const BackwardTailorCoefficientsF16 *node_coefficients;
-  const BackwardTailorCoefficientsF16 *leaf_coefficients;
+  const BackwardTaylorCoefficientsF16 *node_coefficients;
+  const BackwardTaylorCoefficientsF16 *leaf_coefficients;
   const AABB *leaf_aabbs;
   const SoAView<Vec3> sorted_queries;
   const float* sorted_grad_outputs;

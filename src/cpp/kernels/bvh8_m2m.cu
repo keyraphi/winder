@@ -2,7 +2,7 @@
 #include "bvh8.h"
 #include "common.cuh"
 #include "mat3x3.h"
-#include "tailor_coefficients.h"
+#include "taylor_coefficients.h"
 #include "tensor3.h"
 #include "vec3.h"
 #include <cooperative_groups.h>
@@ -20,9 +20,9 @@
 
 __global__ void compute_internal_tailor_coefficients_m2m_kernel(
     BVH8Node *nodes, const uint32_t *internal_parent_map,
-    const AABB *leaf_aabbs, const TailorCoefficientsF16 *leaf_coefficients,
+    const AABB *leaf_aabbs, const TaylorCoefficientsF16 *leaf_coefficients,
     const uint32_t *leaf_parents, const LeafPointers *leaf_pointers,
-    TailorCoefficientsF16 *node_tailor_coefficients,
+    TaylorCoefficientsF16 *node_tailor_coefficients,
     TailorCoefficients *m2m_f32_coefficients, const uint32_t *nodes_child_count,
     const uint32_t leaf_count, uint32_t *atomic_counters) {
 
@@ -182,9 +182,9 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
 
 void compute_internal_tailor_coefficients_m2m(
     BVH8Node *nodes, const uint32_t *internal_parent_map,
-    const AABB *leaf_aabbs, const TailorCoefficientsF16 *leaf_coefficients,
+    const AABB *leaf_aabbs, const TaylorCoefficientsF16 *leaf_coefficients,
     const uint32_t *leaf_parents, const LeafPointers *leaf_pointers,
-    TailorCoefficientsF16 *node_tailor_coefficients,
+    TaylorCoefficientsF16 *node_tailor_coefficients,
     TailorCoefficients *m2m_f32_coefficients, const uint32_t *nodes_child_count,
     const uint32_t leaf_count, uint32_t *atomic_counters,
     const cudaStream_t &stream) {
@@ -201,9 +201,9 @@ void compute_internal_tailor_coefficients_m2m(
 __global__ void compute_internal_tailor_coefficients_m2m_backward_kernel(
     BVH8Node *nodes, const uint32_t *internal_parent_map,
     const AABB *leaf_aabbs,
-    const BackwardTailorCoefficientsF16 *leaf_coefficients,
+    const BackwardTaylorCoefficientsF16 *leaf_coefficients,
     const uint32_t *leaf_parents, const LeafPointers *leaf_pointers,
-    BackwardTailorCoefficientsF16 *node_tailor_coefficients,
+    BackwardTaylorCoefficientsF16 *node_tailor_coefficients,
     BackwardTailorCoefficients *m2m_f32_coefficients,
     const uint32_t *nodes_child_count, const uint32_t leaf_count,
     uint32_t *atomic_counters) {
@@ -306,9 +306,9 @@ __global__ void compute_internal_tailor_coefficients_m2m_backward_kernel(
 void compute_internal_tailor_coefficients_m2m_backward(
     BVH8Node *nodes, const uint32_t *internal_parent_map,
     const AABB *leaf_aabbs,
-    const BackwardTailorCoefficientsF16 *leaf_coefficients,
+    const BackwardTaylorCoefficientsF16 *leaf_coefficients,
     const uint32_t *leaf_parents, const LeafPointers *leaf_pointers,
-    BackwardTailorCoefficientsF16 *node_tailor_coefficients,
+    BackwardTaylorCoefficientsF16 *node_tailor_coefficients,
     BackwardTailorCoefficients *m2m_f32_coefficients,
     const uint32_t *nodes_child_count, const uint32_t leaf_count,
     uint32_t *atomic_counters, const cudaStream_t &stream) {

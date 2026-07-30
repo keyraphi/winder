@@ -14,7 +14,7 @@
 #include "geometry.h"
 #include "kernels/build_binary_tree.cuh"
 #include "kernels/common.cuh"
-#include "tailor_coefficients.h"
+#include "taylor_coefficients.h"
 #include "vec3.h"
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
@@ -351,7 +351,7 @@ TEST(BinaryTreeRefit, BottomUpAABB) {
   thrust::device_vector<BinaryNode> d_nodes = h_nodes;
   thrust::device_vector<uint32_t> d_parents = h_parents;
   thrust::device_vector<AABB> d_aabbs(leaf_count + node_count);
-  thrust::device_vector<TailorCoefficientsF16> d_coefficients(leaf_count);
+  thrust::device_vector<TaylorCoefficientsF16> d_coefficients(leaf_count);
   thrust::device_vector<float> d_atomic_counters(node_count, 0.F);
   // leaf_coefficients would be sized leaf_count
 
@@ -410,7 +410,7 @@ TEST(BinaryTreeRefit, SingleLeafCoefficients) {
 
   // 2. Mock minimal tree for 1 leaf
   thrust::device_vector<float> d_geom = h_geometry_soa;
-  thrust::device_vector<TailorCoefficientsF16> d_coeffs(leaf_count);
+  thrust::device_vector<TaylorCoefficientsF16> d_coeffs(leaf_count);
   thrust::device_vector<AABB> d_aabbs(leaf_count); // Just the leaf AABB
   thrust::device_vector<uint32_t> d_parents(1, 0xFFFFFFFF);
   thrust::device_vector<float> d_atomic(0.F); // No internal nodes
@@ -425,7 +425,7 @@ TEST(BinaryTreeRefit, SingleLeafCoefficients) {
       thrust::raw_pointer_cast(d_atomic.data()), point_count);
 
   // 4. Verify results
-  thrust::host_vector<TailorCoefficientsF16> h_coeffs = d_coeffs;
+  thrust::host_vector<TaylorCoefficientsF16> h_coeffs = d_coeffs;
   thrust::host_vector<AABB> h_aabbs = d_aabbs;
 
   // Check AABB (Should be a single point AABB)

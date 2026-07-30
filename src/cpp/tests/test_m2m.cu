@@ -61,9 +61,9 @@ TEST(M2M, AllOrdersQuantizationAware) {
                         backend->m_binary_aabbs + leaf_count - 1,
                         sizeof(AABB) * leaf_count, cudaMemcpyDeviceToHost));
 
-  std::vector<TailorCoefficientsF16> leaf_coeffs_f16_h(leaf_count);
+  std::vector<TaylorCoefficientsF16> leaf_coeffs_f16_h(leaf_count);
   CUDA_CHECK(cudaMemcpy(leaf_coeffs_f16_h.data(), backend->m_leaf_coefficients,
-                        leaf_count * sizeof(TailorCoefficientsF16),
+                        leaf_count * sizeof(TaylorCoefficientsF16),
                         cudaMemcpyDeviceToHost));
 
   // 3. Compute unquantized reference values on the host using a direct flat M2M
@@ -153,8 +153,8 @@ TEST(M2M, AllOrdersQuantizationAware) {
   }
 
   // download root tailor coefficients
-  TailorCoefficientsF16 root_coeff;
-  cudaMemcpy(&root_coeff, backend->m_tailor_coefficients, sizeof(TailorCoefficientsF16), cudaMemcpyDeviceToHost);
+  TaylorCoefficientsF16 root_coeff;
+  cudaMemcpy(&root_coeff, backend->m_tailor_coefficients, sizeof(TaylorCoefficientsF16), cudaMemcpyDeviceToHost);
 
   UnpackedTailorCoefficients unpacked_h;
   unpacked_h.zero_order = root_coeff.zero_order;

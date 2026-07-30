@@ -51,7 +51,7 @@
 #include "kernels/common.cuh"
 #include "kernels/mesh.cuh"
 #include "kernels/traversal.cuh"
-#include "tailor_coefficients.h"
+#include "taylor_coefficients.h"
 #include "utils.h"
 #include "vec3.h"
 #include "winding_numbers_backend.h"
@@ -140,10 +140,10 @@ WindingNumbersBackend<Geometry>::WindingNumbersBackend(size_t size,
   CUDA_CHECK(cudaMallocAsync(&m_bvh8_nodes, max_bvh8_nodes * sizeof(BVH8Node),
                              m_build_stream));
   CUDA_CHECK(cudaMallocAsync(&m_tailor_coefficients,
-                             max_bvh8_nodes * sizeof(TailorCoefficientsF16),
+                             max_bvh8_nodes * sizeof(TaylorCoefficientsF16),
                              m_build_stream));
   CUDA_CHECK(cudaMallocAsync(&m_leaf_coefficients,
-                             leaf_count * sizeof(TailorCoefficientsF16),
+                             leaf_count * sizeof(TaylorCoefficientsF16),
                              m_build_stream));
   CUDA_CHECK(cudaMallocAsync(&m_bvh8_leaf_pointers,
                              max_bvh8_nodes * sizeof(LeafPointers),
@@ -709,15 +709,15 @@ auto WindingNumbersBackend<Geometry>::dump() const -> std::string {
                         node_count * sizeof(LeafPointers),
                         cudaMemcpyDeviceToHost));
 
-  std::vector<TailorCoefficientsF16> leaf_coefficients(leaf_count);
+  std::vector<TaylorCoefficientsF16> leaf_coefficients(leaf_count);
   CUDA_CHECK(cudaMemcpy(leaf_coefficients.data(), m_leaf_coefficients,
-                        leaf_count * sizeof(TailorCoefficientsF16),
+                        leaf_count * sizeof(TaylorCoefficientsF16),
                         cudaMemcpyDeviceToHost));
 
   // Pull unpacked values into your local host stack tracking vector
-  std::vector<TailorCoefficientsF16> node_coefficients(node_count);
+  std::vector<TaylorCoefficientsF16> node_coefficients(node_count);
   CUDA_CHECK(cudaMemcpy(node_coefficients.data(), m_tailor_coefficients,
-                        sizeof(TailorCoefficientsF16) * node_count,
+                        sizeof(TaylorCoefficientsF16) * node_count,
                         cudaMemcpyDeviceToHost));
 
   // Breadth-First Search (BFS) matching your visualization layout

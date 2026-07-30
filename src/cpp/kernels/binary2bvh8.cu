@@ -227,6 +227,7 @@ void convert_binary_tree_to_bvh8(ConvertBinary2BVH8Params params,
     if (params.leaf_count == 1) {
       // The only leaf has no parent.
       cudaMemsetAsync(params.bvh8_leaf_parents, 0xFF, sizeof(uint32_t), stream);
+      cudaMemsetAsync(params.bvh8_node_count, 0, sizeof(uint32_t), stream);
     }
     return;
   }

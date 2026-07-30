@@ -2,7 +2,7 @@
 
 #include "aabb.h"
 #include "bvh8.h"
-#include "tailor_coefficients.h"
+#include "taylor_coefficients.h"
 #include "utils.h"
 #include <cstddef>
 #include <cstdint>
@@ -37,8 +37,8 @@ private:
   AABB *m_binary_aabbs;
   uint32_t *m_bvh8_node_count;
   BVH8Node *m_bvh8_nodes;
-  BackwardTailorCoefficientsF16 *m_tailor_coefficients;
-  BackwardTailorCoefficientsF16 *m_leaf_coefficients;
+  BackwardTaylorCoefficientsF16 *m_tailor_coefficients;
+  BackwardTaylorCoefficientsF16 *m_leaf_coefficients;
   LeafPointers *m_bvh8_leaf_pointers;
 
   cudaEvent_t m_tree_construction_finished_event;

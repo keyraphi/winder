@@ -1,7 +1,7 @@
 #include "bvh8.h"
 #include "geometry.h"
 #include "kernels/common.cuh"
-#include "tailor_coefficients.h"
+#include "taylor_coefficients.h"
 #include "vec3.h"
 #include "winding_numbers_backend.h"
 #include <cstddef>

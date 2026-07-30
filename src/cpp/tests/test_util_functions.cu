@@ -6,7 +6,7 @@
 #include "kernels/common.cuh"
 #include "kernels/node_approx.cuh"
 #include "mat3x3.h"
-#include "tailor_coefficients.h"
+#include "taylor_coefficients.h"
 #include "tensor3.h"
 #include "vec3.h"
 #include <cstdint>
@@ -27,7 +27,7 @@ TEST(Sizes, AABB) {
 TEST(Sizes, BinaryNode) { EXPECT_EQ(sizeof(BinaryNode), 8); }
 TEST(Sizes, BVH8Node) { EXPECT_EQ(sizeof(BVH8Node), 32); }
 TEST(Sizes, TailorCoefficients) {
-  EXPECT_EQ(sizeof(TailorCoefficientsF16), 64);
+  EXPECT_EQ(sizeof(TaylorCoefficientsF16), 64);
 }
 TEST(Sizes, Geometry) {
   EXPECT_EQ(sizeof(Triangle), 36);

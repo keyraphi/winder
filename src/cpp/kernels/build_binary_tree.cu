@@ -3,7 +3,7 @@
 #include "common.cuh"
 #include "geometry.h"
 #include "mat3x3.h"
-#include "tailor_coefficients.h"
+#include "taylor_coefficients.h"
 #include "tensor3.h"
 #include "vec3.h"
 #include <cmath>
@@ -304,7 +304,7 @@ __device__ __forceinline__ auto warp_reduce_add_down(float val) -> float {
 template <IsGeometry Geometry>
 __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
     const SoAView<Geometry> sorted_geometry,
-    TailorCoefficientsF16 *leaf_coefficients, const uint32_t leaf_count,
+    TaylorCoefficientsF16 *leaf_coefficients, const uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, float *atomic_weights,
     const uint32_t geometry_count) {
@@ -496,7 +496,7 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
 template <IsGeometry Geometry>
 void populate_binary_tree_aabb_and_leaf_coefficients(
     const float *__restrict__ sorted_geometry,
-    TailorCoefficientsF16 *leaf_coefficients, const uint32_t leaf_count,
+    TaylorCoefficientsF16 *leaf_coefficients, const uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, float *atomic_counters,
     const uint32_t geometry_count, const cudaStream_t &stream) {
@@ -515,8 +515,9 @@ void populate_binary_tree_aabb_and_leaf_coefficients(
 }
 
 __global__ void populate_binary_tree_aabb_and_leaf_coefficients_backward_kernel(
-    const SoAView<Vec3> sorted_queries, const float *__restrict__ sorted_grad_outputs,
-    BackwardTailorCoefficientsF16 *leaf_coefficients, const uint32_t leaf_count,
+    const SoAView<Vec3> sorted_queries,
+    const float *__restrict__ sorted_grad_outputs,
+    BackwardTaylorCoefficientsF16 *leaf_coefficients, const uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, float *atomic_weights,
     const uint32_t query_count) {
@@ -589,9 +590,9 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_backward_kernel(
   }
 
   // Compute backward tailor coefficients
-  float zero_order;
-  Vec3 first_order;
-  Mat3x3 second_order;
+  float zero_order = 0.F;
+  Vec3 first_order = Vec3::zero();
+  Mat3x3 second_order = Mat3x3::zero();
 
   // Zero order
   //\sum_{i=1}^m g_i
@@ -601,10 +602,11 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_backward_kernel(
   // second order
   // \sum_{i=1}^m g_i (x_i - center)\otimes(x_i - center)
   // For inactive threads result is 0 (neutral wrt +)
-  zero_order = query_idx < query_count ? sorted_grad_outputs[query_idx] : 0.F;
-  first_order = zero_order * (query - center_of_mass);
-  second_order = first_order.outer_product(
-      query - center_of_mass); // TODO can be optimized due to symmetry
+  if (query_idx < query_count) {
+    zero_order = sorted_grad_outputs[query_idx];
+    first_order = zero_order * (query - center_of_mass);
+    second_order = first_order.outer_product(query - center_of_mass);
+  }
 
   // aggregate zero order
   zero_order = warp_reduce_add_down(zero_order);
@@ -696,7 +698,7 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_backward_kernel(
 void populate_binary_tree_aabb_and_leaf_coefficients_backward(
     const float *__restrict__ sorted_queries,
     const float *__restrict__ sorted_grad_outputs,
-    BackwardTailorCoefficientsF16 *leaf_coefficients, const uint32_t leaf_count,
+    BackwardTaylorCoefficientsF16 *leaf_coefficients, const uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, float *atomic_counters,
     const uint32_t query_count, const cudaStream_t &stream) {
@@ -707,24 +709,24 @@ void populate_binary_tree_aabb_and_leaf_coefficients_backward(
   const uint32_t threads = 256;
   const uint32_t blocks = (leaf_count * 32 + threads - 1) / threads;
   populate_binary_tree_aabb_and_leaf_coefficients_backward_kernel<<<
-      blocks, threads, 0, stream>>>(SoAView<Vec3>{sorted_queries, query_count},
-                                    sorted_grad_outputs, leaf_coefficients, leaf_count,
-                                    binary_nodes, binary_aabbs, binary_parents,
-                                    atomic_counters, query_count);
+      blocks, threads, 0, stream>>>(
+      SoAView<Vec3>{sorted_queries, query_count}, sorted_grad_outputs,
+      leaf_coefficients, leaf_count, binary_nodes, binary_aabbs, binary_parents,
+      atomic_counters, query_count);
   CUDA_CHECK(cudaGetLastError());
 }
 
 // Tell the compiler to generate the code for these types
 template void populate_binary_tree_aabb_and_leaf_coefficients<PointNormal>(
     const float *__restrict__ sorted_geometry,
-    TailorCoefficientsF16 *leaf_coefficients, uint32_t leaf_count,
+    TaylorCoefficientsF16 *leaf_coefficients, uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, float *atomic_counters,
     uint32_t geometry_count, const cudaStream_t &stream);
 
 template void populate_binary_tree_aabb_and_leaf_coefficients<Triangle>(
     const float *__restrict__ sorted_geometry,
-    TailorCoefficientsF16 *leaf_coefficients, uint32_t leaf_count,
+    TaylorCoefficientsF16 *leaf_coefficients, uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, float *atomic_counters,
     uint32_t geometry_count, const cudaStream_t &stream);

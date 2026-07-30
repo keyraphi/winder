@@ -2,7 +2,7 @@
 #include "aabb.h"
 #include "binary_node.h"
 #include "geometry.h"
-#include "tailor_coefficients.h"
+#include "taylor_coefficients.h"
 #include <cstdint>
 #include <driver_types.h>
 
@@ -35,7 +35,7 @@ void build_binary_topology(const uint64_t *__restrict__ morton_codes,
 template <IsGeometry Geometry>
 void populate_binary_tree_aabb_and_leaf_coefficients(
     const float *__restrict__ sorted_geometry,
-    TailorCoefficientsF16 *leaf_coefficients, uint32_t leaf_count,
+    TaylorCoefficientsF16 *leaf_coefficients, uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, float *atomic_weights, uint32_t point_count,
     const cudaStream_t &stream = 0);
@@ -43,7 +43,7 @@ void populate_binary_tree_aabb_and_leaf_coefficients(
 void populate_binary_tree_aabb_and_leaf_coefficients_backward(
     const float *__restrict__ sorted_queries,
     const float *__restrict__ sorted_grad_outputs,
-    BackwardTailorCoefficientsF16 *leaf_coefficients, uint32_t leaf_count,
+    BackwardTaylorCoefficientsF16 *leaf_coefficients, uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, float *atomic_counters,
     uint32_t query_count, const cudaStream_t &stream);

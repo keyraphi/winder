@@ -11,7 +11,7 @@
 #include "kernels/mesh.cuh"
 #include "kernels/traversal.cuh"
 #include "soa.h"
-#include "tailor_coefficients.h"
+#include "taylor_coefficients.h"
 #include "utils.h"
 #include "vec3.h"
 #include <cstddef>
@@ -67,9 +67,9 @@ GradientBackend::GradientBackend(size_t query_count, int device_id)
                              m_build_stream));
   CUDA_CHECK(cudaMallocAsync(
       &m_tailor_coefficients,
-      max_bvh8_nodes * sizeof(BackwardTailorCoefficientsF16), m_build_stream));
+      max_bvh8_nodes * sizeof(BackwardTaylorCoefficientsF16), m_build_stream));
   CUDA_CHECK(cudaMallocAsync(&m_leaf_coefficients,
-                             leaf_count * sizeof(BackwardTailorCoefficientsF16),
+                             leaf_count * sizeof(BackwardTaylorCoefficientsF16),
                              m_build_stream));
   CUDA_CHECK(cudaMallocAsync(&m_bvh8_leaf_pointers,
                              max_bvh8_nodes * sizeof(LeafPointers),

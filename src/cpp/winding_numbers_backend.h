@@ -2,7 +2,7 @@
 #include "aabb.h"
 #include "bvh8.h"
 #include "geometry.h"
-#include "tailor_coefficients.h"
+#include "taylor_coefficients.h"
 #include "utils.h"
 #include "vec3.h"
 #include <cstddef>
@@ -76,9 +76,9 @@ public: // TODO DEBUG  make private!
   // --- BVH8 Tree Structure (Final Output) ---
   BVH8Node *m_bvh8_nodes; // [~0.2L] The 8-way wide-tree nodes (Quantized AABBs
                           // + Topology)
-  TailorCoefficientsF16
+  TaylorCoefficientsF16
       *m_tailor_coefficients; // Tailor expansion terms for nodes
-  TailorCoefficientsF16 *m_leaf_coefficients; // [L] Taylor expansion terms for
+  TaylorCoefficientsF16 *m_leaf_coefficients; // [L] Taylor expansion terms for
                                               // leaf clusters (half)
 
   // --- BVH8 Construction & M2M Support ---

@@ -1,9 +1,12 @@
 #pragma once
 #include "aabb.h"
+#include "cuda/std/__cmath/isinf.h"
+#include "cuda/std/__cmath/isnan.h"
 #include "geometry.h"
 #include "mat3x3.h"
 #include "tensor3.h"
 #include "vec3.h"
+#include <cmath>
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 
@@ -18,15 +21,30 @@ __device__ __forceinline__ auto should_node_be_approximated(const Vec3 &query,
          max_distance_to_center * max_distance_to_center * beta_2;
 }
 
-template <IsGeometry Geometry>
 __device__ __forceinline__ auto
-should_node_be_approximated(const Geometry &geometry, const AABB &aabb,
+should_node_be_approximated(const PointNormal &geometry, const AABB &aabb,
+                            const float beta_2, const float inv_epsilon)
+    -> bool {
+  Vec3 com = aabb.center_of_mass;
+  float dist_geometry_to_com2 = (geometry.centroid() - com).length2();
+  const float min_far_field_dist2 = 4.0F / (inv_epsilon * inv_epsilon);
+  if (dist_geometry_to_com2 < min_far_field_dist2) {
+    return false;
+  }
+  float max_distance = __half2float(aabb.max_distance);
+  float effective_R = fmaxf(max_distance, 2.0F / inv_epsilon);
+
+  return dist_geometry_to_com2 > (effective_R * effective_R * beta_2);
+}
+
+__device__ __forceinline__ auto
+should_node_be_approximated(const Triangle &geometry, const AABB &aabb,
                             const float beta_2) -> bool {
   float max_distance_to_center = __half2float(aabb.max_distance);
   Vec3 com = aabb.center_of_mass;
-  float dist_query_to_com2 =
+  float dist_geometry_to_com2 =
       (geometry.centroid() - com).length2(); // TODO consider large triangles
-  return dist_query_to_com2 >
+  return dist_geometry_to_com2 >
          max_distance_to_center * max_distance_to_center * beta_2;
 }
 
@@ -395,57 +413,35 @@ __device__ __forceinline__ void
 computeFirstOrderGradientContribution(const Vec3_f16 &G_1,
                                       const Vec3_f16 &r_hat, const Vec3_f16 &m,
                                       Vec3_f16 &out_c1_n, Vec3_f16 &out_c1_p) {
-  half2 r_xy = __halves2half2(r_hat.x, r_hat.y);
-  half2 G_1_xy = __halves2half2(G_1.x, G_1.y);
-  half2 m_xy = __halves2half2(m.x, m.y);
+  // Dot Products
+  const half r_dot_q1 = r_hat.dot(G_1);
+  const half r_dot_m = r_hat.dot(m);
+  const half q1_dot_m = G_1.dot(m);
 
-  // Compute inner products
-  half2 prod_r_q1 = __hmul2(r_xy, G_1_xy);
-  half r_dot_q1 = __hadd(__hadd(__low2half(prod_r_q1), __high2half(prod_r_q1)),
-                         __hmul(r_hat.z, G_1.z));
+  // Normal Gradient
+  const half three_r_dot_q1 = __hmul(r_dot_q1, __float2half(3.0F));
+  out_c1_n = G_1 - (r_hat * three_r_dot_q1);
 
-  half2 prod_r_m = __hmul2(r_xy, m_xy);
-  half r_dot_m = __hadd(__hadd(__low2half(prod_r_m), __high2half(prod_r_m)),
-                        __hmul(r_hat.z, m.z));
+  // Position Gradient: Promote dot products to FP32 registers
+  const float f_r_dot_q1 = __half2float(r_dot_q1);
+  const float f_r_dot_m = __half2float(r_dot_m);
+  const float f_q1_dot_m = __half2float(q1_dot_m);
 
-  half2 prod_q1_m = __hmul2(G_1_xy, m_xy);
-  half q1_dot_m = __hadd(__hadd(__low2half(prod_q1_m), __high2half(prod_q1_m)),
-                         __hmul(G_1.z, m.z));
+  const float f_three_r_dot_m = 3.0F * f_r_dot_m;
+  const float f_three_r_dot_q1 = 3.0F * f_r_dot_q1;
+  const float f_r_coeff = 3.0F * f_q1_dot_m - 15.0F * f_r_dot_q1 * f_r_dot_m;
 
-  // --- Normal Gradient (grad_n_1) ---
-  half three_r_dot_q1 = __hmul(r_dot_q1, __float2half(3.F));
-  half2 proj_n1_xy =
-      __hmul2(r_xy, __halves2half2(three_r_dot_q1, three_r_dot_q1));
-  half2 grad_n1_xy = __hsub2(G_1_xy, proj_n1_xy);
-  half grad_n1_z = __hsub(G_1.z, __hmul(r_hat.z, three_r_dot_q1));
+  // 3 * (r·m)*G_1 + 3 * (r·G_1)*m + coeff * r_hat
+  const Vec3 grad_p_f32 =
+      Vec3{__half2float(G_1.x), __half2float(G_1.y), __half2float(G_1.z)} *
+          f_three_r_dot_m +
+      Vec3{__half2float(m.x), __half2float(m.y), __half2float(m.z)} *
+          f_three_r_dot_q1 +
+      Vec3{__half2float(r_hat.x), __half2float(r_hat.y),
+           __half2float(r_hat.z)} *
+          f_r_coeff;
 
-  out_c1_n.x = __low2half(grad_n1_xy);
-  out_c1_n.y = __high2half(grad_n1_xy);
-  out_c1_n.z = grad_n1_z;
-
-  // --- Position Gradient (grad_p_1) ---
-  half three_r_dot_m = __hmul(r_dot_m, __float2half(3.F));
-  half three_q1_dot_m = __hmul(q1_dot_m, __float2half(3.F));
-  half fifteen_prod = __hmul(__hmul(r_dot_q1, r_dot_m), __float2half(15.F));
-
-  // 3*(r_hat·m)*G_1 + 3*(G_1·m)*r_hat + 3*(r_hat·G_1)*m -
-  // 15*(r_hat·G_1)*(r_hat·m)*r_hat
-  half2 term_q1 = __hmul2(G_1_xy, __halves2half2(three_r_dot_m, three_r_dot_m));
-  half2 term_r = __hmul2(r_xy, __halves2half2(three_q1_dot_m, three_q1_dot_m));
-  half2 term_m = __hmul2(m_xy, __halves2half2(three_r_dot_q1, three_r_dot_q1));
-  half2 term_sub = __hmul2(r_xy, __halves2half2(fifteen_prod, fifteen_prod));
-
-  half2 grad_p1_xy =
-      __hsub2(__hadd2(__hadd2(term_q1, term_r), term_m), term_sub);
-
-  half grad_p1_z = __hsub(__hadd(__hadd(__hmul(G_1.z, three_r_dot_m),
-                                        __hmul(r_hat.z, three_q1_dot_m)),
-                                 __hmul(m.z, three_r_dot_q1)),
-                          __hmul(r_hat.z, fifteen_prod));
-
-  out_c1_p.x = __low2half(grad_p1_xy);
-  out_c1_p.y = __high2half(grad_p1_xy);
-  out_c1_p.z = grad_p1_z;
+  out_c1_p = Vec3_f16::from_float(grad_p_f32);
 }
 
 /**
@@ -458,80 +454,48 @@ computeFirstOrderGradientContribution(const Vec3_f16 &G_1,
  * @param G_2 Symmetric second-order query moment tensor (3x3 matrix).
  * @param r_hat Unit displacement vector.
  * @param m Area-weighted normal / dipole moment vector.
- * @param out_c2_n Output unscaled contraction for normal gradient (FP16).
- * @param out_c2_p Output unscaled contraction for position gradient (FP16).
+ * @param out_c2_n Output unscaled contraction for normal gradient.
+ * @param out_c2_p Output unscaled contraction for position gradient.
  */
-__device__ __forceinline__ void
-computeSecondOrderGradientContribution(const Mat3x3_f16 &G_2,
-                                       const Vec3_f16 &r_hat, const Vec3_f16 &m,
-                                       Vec3_f16 &out_c2_n, Vec3_f16 &out_c2_p) {
-  // Matrix-vector product: G_2 * r_hat
-  Vec3_f16 G_2_r;
-  G_2_r.x =
-      __hadd(__hadd(__hmul(G_2.data[0], r_hat.x), __hmul(G_2.data[1], r_hat.y)),
-             __hmul(G_2.data[2], r_hat.z));
-  G_2_r.y =
-      __hadd(__hadd(__hmul(G_2.data[3], r_hat.x), __hmul(G_2.data[4], r_hat.y)),
-             __hmul(G_2.data[5], r_hat.z));
-  G_2_r.z =
-      __hadd(__hadd(__hmul(G_2.data[6], r_hat.x), __hmul(G_2.data[7], r_hat.y)),
-             __hmul(G_2.data[8], r_hat.z));
+__device__ __forceinline__ void computeSecondOrderGradientContribution(
+    const Mat3x3_bf16 &G_2, const Vec3_bf16 &r_hat, const Vec3_bf16 &m,
+    Vec3_bf16 &out_c2_n, Vec3_bf16 &out_c2_p) {
 
-  // Matrix-vector product: G_2 * m
-  Vec3_f16 G_2_m;
-  G_2_m.x = __hadd(__hadd(__hmul(G_2.data[0], m.x), __hmul(G_2.data[1], m.y)),
-                   __hmul(G_2.data[2], m.z));
-  G_2_m.y = __hadd(__hadd(__hmul(G_2.data[3], m.x), __hmul(G_2.data[4], m.y)),
-                   __hmul(G_2.data[5], m.z));
-  G_2_m.z = __hadd(__hadd(__hmul(G_2.data[6], m.x), __hmul(G_2.data[7], m.y)),
-                   __hmul(G_2.data[8], m.z));
+  // 1. Matrix-Vector Products & Trace
+  const Vec3_bf16 G_2_r =
+      G_2 * r_hat; // Assumes Mat3x3_bf16::operator*(Vec3_bf16)
+  const Vec3_bf16 G_2_m = G_2 * m;
+  const __nv_bfloat16 trace_G_2 = G_2.trace();
 
-  // Scalars
-  half trace_G_2 = __hadd(__hadd(G_2.data[0], G_2.data[4]), G_2.data[8]);
+  // 2. Quadratic Forms via Vec3_bf16::dot
+  const __nv_bfloat16 q_rr = r_hat.dot(G_2_r);
+  const __nv_bfloat16 q_rm = r_hat.dot(G_2_m);
+  const __nv_bfloat16 m_r = r_hat.dot(m);
 
-  // Quadratic forms
-  half q_rr = __hadd(__hadd(__hmul(r_hat.x, G_2_r.x), __hmul(r_hat.y, G_2_r.y)),
-                     __hmul(r_hat.z, G_2_r.z));
-  half q_rm = __hadd(__hadd(__hmul(r_hat.x, G_2_m.x), __hmul(r_hat.y, G_2_m.y)),
-                     __hmul(r_hat.z, G_2_m.z));
-  half m_r = __hadd(__hadd(__hmul(r_hat.x, m.x), __hmul(r_hat.y, m.y)),
-                    __hmul(r_hat.z, m.z));
+  // 3. Scalar Prefactors evaluated in FP32 registers (prevents intermediate
+  // precision loss)
+  const float f_q_rr = __bfloat162float(q_rr);
+  const float f_q_rm = __bfloat162float(q_rm);
+  const float f_m_r = __bfloat162float(m_r);
+  const float f_trace = __bfloat162float(trace_G_2);
 
-  // --- Normal Gradient Contraction ---
-  // c_nr = 7.5 * q_rr - 1.5 * trace_G_2
-  half c_nr = __hsub(__hmul(q_rr, __float2half(7.5F)),
-                     __hmul(trace_G_2, __float2half(1.5F)));
+  const float f_c_nr = 7.5F * f_q_rr - 1.5F * f_trace;
+  const float f_c_rp =
+      15.0F * f_q_rm + (7.5F * f_trace - 52.5F * f_q_rr) * f_m_r;
+  const float f_15_m_r = 15.0F * f_m_r;
 
+  // Convert scalar prefactors back to bfloat16 for vector scaling
+  const __nv_bfloat16 c_nr = __float2bfloat16(f_c_nr);
+  const __nv_bfloat16 c_rp = __float2bfloat16(f_c_rp);
+  const __nv_bfloat16 bf_15m = __float2bfloat16(f_15_m_r);
+  const __nv_bfloat16 bf_3 = __float2bfloat16(3.0F);
+
+  // 4. Vector Contractions
   // grad_n_2 = c_nr * r_hat - 3 * (G_2 * r_hat)
-  out_c2_n.x =
-      __hsub(__hmul(r_hat.x, c_nr), __hmul(G_2_r.x, __float2half(3.F)));
-  out_c2_n.y =
-      __hsub(__hmul(r_hat.y, c_nr), __hmul(G_2_r.y, __float2half(3.F)));
-  out_c2_n.z =
-      __hsub(__hmul(r_hat.z, c_nr), __hmul(G_2_r.z, __float2half(3.F)));
-
-  // --- Position Gradient Contraction ---
-  // c_r_p = 15 * q_rm + (7.5 * trace_G_2 - 52.5 * q_rr) * m_r
-  half c_r_p = __hadd(__hmul(q_rm, __float2half(15.F)),
-                      __hmul(__hsub(__hmul(trace_G_2, __float2half(7.5F)),
-                                    __hmul(q_rr, __float2half(52.5F))),
-                             m_r));
-
-  half fifteen_m_r = __hmul(m_r, __float2half(15.F));
+  out_c2_n = (r_hat * c_nr) - (G_2_r * bf_3);
 
   // grad_p_2 = 15*m_r*(G_2*r) + c_r_p*r_hat + c_nr*m - 3*(G_2*m)
-  out_c2_p.x = __hsub(
-      __hadd(__hadd(__hmul(G_2_r.x, fifteen_m_r), __hmul(r_hat.x, c_r_p)),
-             __hmul(m.x, c_nr)),
-      __hmul(G_2_m.x, __float2half(3.F)));
-  out_c2_p.y = __hsub(
-      __hadd(__hadd(__hmul(G_2_r.y, fifteen_m_r), __hmul(r_hat.y, c_r_p)),
-             __hmul(m.y, c_nr)),
-      __hmul(G_2_m.y, __float2half(3.F)));
-  out_c2_p.z = __hsub(
-      __hadd(__hadd(__hmul(G_2_r.z, fifteen_m_r), __hmul(r_hat.z, c_r_p)),
-             __hmul(m.z, c_nr)),
-      __hmul(G_2_m.z, __float2half(3.F)));
+  out_c2_p = (G_2_r * bf_15m) + (r_hat * c_rp) + (m * c_nr) - (G_2_m * bf_3);
 }
 
 /**
@@ -549,11 +513,12 @@ computeSecondOrderGradientContribution(const Mat3x3_f16 &G_2,
  */
 __device__ __forceinline__ auto compute_node_gradient_approximation(
     const PointNormal &geometry, const Vec3 &center_of_mass, const half &G_0,
-    const Vec3_f16 &G_1, const Mat3x3_f16 &G_2) -> PointNormal {
+    const Vec3_f16 &G_1, const Mat3x3_bf16 &G_2) -> PointNormal {
   Vec3 r = center_of_mass - geometry.p;
   float inv_norm_r = r.inv_length();
 
   Vec3_f16 r_hat_f16 = Vec3_f16::from_float(r * inv_norm_r);
+  Vec3_bf16 r_hat_bf16 = Vec3_bf16::from_float(r * inv_norm_r);
   Vec3_f16 m_f16 = Vec3_f16::from_float(geometry.n);
 
   float inv_norm_r2 = inv_norm_r * inv_norm_r;
@@ -575,35 +540,57 @@ __device__ __forceinline__ auto compute_node_gradient_approximation(
 
   Vec3_f16 c0_n, c0_p;
   Vec3_f16 c1_n, c1_p;
-  Vec3_f16 c2_n, c2_p;
+  Vec3_bf16 c2_n, c2_p;
 
   computeZeroOrderGradientContribution(G_0, r_hat_f16, m_f16, c0_n, c0_p);
   computeFirstOrderGradientContribution(G_1, r_hat_f16, m_f16, c1_n, c1_p);
-  computeSecondOrderGradientContribution(G_2, r_hat_f16, m_f16, c2_n, c2_p);
+  computeSecondOrderGradientContribution(
+      G_2, r_hat_bf16, Vec3_bf16::from_f16(m_f16), c2_n, c2_p);
 
   PointNormal grad;
 
   // Accumulate normal gradient in FP32
   grad.n.x = __half2float(c0_n.x) * factor_n_0 +
              __half2float(c1_n.x) * factor_n_1 +
-             __half2float(c2_n.x) * factor_n_2;
+             __bfloat162float(c2_n.x) * factor_n_2;
   grad.n.y = __half2float(c0_n.y) * factor_n_0 +
              __half2float(c1_n.y) * factor_n_1 +
-             __half2float(c2_n.y) * factor_n_2;
+             __bfloat162float(c2_n.y) * factor_n_2;
   grad.n.z = __half2float(c0_n.z) * factor_n_0 +
              __half2float(c1_n.z) * factor_n_1 +
-             __half2float(c2_n.z) * factor_n_2;
+             __bfloat162float(c2_n.z) * factor_n_2;
 
   // Accumulate position gradient in FP32
   grad.p.x = __half2float(c0_p.x) * factor_p_0 +
              __half2float(c1_p.x) * factor_p_1 +
-             __half2float(c2_p.x) * factor_p_2;
+             __bfloat162float(c2_p.x) * factor_p_2;
   grad.p.y = __half2float(c0_p.y) * factor_p_0 +
              __half2float(c1_p.y) * factor_p_1 +
-             __half2float(c2_p.y) * factor_p_2;
+             __bfloat162float(c2_p.y) * factor_p_2;
   grad.p.z = __half2float(c0_p.z) * factor_p_0 +
              __half2float(c1_p.z) * factor_p_1 +
-             __half2float(c2_p.z) * factor_p_2;
+             __bfloat162float(c2_p.z) * factor_p_2;
+
+  if (cuda::std::isnan(grad.p.x) || cuda::std::isinf(grad.p.x) ||
+      cuda::std::isnan(grad.p.y) || cuda::std::isinf(grad.p.y) ||
+      cuda::std::isnan(grad.p.z) || cuda::std::isinf(grad.p.z) ||
+      cuda::std::isnan(grad.n.x) || cuda::std::isinf(grad.n.x) ||
+      cuda::std::isnan(grad.n.y) || cuda::std::isinf(grad.n.y) ||
+      cuda::std::isnan(grad.n.z) || cuda::std::isinf(grad.n.z)) {
+    float r_len = r.length();
+    printf("[GRAD BREAKDOWN]\n"
+           "  COM: (%.4f, %.4f, %.4f) | geom.p: (%.4f, %.4f, %.4f) | dist r: "
+           "%.6e\n"
+           "  inv_norm_r: %.6e | factor_n_2 (1/r^4): %.6e | factor_p_2 "
+           "(1/r^5): %.6e\n"
+           "  G0: %.4f | c2_p: (%.4f, %.4f, %.4f) | c2_n: (%.4f, %.4f, %.4f)\n",
+           center_of_mass.x, center_of_mass.y, center_of_mass.z, geometry.p.x,
+           geometry.p.y, geometry.p.z, r_len, inv_norm_r, factor_n_2,
+           factor_p_2, __half2float(G_0), __bfloat162float(c2_p.x),
+           __bfloat162float(c2_p.y), __bfloat162float(c2_p.z),
+           __bfloat162float(c2_n.x), __bfloat162float(c2_n.y),
+           __bfloat162float(c2_n.z));
+  }
 
   return grad;
 }
@@ -630,7 +617,7 @@ __device__ __forceinline__ Vec3 reconstruct_vertex(
  */
 __device__ __forceinline__ auto compute_node_gradient_approximation(
     const Triangle &geometry, const Vec3 &center_of_mass, const half &G_0,
-    const Vec3_f16 &G_1, const Mat3x3_f16 &G_2) -> Triangle {
+    const Vec3_f16 &G_1, const Mat3x3_bf16 &G_2) -> Triangle {
 
   // 1. Reference Scale Extraction (FP32)
   Vec3 r0_f = geometry.v0 - center_of_mass;
@@ -651,7 +638,7 @@ __device__ __forceinline__ auto compute_node_gradient_approximation(
   Vec3_f16 r2 = Vec3_f16::from_float(r2_f * inv_L_ref);
 
   Vec3_f16 G1_bar = Vec3_f16::from_float(Vec3::from_f16(G_1) * inv_L_ref);
-  Mat3x3_f16 G2_bar = G_2 * __float2half(inv_L_ref2);
+  Mat3x3_bf16 G2_bar = G_2 * __float2bfloat16(inv_L_ref2);
 
   half d0 = r0.length();
   half d1 = r1.length();
@@ -774,27 +761,38 @@ __device__ __forceinline__ auto compute_node_gradient_approximation(
   Vec3_f16 term1_v1 = Vec3_f16::fma(dW1_sum, factor_2_over_S, W1 * coeff_W_1st);
   Vec3_f16 term1_v2 = Vec3_f16::fma(dW2_sum, factor_2_over_S, W2 * coeff_W_1st);
 
-  // 6. 2nd Order Hessian Contractions with G2_bar
+  // 6. 2nd Order Hessian Contractions with G2_bar (Mat3x3_bf16)
   Vec3_f16 grad_S_0 = (U0 * N + V0 * D) * __float2half(2.F);
   Vec3_f16 grad_S_1 = (U1 * N + V1 * D) * __float2half(2.F);
   Vec3_f16 grad_S_2 = (U2 * N + V2 * D) * __float2half(2.F);
 
-  half gS_G2_gS_0 = G2_bar.quadric_form(grad_S_0);
-  half gS_G2_gS_1 = G2_bar.quadric_form(grad_S_1);
-  half gS_G2_gS_2 = G2_bar.quadric_form(grad_S_2);
+  // Promote grad_S vectors to Vec3_bf16 for Mat3x3_bf16 quadric_form evaluation
+  Vec3_bf16 grad_S_0_bf = Vec3_bf16::from_f16(grad_S_0);
+  Vec3_bf16 grad_S_1_bf = Vec3_bf16::from_f16(grad_S_1);
+  Vec3_bf16 grad_S_2_bf = Vec3_bf16::from_f16(grad_S_2);
 
-  half quad_S_sum = __hadd(gS_G2_gS_0, __hadd(gS_G2_gS_1, gS_G2_gS_2));
+  float gS_G2_gS_0 = __bfloat162float(G2_bar.quadric_form(grad_S_0_bf));
+  float gS_G2_gS_1 = __bfloat162float(G2_bar.quadric_form(grad_S_1_bf));
+  float gS_G2_gS_2 = __bfloat162float(G2_bar.quadric_form(grad_S_2_bf));
+
+  float quad_S_sum = gS_G2_gS_0 + gS_G2_gS_1 + gS_G2_gS_2;
 
   half lap_S_0 = __hmul(__float2half(2.F), __hadd(U0.dot(U0), V0.dot(V0)));
   half lap_S_1 = __hmul(__float2half(2.F), __hadd(U1.dot(U1), V1.dot(V1)));
   half lap_S_2 = __hmul(__float2half(2.F), __hadd(U2.dot(U2), V2.dot(V2)));
 
-  half lap_S_G2_sum =
-      __hmul(G2_bar.trace(), __hadd(lap_S_0, __hadd(lap_S_1, lap_S_2)));
+  float lap_S_sum = __half2float(__hadd(lap_S_0, __hadd(lap_S_1, lap_S_2)));
+  float lap_S_G2_sum = __bfloat162float(G2_bar.trace()) * lap_S_sum;
 
-  half factor_8_over_S3 = __hmul(__float2half(8.F), inv_S3);
-  half coeff_W_2nd = __hsub(__hmul(quad_S_sum, factor_8_over_S3),
-                            __hmul(lap_S_G2_sum, factor_4_over_S2));
+  // Evaluate scalar polynomial combination in FP32 registers
+  float f_inv_S2 = __half2float(inv_S2);
+  float f_inv_S3 = __half2float(inv_S3);
+  float f_factor_4_over_S2 = 4.0F * f_inv_S2;
+  float f_factor_8_over_S3 = 8.0F * f_inv_S3;
+
+  float f_coeff_W_2nd =
+      quad_S_sum * f_factor_8_over_S3 - lap_S_G2_sum * f_factor_4_over_S2;
+  half coeff_W_2nd = __float2half(f_coeff_W_2nd);
 
   Vec3_f16 dW_G2_gS_0 = dW0_sum * grad_S_0.dot(G1_bar);
   Vec3_f16 dW_G2_gS_1 = dW1_sum * grad_S_1.dot(G1_bar);
@@ -819,6 +817,6 @@ __device__ __forceinline__ auto compute_node_gradient_approximation(
                                      term2_v0, scale_2nd),
                   reconstruct_vertex(term0_v1, scale_0th, term1_v1, scale_1st,
                                      term2_v1, scale_2nd),
-                  reconstruct_vertex(term0_v2, scale_0th, term1_v2, scale_1st,
+                  reconstruct_vertex(term0_v2, scale_0th, term1_v2, scale_2nd,
                                      term2_v2, scale_2nd)};
 }

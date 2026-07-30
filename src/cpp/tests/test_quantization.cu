@@ -1,5 +1,5 @@
 #include "../mat3x3.h"
-#include "../tailor_coefficients.h"
+#include "../taylor_coefficients.h"
 #include "../tensor3.h"
 #include "../vec3.h"
 #include <algorithm>
@@ -27,7 +27,7 @@ float get_rand(float min, float max, std::mt19937 &gen) {
 }
 
 // Fills the struct with random values and returns the max absolute value found
-float fill_random(TailorCoefficientsF16 &host_struct, float range,
+float fill_random(TaylorCoefficientsF16 &host_struct, float range,
                   std::mt19937 &gen) {
   float max_abs = 0.0F;
   auto fill_val = [&](half &target) {
@@ -66,7 +66,7 @@ bool check_close(const char *label, half actual_bf, float original_f32,
 }
 
 // Fills with specific edge-case patterns
-void fill_edge_case(TailorCoefficientsF16 &host_struct, int case_type) {
+void fill_edge_case(TaylorCoefficientsF16 &host_struct, int case_type) {
   auto set_all = [&](float val) {
     half b = __float2half(val);
     __nv_bfloat16 bf16 = __float2bfloat16(val);
@@ -99,24 +99,24 @@ void fill_edge_case(TailorCoefficientsF16 &host_struct, int case_type) {
   }
 }
 
-void run_edge_cases(TailorCoefficientsF16 *d_in,
-                    TailorCoefficientsF16 *d_out, float *d_scale) {
+void run_edge_cases(TaylorCoefficientsF16 *d_in,
+                    TaylorCoefficientsF16 *d_out, float *d_scale) {
   const char *names[] = {"ALL ZEROS", "SINGLE OUTLIER", "ALL NEGATIVE",
                          "POW2 BOUNDARY", "NEGATIVE BOUNDARY"};
 
   for (int i = 0; i < 5; ++i) {
     printf("Testing Edge Case: %s... ", names[i]);
 
-    TailorCoefficientsF16 h_in, h_out;
+    TaylorCoefficientsF16 h_in, h_out;
     fill_edge_case(h_in, i);
 
-    CUDA_CHECK(cudaMemcpy(d_in, &h_in, sizeof(TailorCoefficientsF16),
+    CUDA_CHECK(cudaMemcpy(d_in, &h_in, sizeof(TaylorCoefficientsF16),
                           cudaMemcpyHostToDevice));
 
     float h_scale;
     CUDA_CHECK(
         cudaMemcpy(&h_scale, d_scale, sizeof(float), cudaMemcpyDeviceToHost));
-    CUDA_CHECK(cudaMemcpy(&h_out, d_out, sizeof(TailorCoefficientsF16),
+    CUDA_CHECK(cudaMemcpy(&h_out, d_out, sizeof(TaylorCoefficientsF16),
                           cudaMemcpyDeviceToHost));
 
     // Validation logic
@@ -141,11 +141,11 @@ void run_edge_cases(TailorCoefficientsF16 *d_in,
 int main() {
   // device stuff
   float *shared_scale_device;
-  TailorCoefficientsF16 *tailor_input_device;
-  TailorCoefficientsF16 *tailor_output_device;
+  TaylorCoefficientsF16 *tailor_input_device;
+  TaylorCoefficientsF16 *tailor_output_device;
   CUDA_CHECK(cudaMalloc(&shared_scale_device, 2 * sizeof(float)));
-  CUDA_CHECK(cudaMalloc(&tailor_input_device, sizeof(TailorCoefficientsF16)));
-  CUDA_CHECK(cudaMalloc(&tailor_output_device, sizeof(TailorCoefficientsF16)));
+  CUDA_CHECK(cudaMalloc(&tailor_input_device, sizeof(TaylorCoefficientsF16)));
+  CUDA_CHECK(cudaMalloc(&tailor_output_device, sizeof(TaylorCoefficientsF16)));
 
   // random stuff
   std::mt19937 gen(42);
@@ -155,7 +155,7 @@ int main() {
   for (float range : test_ranges) {
     printf("Testing Range: [-%.1f, %.1f]... ", range, range);
 
-    TailorCoefficientsF16 input_host, output_host;
+    TaylorCoefficientsF16 input_host, output_host;
     std::vector<float> scale_host(2);
 
     // 1. Generate Data
@@ -163,13 +163,13 @@ int main() {
 
     // 2. GPU Processing
     CUDA_CHECK(cudaMemcpy(tailor_input_device, &input_host,
-                          sizeof(TailorCoefficientsF16),
+                          sizeof(TaylorCoefficientsF16),
                           cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaDeviceSynchronize());
     CUDA_CHECK(cudaMemcpy(scale_host.data(), shared_scale_device, sizeof(float),
                           cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(&output_host, tailor_output_device,
-                          sizeof(TailorCoefficientsF16),
+                          sizeof(TaylorCoefficientsF16),
                           cudaMemcpyDeviceToHost));
 
     // 3. Validation

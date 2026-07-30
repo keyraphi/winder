@@ -223,6 +223,7 @@ public:
     }
     m_impl.init(queries.data(), grad_output.data());
   }
+  ~GradientEngine() = default;
 
   // PointNormal
   auto compute(const Vec3_t &points,

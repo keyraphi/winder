@@ -234,9 +234,6 @@ def test_triangle_gradients(
     q_tensor = torch.from_numpy(queries).cuda()
     g_out_tensor = torch.from_numpy(grad_output).cuda()
 
-    print("DEBUG: t_tensor", t_tensor.shape, t_tensor.dtype, t_tensor.device)
-    print("DEBUG: q_tensor", q_tensor.shape, q_tensor.dtype, q_tensor.device)
-    print("DEBUG: g_out_tensor", g_out_tensor.shape, g_out_tensor.dtype, g_out_tensor.device)
     cuda_grads = torch.from_dlpack(
         winder.brute_force_gradients(g_out_tensor, t_tensor, q_tensor)
     )
