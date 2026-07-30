@@ -985,133 +985,224 @@
                   which natively accounts for the initial $\mathcal{O}(M)$ tree construction overhead.
               </p>
         </section>
-        <section class="bg-white p-8 rounded-xl shadow-xs border border-slate-200/80 mt-6">
-                <h2 class="text-2xl font-bold border-b border-slate-200 pb-3 mb-6 text-slate-900 flex items-center gap-2">
-                    <span class="text-cyan-600">02.</span> Exact Analytical Spatial Jacobian of the Vertex Gradient
-                </h2>
-                
-                <div class="prose prose-slate max-w-none text-slate-600 leading-relaxed space-y-4">
-                    <p>
-                        To populate the second-order terms of the localized Taylor serialization, we require the spatial Jacobian 
-                        $\nabla_x F_k \in \mathbb{R}^{3 \times 3}$ of the solid-angle vertex-gradient field 
-                        $F_k(x) = \frac{\partial \Omega_T(x)}{\partial v_k}$. Since the relative vertex coordinates are defined as 
-                        $r_i = v_i - x$, the spatial derivative map satisfies $\frac{\partial}{\partial x} = -\sum_{i=1}^3 \frac{\partial}{\partial r_i}$. 
-                        By application of the multivariate chain rule, the exact spatial Jacobian expands to the accumulation of relative parameter gradients:
-                    </p>
 
-                    <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-                        $$\nabla_x F_k = -\left( \frac{\partial F_k}{\partial r_1} + \frac{\partial F_k}{\partial r_2} + \frac{\partial F_k}{\partial r_3} \right)$$
-                    </div>
+<section class="bg-white p-8 rounded-xl shadow-xs border border-slate-200/80 mt-6">
+    <h2 class="text-2xl font-bold border-b border-slate-200 pb-3 mb-6 text-slate-900 flex items-center gap-2">
+        <span class="text-cyan-600">05.</span>
+        Gradient Fields, their Jacobians and Hessians
+    </h2>
 
-                    <h3 class="text-lg font-semibold text-slate-900 pt-4 mb-2">1. Geometric Primitives & Linearized Differentials</h3>
-                    <p>
-                        Let $[w]_\times \in \mathbb{R}^{3 \times 3}$ denote the skew-symmetric cross-product matrix such that $[w]_\times v = w \times v$, 
-                        and let $\mathbf{I}$ specify the $3 \times 3$ identity matrix.
-                        We define the directional projection operators $P_i$ along with the forward solid-angle scalar invariants $N$, $D$, and $S$:
-                    </p>
+    <!-- ================================================================= -->
+    <!-- SUBSECTION 5.1: POINT-NORMAL PRIMITIVES                            -->
+    <!-- ================================================================= -->
+    <div class="mb-10">
+        <h3 class="text-xl font-bold text-slate-900 mb-4 pb-2 border-b border-slate-100 flex items-center gap-2">
+            <span class="text-slate-400">5.1</span> Point-Normal Primitives (Position & Normal Dipole Gradients)
+        </h3>
+        <p class="text-slate-700 leading-relaxed mb-6">
+            For point-cloud primitives defined by position $\mathbf{p} \in \mathbb{R}^3$ and an area-weighted normal/dipole moment vector $\mathbf{m} \in \mathbb{R}^3$, the loss sensitivity is decomposed into gradients w.r.t. position $\nabla_{\mathbf{p}} \mathcal{L}$ and normal dipole orientation $\nabla_{\mathbf{m}} \mathcal{L}$. Let $\mathbf{r} = \mathbf{x}_c - \mathbf{p}$ denote the displacement vector from source position $\mathbf{p}$ to query cluster centroid $\mathbf{x}_c$, with metric distance $R = \|\mathbf{r}\|_2$ and normalized direction $\hat{\mathbf{r}} = \mathbf{r} / R$.
+        </p>
 
-                    <div class="my-4 bg-slate-50/60 p-4 rounded-xl border border-slate-200/60 space-y-3 font-mono text-sm">
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div>
-                                <span class="text-xs font-bold text-slate-400 uppercase block mb-1">Relative Vectors & Projections</span>
-                                $$\hat{r}_i = \frac{r_i}{\|r_i\|}, \quad P_i = \mathbf{I} - \hat{r}_i \hat{r}_i^T$$
-                            </div>
-                            <div>
-                                <span class="text-xs font-bold text-slate-400 uppercase block mb-1">Field Invariants & Scaling</span>
-                                $$N = r_1 \cdot (r_2 \times r_3), \quad S = N^2 + D^2$$
-                            </div>
-                        </div>
-                        <div class="pt-2 border-t border-slate-200/60">
-                            <span class="text-xs font-bold text-slate-400 uppercase block mb-1">Global Topographic Denominator</span>
-                            $$D = \|r_1\|\|r_2\|\|r_3\| + (r_1 \cdot r_2)\|r_3\| + (r_2 \cdot r_3)\|r_1\| + (r_3 \cdot r_1)\|r_2\|$$
-                        </div>
-                    </div>
+        <!-- 5.1.1 0th-Order Contractions -->
+        <div class="mb-8 bg-slate-50 p-5 rounded-lg border border-slate-200/80">
+            <h4 class="text-lg font-semibold text-slate-900 mb-2">5.1.1 0th-Order Moment Contractions ($G_0$)</h4>
+            <p class="text-slate-700 text-sm leading-relaxed mb-3">
+                Interacting with the scalar zero-order moment $G_0$, the unscaled normal contraction $\mathbf{c}_{0,n}$ and position contraction $\mathbf{c}_{0,p}$ evaluate to:
+            </p>
+            <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                $$\begin{aligned}
+                \mathbf{c}_{0,n} &= G_0 \hat{\mathbf{r}} \\
+                \mathbf{c}_{0,p} &= G_0 \left[ 3 (\hat{\mathbf{r}} \cdot \mathbf{m}) \hat{\mathbf{r}} - \mathbf{m} \right]
+                \end{aligned}$$
+            </div>
+        </div>
 
-                    <h3 class="text-lg font-semibold text-slate-900 pt-4 mb-2">2. Forward Intermediate Gradients</h3>
-                    <p>
-                        The analytical vertex gradient for $v_1$ maps to $F_1 = \frac{2}{S}W$, where the intermediate vector field is 
-                        $W = DU - NV$. The standalone forward gradient vectors $U, V \in \mathbb{R}^3$ (and their cyclic permutations $V_2, V_3$ for the denominator components) evaluate to:
-                    </p>
+        <!-- 5.1.2 1st-Order Contractions -->
+        <div class="mb-8">
+            <h4 class="text-lg font-semibold text-slate-900 mb-2">5.1.2 1st-Order Moment Contractions ($\mathbf{G}_1$)</h4>
+            <p class="text-slate-700 leading-relaxed mb-3">
+                Directional coupling with the first-order vector moment $\mathbf{G}_1$ involves projection operators along $\hat{\mathbf{r}}$ and dipole orientation $\mathbf{m}$:
+            </p>
+            <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                $$\begin{aligned}
+                \mathbf{c}_{1,n} &= \mathbf{G}_1 - 3 (\hat{\mathbf{r}} \cdot \mathbf{G}_1) \hat{\mathbf{r}} \\
+                \mathbf{c}_{1,p} &= 3 (\hat{\mathbf{r}} \cdot \mathbf{m}) \mathbf{G}_1 + 3 (\mathbf{G}_1 \cdot \mathbf{m}) \hat{\mathbf{r}} + 3 (\hat{\mathbf{r}} \cdot \mathbf{G}_1) \mathbf{m} - 15 (\hat{\mathbf{r}} \cdot \mathbf{G}_1) (\hat{\mathbf{r}} \cdot \mathbf{m}) \hat{\mathbf{r}}
+                \end{aligned}$$
+            </div>
+        </div>
 
-                    <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-                        $$\begin{aligned}
-                        U &= r_2 \times r_3 \\
-                        V &= \alpha \hat{r}_1 + \|r_3\|r_2 + \|r_2\|r_3, \quad \text{where } \alpha = \|r_2\|\|r_3\| + r_2 \cdot r_3 \\
-                        V_2 &= (\|r_3\|\|r_1\| + r_3 \cdot r_1)\hat{r}_2 + \|r_1\|r_3 + \|r_3\|r_1 \\
-                        V_3 &= (\|r_1\|\|r_2\| + r_1 \cdot r_2)\hat{r}_3 + \|r_2\|r_1 + \|r_1\|r_2
-                        \end{aligned}$$
-                    </div>
+        <!-- 5.1.3 2nd-Order Contractions -->
+        <div class="mb-8">
+            <h4 class="text-lg font-semibold text-slate-900 mb-2">5.1.3 2nd-Order Tensor Contractions ($\mathbf{G}_2$)</h4>
+            <p class="text-slate-700 leading-relaxed mb-3">
+                Higher-order curvature contributions contract the rank-2 moment tensor $\mathbf{G}_2 \in \mathbb{R}^{3 \times 3}$ against $\hat{\mathbf{r}}$ and $\mathbf{m}$. Defining matrix products $\mathbf{G}_{2,r} = \mathbf{G}_2 \hat{\mathbf{r}}$, $\mathbf{G}_{2,m} = \mathbf{G}_2 \mathbf{m}$, trace $\operatorname{Tr}(\mathbf{G}_2) = \sum_{i=0}^2 G_{2,ii}$, and quadratic forms:
+            </p>
+            <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                $$q_{rr} = \hat{\mathbf{r}}^\top \mathbf{G}_2 \hat{\mathbf{r}}, \qquad q_{rm} = \hat{\mathbf{r}}^\top \mathbf{G}_2 \mathbf{m}, \qquad m_r = \hat{\mathbf{r}} \cdot \mathbf{m}$$
+            </div>
+            <p class="text-slate-700 leading-relaxed my-3">
+                The scalar projection coefficients $c_{nr}$ and $c_{rp}$ are computed as:
+            </p>
+            <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                $$\begin{aligned}
+                c_{nr} &= 7.5 \, q_{rr} - 1.5 \operatorname{Tr}(\mathbf{G}_2) \\
+                c_{rp} &= 15 \, q_{rm} + \left( 7.5 \operatorname{Tr}(\mathbf{G}_2) - 52.5 \, q_{rr} \right) m_r
+                \end{aligned}$$
+            </div>
+            <p class="text-slate-700 leading-relaxed my-3">
+                yielding the unscaled second-order contractions $\mathbf{c}_{2,n}$ and $\mathbf{c}_{2,p}$:
+            </p>
+            <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                $$\begin{aligned}
+                \mathbf{c}_{2,n} &= c_{nr} \hat{\mathbf{r}} - 3 \mathbf{G}_{2,r} \\
+                \mathbf{c}_{2,p} &= 15 m_r \mathbf{G}_{2,r} + c_{rp} \hat{\mathbf{r}} + c_{nr} \mathbf{m} - 3 \mathbf{G}_{2,m}
+                \end{aligned}$$
+            </div>
+        </div>
 
-                    <h3 class="text-lg font-semibold text-slate-900 pt-4 mb-2">3. Matrix Component Differentiation</h3>
-                    <p>
-                        Differentiating the primary vector blocks $U$ and $V$ with respect to each relative coordinate vector $r_i$ produces isolated, low-rank structural matrices. The exact $3 \times 3$ component Jacobians match the following forms:
-                    </p>
+        <!-- 5.1.4 Multi-Order Scale Accumulation -->
+        <div class="bg-cyan-50/60 p-5 rounded-lg border border-cyan-200/80">
+            <h4 class="text-lg font-semibold text-cyan-950 mb-2">5.1.4 Physical Scale Factors & Final Accumulation</h4>
+            <p class="text-slate-700 text-sm leading-relaxed mb-3">
+                The unscaled half-precision contractions $\mathbf{c}_{k,n}$ and $\mathbf{c}_{k,p}$ ($k \in \{0, 1, 2\}$) are cast to $\text{FP32}$ and weighted by power-law distance decay factors scaled by $\frac{1}{4\pi}$:
+            </p>
+            <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                $$\begin{aligned}
+                \nabla_{\mathbf{m}} \mathcal{L} &= \frac{1}{4\pi} \left[ \frac{1}{R^2} \mathbf{c}_{0,n} + \frac{1}{R^3} \mathbf{c}_{1,n} + \frac{1}{R^4} \mathbf{c}_{2,n} \right] \\
+                \nabla_{\mathbf{p}} \mathcal{L} &= \frac{1}{4\pi} \left[ \frac{1}{R^3} \mathbf{c}_{0,p} + \frac{1}{R^4} \mathbf{c}_{1,p} + \frac{1}{R^5} \mathbf{c}_{2,p} \right]
+                \end{aligned}$$
+            </div>
+        </div>
+    </div>
 
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 my-3">
-                        <div class="bg-white p-4 rounded border border-slate-200">
-                            <span class="text-xs font-bold text-cyan-700 block uppercase tracking-wide mb-2">Numerator Component Jacobians</span>
-                            $$\begin{aligned}
-                            \frac{\partial U}{\partial r_1} &= \mathbf{0}_{3 \times 3} \\
-                            \frac{\partial U}{\partial r_2} &= -[r_3]_\times \\
-                            \frac{\partial U}{\partial r_3} &= [r_2]_\times
-                            \end{aligned}$$
-                        </div>
-                        <div class="bg-white p-4 rounded border border-slate-200">
-                            <span class="text-xs font-bold text-cyan-700 block uppercase tracking-wide mb-2">Denominator Component Jacobians</span>
-                            $$\begin{aligned}
-                            \frac{\partial V}{\partial r_1} &= \frac{\alpha}{\|r_1\|} P_1 \\
-                            \frac{\partial V}{\partial r_2} &= \|r_3\| \hat{r}_1 \hat{r}_2^T + \hat{r}_1 r_3^T + r_3 \hat{r}_2^T + \|r_3\| \mathbf{I} \\
-                            \frac{\partial V}{\partial r_3} &= \|r_2\| \hat{r}_1 \hat{r}_3^T + \hat{r}_1 r_2^T + r_2 \hat{r}_3^T + \|r_2\| \mathbf{I}
-                            \end{aligned}$$
-                        </div>
-                    </div>
+    <!-- ================================================================= -->
+    <!-- SUBSECTION 5.2: TRIANGLE MESH PRIMITIVES                           -->
+    <!-- ================================================================= -->
+    <div>
+        <h3 class="text-xl font-bold text-slate-900 mb-4 pb-2 border-b border-slate-100 flex items-center gap-2">
+            <span class="text-slate-400">5.2</span> Triangle Mesh Primitives (Vertex Position Gradients)
+        </h3>
 
-                    <h3 class="text-lg font-semibold text-slate-900 pt-4 mb-2">4. Final Assembly of the Relative Representation</h3>
-                    <p>
-                        By applying the quotient rule to the primary structural statement $F_1 = \frac{2}{S}W$, we resolve the full relative gradient tensor $\frac{\partial F_1}{\partial r_i} \in \mathbb{R}^{3 \times 3}$. We define the invariant directional columns as $N_i = \nabla_{r_i} N$ and $D_i = \nabla_{r_i} D$:
-                    </p>
+        <p class="text-slate-700 leading-relaxed mb-6">
+            To compute the sensitivity of the loss function $\mathcal{L}$ with respect to the positions of the triangle vertices $\mathbf{v}_k \in \mathbb{R}^3$ ($k \in \{0, 1, 2\}$), we construct a truncated Taylor series expansion around the geometric center of mass $\mathbf{x}_c$. The loss gradient contribution is evaluated via directional contractions of the order moments $(G_0, \mathbf{G}_1, \mathbf{G}_2)$ against a scale-invariant dimensionless vector field $F_k$, its Jacobian $\nabla F_k$, and its Hessian $\mathcal{H}_{F_k}$.
+        </p>
 
-                    <div class="my-3 bg-slate-950 text-slate-200 p-4 rounded-xl font-mono text-xs overflow-x-auto">
-                        <table class="w-full text-left text-slate-300">
-                            <thead>
-                                <tr class="border-b border-slate-800 text-slate-400">
-                                    <th class="pb-2 text-cyan-400">Index ($i$)</th>
-                                    <th class="pb-2">Scalar Adjoint $N_i^T = (\nabla_{r_i} N)^T$</th>
-                                    <th class="pb-2">Scalar Adjoint $D_i^T = (\nabla_{r_i} D)^T$</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <tr class="border-b border-slate-900">
-                                    <td class="py-2 font-bold text-slate-400">1</td>
-                                    <td>$U^T = (r_2 \times r_3)^T$</td>
-                                    <td>$V^T$</td>
-                                </tr>
-                                <tr class="border-b border-slate-900">
-                                    <td class="py-2 font-bold text-slate-400">2</td>
-                                    <td>$(r_3 \times r_1)^T$</td>
-                                    <td>$V_2^T$</td>
-                                </tr>
-                                <tr>
-                                    <td class="py-2 font-bold text-slate-400">3</td>
-                                    <td>$(r_1 \times r_2)^T$</td>
-                                    <td>$V_3^T$</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
+        <!-- 5.2.1 Scale Normalization -->
+        <div class="mb-8 bg-slate-50 p-5 rounded-lg border border-slate-200/80">
+            <h4 class="text-lg font-semibold text-slate-900 mb-2">5.2.1 Non-Dimensionalization & Scale Invariance</h4>
+            <p class="text-slate-700 text-sm leading-relaxed mb-3">
+                To ensure numerical stability in half-precision arithmetic ($\text{FP16}$), displacement vectors $\mathbf{r}_k = \mathbf{v}_k - \mathbf{x}_c$ and input moment tensors are normalized by a characteristic domain scale $L_{\text{ref}}$:
+            </p>
+            <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                $$\begin{aligned}
+                L_{\text{ref}} &= \max_{k \in \{0,1,2\}} \|\mathbf{r}_k\|_2, \qquad &\bar{\mathbf{r}}_k &= \frac{\mathbf{r}_k}{L_{\text{ref}}} \\
+                \bar{G}_0 &= G_0, \qquad &\bar{\mathbf{G}}_1 &= \frac{\mathbf{G}_1}{L_{\text{ref}}}, \qquad &\bar{\mathbf{G}}_2 &= \frac{\mathbf{G}_2}{L_{\text{ref}}^2}
+                \end{aligned}$$
+            </div>
+        </div>
 
-                    <p>
-                        Feeding these components into the vectorized quotient architecture completes the analytical assembly rule for each individual constituent matrix:
-                    </p>
-
-                    <div class="my-4 bg-white p-4 rounded-xl border border-slate-200 shadow-xs text-center">
-                        $$\frac{\partial F_1}{\partial r_i} = \frac{2}{S}\left[ D\frac{\partial U}{\partial r_i} - N\frac{\partial V}{\partial r_i} + U D_i^T - V N_i^T \right] - \frac{4W}{S^2}\left[ N N_i^T + D D_i^T \right]$$
-                    </div>
-
-                    <p class="text-xs text-slate-500 pl-3 border-l-2 border-cyan-500 my-2 italic">
-                        <strong>Implementation Profiling Note:</strong> This exact layout maps entirely to hardware-friendly execution kernels on the GPU. The assembly avoids dense linear solvers or explicit $3 \times 3$ matrix inversions entirely, relying exclusively on symmetric rank-1 outer products ($U D_i^T$), skew-symmetric footprints ($[r_k]_\times$), and fused vector scaling.
-                    </p>
-                </div>
+        <!-- 5.2.2 0th Order Term -->
+        <div class="mb-8">
+            <h4 class="text-lg font-semibold text-slate-900 mb-2">5.2.2 0th-Order Vector Field $F_k$</h4>
+            <p class="text-slate-700 leading-relaxed mb-3">
+              Let $d_k = \|\bar{\mathbf{r}}_k\|_2$ and $\hat{\mathbf{r}}_k = \bar{\mathbf{r}}_k / d_k$. The geometric primitive is
+              parameterized by the cross-product normal vectors $\mathbf{U}_k$, tangential auxiliary vectors $\mathbf{V}_k$, and
+              scalar invariants $N, D, S$:
+            </p>
+            <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+              $$\begin{aligned}
+              \mathbf{U}_0 &= \bar{\mathbf{r}}_1 \times \bar{\mathbf{r}}_2, \quad \mathbf{U}_1 = \bar{\mathbf{r}}_2 \times
+              \bar{\mathbf{r}}_0, \quad \mathbf{U}_2 = \bar{\mathbf{r}}_0 \times \bar{\mathbf{r}}_1 \\
+              N &= \bar{\mathbf{r}}_0 \cdot \mathbf{U}_0 = \det([\bar{\mathbf{r}}_0, \bar{\mathbf{r}}_1, \bar{\mathbf{r}}_2]), \quad
+              D = d_0 d_1 d_2 + \sum_{k=0}^2 (\bar{\mathbf{r}}_j \cdot \bar{\mathbf{r}}_m) d_k \\
+              \mathbf{V}_k &= \hat{\mathbf{r}}_k \alpha_k + d_m \bar{\mathbf{r}}_j + d_j \bar{\mathbf{r}}_m \quad \text{with} \quad
+              \alpha_k = d_j d_m + (\bar{\mathbf{r}}_j \cdot \bar{\mathbf{r}}_m)
+              \end{aligned}$$
+            </div>
+            <p class="text-slate-700 leading-relaxed my-3">
+              Defining the solid-angle denominator norm $S = N^2 + D^2$, the generator vector field $\mathbf{W}_k$ and the
+              fundamental 0th-order vertex response field $F_k(\bar{\mathbf{r}}_0, \bar{\mathbf{r}}_1, \bar{\mathbf{r}}_2)$ are
+              defined as:
+            </p>
+            <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+              $$\mathbf{W}_k = D \mathbf{U}_k - N \mathbf{V}_k \implies F_k(\bar{\mathbf{r}}) = \frac{2}{S} \mathbf{W}_k$$
+            </div>
+            <p class="text-slate-700 leading-relaxed mt-3">
+              The 0th-order approximation term $\mathbf{T}_k^{(0)}$ simplifies to the scalar product:
+            </p>
+            <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+              $$\mathbf{T}_k^{(0)} = \bar{G}_0 F_k(\bar{\mathbf{r}}) = \bar{G}_0 \left( \frac{2}{S} \mathbf{W}_k \right)$$
+            </div>
+            </div>
+            
+            <!-- 5.2.3 1st Order Jacobian Contraction -->
+            <div class="mb-8">
+              <h4 class="text-lg font-semibold text-slate-900 mb-2">5.2.3 1st-Order Jacobian Contraction $(\nabla F_k \cdot
+                \bar{\mathbf{G}}_1)$</h4>
+              <p class="text-slate-700 leading-relaxed mb-3">
+                The 1st-order Taylor term corresponds to contracting the full spatial Jacobian $\nabla F_k \in \mathbb{R}^{3 \times
+                9}$ with the first-order moment vector $\bar{\mathbf{G}}_1$. Applying the product rule yields:
+              </p>
+              <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                $$\mathbf{T}_k^{(1)} = \left( \nabla F_k \cdot \bar{\mathbf{G}}_1 \right) = \frac{2}{S} \, \delta \mathbf{W}_k +
+                \mathbf{W}_k \left( \nabla \left(\frac{2}{S}\right) \cdot \bar{\mathbf{G}}_1 \right)$$
+              </div>
+              <p class="text-slate-700 leading-relaxed my-3">
+                where $\delta \mathbf{W}_k = \left(\frac{\partial \mathbf{W}_k}{\partial \bar{\mathbf{r}}} \cdot
+                \bar{\mathbf{G}}_1\right)$ represents the directional variation of the generator vector:
+              </p>
+              <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                $$\delta \mathbf{W}_k = \left( N \delta \mathbf{V}_k + S_U \mathbf{V}_k \right) - \left( D \delta \mathbf{U}_k + S_V
+                \mathbf{U}_k \right)$$
+              </div>
+              <p class="text-slate-700 leading-relaxed my-3">
+                with scalar projection sums $S_U = \sum_{j=0}^2 (\mathbf{U}_j \cdot \bar{\mathbf{G}}_1)$ and $S_V = \sum_{j=0}^2
+                (\mathbf{V}_j \cdot \bar{\mathbf{G}}_1)$. The scalar derivative coefficient $c_1$ governing the magnitude shift
+                along $\mathbf{W}_k$ evaluates to:
+              </p>
+              <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                $$c_1 = \frac{4}{S^2} \left( N S_U + D S_V \right) \implies \mathbf{T}_k^{(1)} = \frac{2}{S} \, \delta \mathbf{W}_k
+                + c_1 \mathbf{W}_k$$
+              </div>
+            </div>
+            
+            <!-- 5.2.4 2nd Order Hessian Contraction -->
+            <div class="mb-8">
+              <h4 class="text-lg font-semibold text-slate-900 mb-2">5.2.4 2nd-Order Hessian Contraction $\frac{1}{2} \left(
+                \bar{\mathbf{G}}_2 : \mathcal{H}_{F_k} \right)$</h4>
+              <p class="text-slate-700 leading-relaxed mb-3">
+                The 2nd-order Taylor term accounts for spatial curvature via tensor contraction of the symmetric moment matrix
+                $\bar{\mathbf{G}}_2 \in \mathbb{R}^{3 \times 3}$ with the vector-valued Hessian hyper-tensor $\mathcal{H}_{F_k} =
+                \nabla^2 F_k$. Disentangling the field tensor decomposition into trace and quadric forms yields:
+              </p>
+              <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                $$\mathbf{T}_k^{(2)} = \frac{1}{2} \left( \bar{\mathbf{G}}_2 : \mathcal{H}_{F_k} \right) = c_2 \mathbf{W}_k +
+                \frac{4}{S^2} \sum_{j=0}^2 \left( \delta \mathbf{W}_k \cdot (\bar{\mathbf{G}}_1 \otimes \nabla S_j) \right)$$
+              </div>
+              <p class="text-slate-700 leading-relaxed my-3">
+                Here, the scalar curvature coefficient $c_2$ contracts $\bar{\mathbf{G}}_2$ against the metric gradient $\nabla S_j
+                = 2(N \mathbf{U}_j + D \mathbf{V}_j)$ and Laplacian trace fields:
+              </p>
+              <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                $$c_2 = \frac{8}{S^3} \sum_{j=0}^2 \left( \nabla S_j^\top \bar{\mathbf{G}}_2 \nabla S_j \right) - \frac{4}{S^2}
+                \operatorname{Tr}(\bar{\mathbf{G}}_2) \sum_{j=0}^2 \left( \|\mathbf{U}_j\|_2^2 + \|\mathbf{V}_j\|_2^2 \right)$$
+              </div>
+            </div>
+            
+            <!-- 5.2.5 Dimensional Reconstruction -->
+            <div class="bg-cyan-50/60 p-5 rounded-lg border border-cyan-200/80">
+              <h4 class="text-lg font-semibold text-cyan-950 mb-2">5.2.5 Physical Scale Reconstruction</h4>
+              <p class="text-slate-700 text-sm leading-relaxed mb-3">
+                Finally, the total loss gradient $\nabla_{\mathbf{v}_k} \mathcal{L}$ for each vertex $\mathbf{v}_k$ is reassembled
+                in double precision / FP32 by restoring physical length scales with the solid angle constant factor
+                $\frac{1}{4\pi}$:
+              </p>
+              <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                $$\nabla_{\mathbf{v}_k} \mathcal{L} \approx \frac{1}{4\pi} \left[ \frac{1}{L_{\text{ref}}} \mathbf{T}_k^{(0)} +
+                \frac{1}{L_{\text{ref}}^2} \mathbf{T}_k^{(1)} + \frac{1}{L_{\text{ref}}^3} \mathbf{T}_k^{(2)} \right]$$
+              </div>
+            </div>
+            </div>
             </section>
 
             <section class="bg-white p-8 rounded-xl shadow-xs border border-slate-200/80 mt-6">
