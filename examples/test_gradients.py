@@ -111,7 +111,11 @@ def validate_gradients(
 
 
 def test_triangle_gradients(
-    vertices: np.ndarray, indices: np.ndarray, query_mode: str, query_count: int
+    vertices: np.ndarray,
+    indices: np.ndarray,
+    query_mode: str,
+    query_count: int,
+    beta: None | float,
 ):
     triangles = vertices[indices]
     triangles_torch = torch.from_numpy(triangles).to(torch.float32).to("cuda:0")
@@ -119,22 +123,37 @@ def test_triangle_gradients(
     queries = generate_queries(vertices, query_mode, query_count)
     queries_torch = torch.from_numpy(queries).to(torch.float32).to("cuda:0")
     torch.cuda.synchronize()
+    print("Forward:")
+    t0 = time()
+    wn = winder.brute_force_winding_numbers(triangles_torch, queries_torch)
+    torch.cuda.synchronize()
+    print(f"Brute force took {time() - t0} sec")
+    t0 = time()
+    engine = winder.WindingNumberEngine(triangles_torch)
+    torch.cuda.synchronize()
+    print(f"Building engine took {time() - t0} sec")
+    t0 = time()
+    wn = engine.compute(queries_torch)
+    torch.cuda.synchronize()
+    print(f"Computing winding numbers took {time() - t0} sec")
+
+    print("Backward:")
+    torch.cuda.synchronize()
     t0 = time()
     gt_grads = torch.from_dlpack(
         winder.brute_force_gradients(grad_output, triangles_torch, queries_torch)
     )
     torch.cuda.synchronize()
-    print(f"Brute Force took {time()-t0} sec")
-
+    print(f"Brute Force took {time() - t0} sec")
 
     t0 = time()
     grad_engine = winder.GradientEngine(queries_torch, grad_output)
     torch.cuda.synchronize()
-    print(f"Building Engine took {time()-t0} sec")
+    print(f"Building Engine took {time() - t0} sec")
     t0 = time()
-    grads = torch.from_dlpack(grad_engine.compute(triangles_torch))
+    grads = torch.from_dlpack(grad_engine.compute(triangles_torch, beta=-1 if beta is None else beta))
     torch.cuda.synchronize()
-    print(f"Fast variant took {time()-t0} sec")
+    print(f"Fast variant took {time() - t0} sec")
 
     validate_gradients(grads.cpu().numpy(), gt_grads.cpu().numpy(), "Triangle")
 
@@ -146,32 +165,62 @@ def test_point_normal_gradients(
     query_mode: str,
     query_count: int,
     inv_epsilon: float,
+    beta: None | float,
 ):
     scaled_normals = normals * areas[:, None]
     points_torch = torch.from_numpy(points).to(torch.float32).to("cuda:0")
-    scaled_normals_torch = torch.from_numpy(scaled_normals).to(torch.float32).to("cuda:0")
+    scaled_normals_torch = (
+        torch.from_numpy(scaled_normals).to(torch.float32).to("cuda:0")
+    )
     grad_output = torch.randn([query_count], dtype=torch.float32, device="cuda:0")
     queries = generate_queries(points, query_mode, query_count)
     queries_torch = torch.from_numpy(queries).to(torch.float32).to("cuda:0")
+
     torch.cuda.synchronize()
+    print("forward:")
+    t0 = time()
+    wn = winder.brute_force_winding_numbers(points_torch, scaled_normals_torch, queries_torch)
+    torch.cuda.synchronize()
+    print(f"Brute force took {time() - t0} sec")
+    t0 = time()
+    engine = winder.WindingNumberEngine(points_torch, scaled_normals_torch)
+    torch.cuda.synchronize()
+    print(f"Building engine took {time() - t0} sec")
+    t0 = time()
+    wn = engine.compute(queries_torch)
+    torch.cuda.synchronize()
+    print(f"Computing winding numbers took {time() - t0} sec")
+
+    print("Backward:")
     t0 = time()
     gt_grads = torch.from_dlpack(
-        winder.brute_force_gradients(grad_output, points_torch, scaled_normals_torch, queries_torch, epsilon = 1/inv_epsilon)
+        winder.brute_force_gradients(
+            grad_output,
+            points_torch,
+            scaled_normals_torch,
+            queries_torch,
+            epsilon=1 / inv_epsilon,
+        )
     )
     torch.cuda.synchronize()
-    print(f"Brute Force took {time()-t0} sec")
+    print(f"Brute Force took {time() - t0} sec")
 
     t0 = time()
     grad_engine = winder.GradientEngine(queries_torch, grad_output)
     torch.cuda.synchronize()
-    print(f"Building engine took {time()-t0} sec")
+    print(f"Building engine took {time() - t0} sec")
 
     t0 = time()
-    grads = torch.from_dlpack(grad_engine.compute(points_torch, scaled_normals_torch,epsilon=1/inv_epsilon))
+    grads = torch.from_dlpack(
+        grad_engine.compute(
+            points_torch, scaled_normals_torch, epsilon=1 / inv_epsilon, beta=-1 if beta is None else beta
+        )
+    )
     torch.cuda.synchronize()
-    print(f"Fast Grads took {time()-t0} sec")
+    print(f"Fast Grads took {time() - t0} sec")
 
     validate_gradients(grads.cpu().numpy(), gt_grads.cpu().numpy(), "PointNormal")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -209,6 +258,11 @@ if __name__ == "__main__":
         default=250.0,
         help="Inverse regularization scale for PointNormal surfels",
     )
+    parser.add_argument(
+        "--beta",
+        type=float,
+        help="How much to approximate",
+    )
 
     args = parser.parse_args()
 
@@ -226,12 +280,10 @@ if __name__ == "__main__":
             args.query_mode,
             args.query_count,
             args.inv_epsilon,
+            args.beta,
         )
 
     if args.geometry_type in ["Triangle", "both"]:
         test_triangle_gradients(
-            vertices,
-            indices,
-            args.query_mode,
-            args.query_count,
+            vertices, indices, args.query_mode, args.query_count, args.beta
         )

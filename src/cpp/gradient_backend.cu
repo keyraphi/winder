@@ -68,9 +68,6 @@ GradientBackend::GradientBackend(size_t query_count, int device_id)
   CUDA_CHECK(cudaMallocAsync(
       &m_tailor_coefficients,
       max_bvh8_nodes * sizeof(BackwardTaylorCoefficientsF16), m_build_stream));
-  CUDA_CHECK(cudaMallocAsync(&m_leaf_coefficients,
-                             leaf_count * sizeof(BackwardTaylorCoefficientsF16),
-                             m_build_stream));
   CUDA_CHECK(cudaMallocAsync(&m_bvh8_leaf_pointers,
                              max_bvh8_nodes * sizeof(LeafPointers),
                              m_build_stream));
@@ -98,9 +95,6 @@ GradientBackend::~GradientBackend() {
   }
   if (m_tailor_coefficients) {
     CUDA_CHECK(cudaFreeAsync(m_tailor_coefficients, m_build_stream));
-  }
-  if (m_leaf_coefficients) {
-    CUDA_CHECK(cudaFreeAsync(m_leaf_coefficients, m_build_stream));
   }
   if (m_bvh8_leaf_pointers) {
     CUDA_CHECK(cudaFreeAsync(m_bvh8_leaf_pointers, m_build_stream));
@@ -160,13 +154,19 @@ void GradientBackend::init(const float *queries, const float *grad_outputs) {
                         leaf_count, m_build_stream);
   CUDA_CHECK(cudaFreeAsync(leaf_morton_codes, m_build_stream));
 
+  // allocate leaf coefficients
+  BackwardTaylorCoefficientsF16 *leaf_coefficients;
+  CUDA_CHECK(cudaMallocAsync(&leaf_coefficients,
+                             leaf_count * sizeof(BackwardTaylorCoefficientsF16),
+                             m_build_stream));
   // initialize the atomic weights to 0
   float *atomic_weights;
+  
   CUDA_CHECK(cudaMallocAsync(&atomic_weights, (leaf_count - 1) * sizeof(float),
                              m_build_stream));
   thrust::fill_n(build_stream_policy, atomic_weights, leaf_count - 1, 0.F);
   populate_binary_tree_aabb_and_leaf_coefficients_backward(
-      m_sorted_queries, m_sorted_grad_outputs, m_leaf_coefficients, leaf_count,
+      m_sorted_queries, m_sorted_grad_outputs, leaf_coefficients, leaf_count,
       binary_nodes, m_binary_aabbs, binary_parents, atomic_weights,
       m_query_count, m_build_stream);
   CUDA_CHECK(cudaFreeAsync(binary_parents, m_build_stream));
@@ -241,11 +241,12 @@ void GradientBackend::init(const float *queries, const float *grad_outputs) {
                              m_build_stream));
   compute_internal_tailor_coefficients_m2m_backward(
       m_bvh8_nodes, bvh8_internal_parent_map, m_binary_aabbs + leaf_count - 1,
-      m_leaf_coefficients, bvh8_leaf_parents, m_bvh8_leaf_pointers,
+      leaf_coefficients, bvh8_leaf_parents, m_bvh8_leaf_pointers,
       m_tailor_coefficients, m2m_f32_coefficients, bvh8_nodes_child_count,
       leaf_count, atomic_counters, m_build_stream);
 
   CUDA_CHECK(cudaFreeAsync(m2m_f32_coefficients, m_build_stream));
+  CUDA_CHECK(cudaFreeAsync(leaf_coefficients, m_build_stream));
   CUDA_CHECK(cudaFreeAsync(atomic_counters, m_build_stream));
   CUDA_CHECK(cudaFreeAsync(bvh8_internal_parent_map, m_build_stream));
   CUDA_CHECK(cudaFreeAsync(bvh8_leaf_parents, m_build_stream));
@@ -316,7 +317,6 @@ auto GradientBackend::compute(const float *points, const float *scaled_normals,
       m_bvh8_nodes,
       m_bvh8_leaf_pointers,
       m_tailor_coefficients,
-      m_leaf_coefficients,
       m_binary_aabbs + leaf_count - 1,
       SoAView<Vec3>{m_sorted_queries, m_query_count},
       m_sorted_grad_outputs,
@@ -393,7 +393,6 @@ auto GradientBackend::compute(const float *triangles_float,
       m_bvh8_nodes,
       m_bvh8_leaf_pointers,
       m_tailor_coefficients,
-      m_leaf_coefficients,
       m_binary_aabbs + leaf_count - 1,
       SoAView<Vec3>{m_sorted_queries, m_query_count},
       m_sorted_grad_outputs,

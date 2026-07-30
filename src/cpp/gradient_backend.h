@@ -38,7 +38,6 @@ private:
   uint32_t *m_bvh8_node_count;
   BVH8Node *m_bvh8_nodes;
   BackwardTaylorCoefficientsF16 *m_tailor_coefficients;
-  BackwardTaylorCoefficientsF16 *m_leaf_coefficients;
   LeafPointers *m_bvh8_leaf_pointers;
 
   cudaEvent_t m_tree_construction_finished_event;

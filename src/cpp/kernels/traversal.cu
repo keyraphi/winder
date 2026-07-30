@@ -454,7 +454,6 @@ struct PointNormalGradientKernelParams {
   const BVH8Node *bvh8_nodes;
   const LeafPointers *bvh8_leaf_pointers;
   const BackwardTaylorCoefficientsF16 *node_coefficients;
-  const BackwardTaylorCoefficientsF16 *leaf_coefficients;
   const AABB *leaf_aabbs;
   const float *sorted_grad_outputs;
   float *gradients;
@@ -614,8 +613,8 @@ __global__ void __launch_bounds__(128) compute_point_normal_gradient_kernel(
         if (child_type == ChildType::LEAF) {
           uint32_t leaf_idx = shared_leaf_ptrs[warp_id].indices[child_idx];
 
-          uint32_t detailed_leaf_evaluation_mask = __ballot_sync(
-              0xFFFFFFFF, is_still_active);
+          uint32_t detailed_leaf_evaluation_mask =
+              __ballot_sync(0xFFFFFFFF, is_still_active);
 
           if (detailed_leaf_evaluation_mask == 0) {
             // leaf contribution was approximated by all interested threads.
@@ -747,7 +746,6 @@ void compute_point_normal_gradients(
       .bvh8_nodes = params.bvh8_nodes,
       .bvh8_leaf_pointers = params.bvh8_leaf_pointers,
       .node_coefficients = params.node_coefficients,
-      .leaf_coefficients = params.leaf_coefficients,
       .leaf_aabbs = params.leaf_aabbs,
       .sorted_grad_outputs = params.sorted_grad_outputs,
       .gradients = params.gradients,
@@ -818,7 +816,6 @@ struct TriangleGradientKernelParams {
   const BVH8Node *bvh8_nodes;
   const LeafPointers *bvh8_leaf_pointers;
   const BackwardTaylorCoefficientsF16 *node_coefficients;
-  const BackwardTaylorCoefficientsF16 *leaf_coefficients;
   const AABB *leaf_aabbs;
   const float *sorted_grad_outputs;
   float *gradients;
@@ -982,8 +979,8 @@ __global__ void __launch_bounds__(128, 4) compute_triangle_gradient_kernel(
         if (child_type == ChildType::LEAF) {
           uint32_t leaf_idx = shared_leaf_ptrs[warp_id].indices[child_idx];
 
-          uint32_t detailed_leaf_evaluation_mask = __ballot_sync(
-              0xFFFFFFFF, is_still_active);
+          uint32_t detailed_leaf_evaluation_mask =
+              __ballot_sync(0xFFFFFFFF, is_still_active);
 
           if (detailed_leaf_evaluation_mask == 0) {
             // leaf contribution was approximated by all interested threads.
@@ -1096,7 +1093,6 @@ void compute_triangle_gradients(const ComputeGradientsTriangleParams &params,
       .bvh8_nodes = params.bvh8_nodes,
       .bvh8_leaf_pointers = params.bvh8_leaf_pointers,
       .node_coefficients = params.node_coefficients,
-      .leaf_coefficients = params.leaf_coefficients,
       .leaf_aabbs = params.leaf_aabbs,
       .sorted_grad_outputs = params.sorted_grad_outputs,
       .gradients = params.gradients,

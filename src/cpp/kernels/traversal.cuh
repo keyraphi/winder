@@ -36,7 +36,6 @@ struct ComputeGradientsPointNormalParams {
   const BVH8Node *bvh8_nodes;
   const LeafPointers *bvh8_leaf_pointers;
   const BackwardTaylorCoefficientsF16 *node_coefficients;
-  const BackwardTaylorCoefficientsF16 *leaf_coefficients;
   const AABB *leaf_aabbs;
   const SoAView<Vec3> sorted_queries;
   const float* sorted_grad_outputs;
@@ -58,7 +57,6 @@ struct ComputeGradientsTriangleParams {
   const BVH8Node *bvh8_nodes;
   const LeafPointers *bvh8_leaf_pointers;
   const BackwardTaylorCoefficientsF16 *node_coefficients;
-  const BackwardTaylorCoefficientsF16 *leaf_coefficients;
   const AABB *leaf_aabbs;
   const SoAView<Vec3> sorted_queries;
   const float* sorted_grad_outputs;
