@@ -43,7 +43,7 @@ void populate_binary_tree_aabb_and_leaf_coefficients(
 void populate_binary_tree_aabb_and_leaf_coefficients_backward(
     const float *__restrict__ sorted_queries,
     const float *__restrict__ sorted_grad_outputs,
-    BackwardTaylorCoefficientsF16 *leaf_coefficients, uint32_t leaf_count,
+    BackwardTaylorCoefficients *leaf_coefficients, uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, float *atomic_counters,
     uint32_t query_count, const cudaStream_t &stream);

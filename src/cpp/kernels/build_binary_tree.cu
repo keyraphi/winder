@@ -36,18 +36,11 @@ __global__ void __launch_bounds__(256)
   const uint32_t src_idx = indices[idx];
   const float *query_src_ptr = queries_aos + static_cast<size_t>(src_idx) * 3;
 
-  // batch reads together
-  const size_t float_count = 3; // Vec3 has 3 floats
-  float values[float_count];
-#pragma unroll
-  for (uint32_t i = 0; i < 3; ++i) {
-    values[i] = query_src_ptr[i];
-  }
+  constexpr size_t float_count = 3; // Vec3 has 3 floats
 
-// write into the SoA coalesced
 #pragma unroll
   for (uint32_t i = 0; i < float_count; ++i) {
-    out_queries_soa[i * count + idx] = values[i];
+    out_queries_soa[i * count + idx] = query_src_ptr[i];
   }
 
   sorted_grad_outputs[idx] = grad_outputs_aos[src_idx];
@@ -328,8 +321,8 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_kernel(
     center_of_mass = geometry.centroid();
     weight = geometry.get_weight();
   } else {
-    geometry_aabb.min = Vec3{1e38F, 1e38F, 1e38F};
-    geometry_aabb.max = Vec3{-1e38F, -1e38F, -1e38F};
+    geometry_aabb.min = Vec3_f16{65504.F, 65504.F, 65504.F};
+    geometry_aabb.max = Vec3_f16{-65504.F, -65504.F, -65504.F};
     center_of_mass = Vec3{0.F, 0.F, 0.F};
     weight = 0.F;
   }
@@ -517,7 +510,7 @@ void populate_binary_tree_aabb_and_leaf_coefficients(
 __global__ void populate_binary_tree_aabb_and_leaf_coefficients_backward_kernel(
     const SoAView<Vec3> sorted_queries,
     const float *__restrict__ sorted_grad_outputs,
-    BackwardTaylorCoefficientsF16 *leaf_coefficients, const uint32_t leaf_count,
+    BackwardTaylorCoefficients *leaf_coefficients, const uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, float *atomic_weights,
     const uint32_t query_count) {
@@ -541,8 +534,8 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_backward_kernel(
     center_of_mass = query.centroid();
     weight = 1.F;
   } else {
-    query_aabb.min = Vec3{1e38F, 1e38F, 1e38F};
-    query_aabb.max = Vec3{-1e38F, -1e38F, -1e38F};
+    query_aabb.min = Vec3_f16{65504.F, 65504.F, 65504.F};
+    query_aabb.max = Vec3_f16{65504.F, 65504.F, 65504.F};
     center_of_mass = Vec3{0.F, 0.F, 0.F};
     weight = 0.F;
   }
@@ -592,7 +585,7 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_backward_kernel(
   // Compute backward tailor coefficients
   float zero_order = 0.F;
   Vec3 first_order = Vec3::zero();
-  Mat3x3 second_order = Mat3x3::zero();
+  SymMat3x3 second_order = SymMat3x3::zero();
 
   // Zero order
   //\sum_{i=1}^m g_i
@@ -605,7 +598,7 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_backward_kernel(
   if (query_idx < query_count) {
     zero_order = sorted_grad_outputs[query_idx];
     first_order = zero_order * (query - center_of_mass);
-    second_order = first_order.outer_product(query - center_of_mass);
+    second_order = zero_order * (query - center_of_mass).tensor_square();
   }
 
   // aggregate zero order
@@ -698,7 +691,7 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_backward_kernel(
 void populate_binary_tree_aabb_and_leaf_coefficients_backward(
     const float *__restrict__ sorted_queries,
     const float *__restrict__ sorted_grad_outputs,
-    BackwardTaylorCoefficientsF16 *leaf_coefficients, const uint32_t leaf_count,
+    BackwardTaylorCoefficients *leaf_coefficients, const uint32_t leaf_count,
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, float *atomic_counters,
     const uint32_t query_count, const cudaStream_t &stream) {

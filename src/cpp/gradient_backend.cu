@@ -17,10 +17,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <cuda_device_runtime_api.h>
+#include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
 #include <device_atomic_functions.h>
 #include <driver_types.h>
+#include <format>
+#include <queue>
+#include <string>
 #include <thrust/copy.h>
 #include <thrust/detail/raw_pointer_cast.h>
 #include <thrust/detail/vector_base.h>
@@ -39,6 +43,7 @@
 #include <thrust/sort.h>
 #include <thrust/system/cuda/detail/execution_policy.h>
 #include <thrust/transform.h>
+#include <vector>
 
 #define LEAF_SIZE 32
 
@@ -66,8 +71,8 @@ GradientBackend::GradientBackend(size_t query_count, int device_id)
   CUDA_CHECK(cudaMallocAsync(&m_bvh8_nodes, max_bvh8_nodes * sizeof(BVH8Node),
                              m_build_stream));
   CUDA_CHECK(cudaMallocAsync(
-      &m_tailor_coefficients,
-      max_bvh8_nodes * sizeof(BackwardTaylorCoefficientsF16), m_build_stream));
+      &m_taylor_coefficients,
+      max_bvh8_nodes * sizeof(BackwardTaylorCoefficients), m_build_stream));
   CUDA_CHECK(cudaMallocAsync(&m_bvh8_leaf_pointers,
                              max_bvh8_nodes * sizeof(LeafPointers),
                              m_build_stream));
@@ -93,8 +98,8 @@ GradientBackend::~GradientBackend() {
   if (m_bvh8_nodes) {
     CUDA_CHECK(cudaFreeAsync(m_bvh8_nodes, m_build_stream));
   }
-  if (m_tailor_coefficients) {
-    CUDA_CHECK(cudaFreeAsync(m_tailor_coefficients, m_build_stream));
+  if (m_taylor_coefficients) {
+    CUDA_CHECK(cudaFreeAsync(m_taylor_coefficients, m_build_stream));
   }
   if (m_bvh8_leaf_pointers) {
     CUDA_CHECK(cudaFreeAsync(m_bvh8_leaf_pointers, m_build_stream));
@@ -115,9 +120,8 @@ void GradientBackend::init(const float *queries, const float *grad_outputs) {
   uint64_t *query_morton_codes;
   CUDA_CHECK(cudaMallocAsync(&query_morton_codes,
                              m_query_count * sizeof(uint64_t), m_build_stream));
-  initializeMortonCodes(queries_v3, query_morton_codes, m_query_count,
-                        m_build_stream);
-
+  initializeMortonCodes<Vec3>(queries_v3, query_morton_codes, m_query_count,
+                              m_build_stream);
   // sort by morton codes
   thrust::sequence(build_stream_policy, m_to_internal,
                    m_to_internal + m_query_count);
@@ -126,13 +130,13 @@ void GradientBackend::init(const float *queries, const float *grad_outputs) {
                       query_morton_codes + m_query_count, m_to_internal);
 
   gather_queries_and_grad_outputs_soa(queries, grad_outputs, m_to_internal,
-                                     m_sorted_queries, m_sorted_grad_outputs,
-                                     m_query_count, m_build_stream);
+                                      m_sorted_queries, m_sorted_grad_outputs,
+                                      m_query_count, m_build_stream);
 
   auto morton_leaf_stride_idx = thrust::make_transform_iterator(
       thrust::make_counting_iterator<uint64_t>(0),
       [] __host__ __device__(uint32_t i) -> uint64_t { return i * LEAF_SIZE; });
-  // thrust::make_strided_iterator<LEAF_SIZE>(geometry_morton_codes.begin());
+  // thrust::make_strided_iterator<LEAF_SIZE>(query_morton_codes.begin());
   auto morton_leaf_stride = thrust::make_permutation_iterator(
       query_morton_codes, morton_leaf_stride_idx);
   uint64_t *leaf_morton_codes;
@@ -155,13 +159,13 @@ void GradientBackend::init(const float *queries, const float *grad_outputs) {
   CUDA_CHECK(cudaFreeAsync(leaf_morton_codes, m_build_stream));
 
   // allocate leaf coefficients
-  BackwardTaylorCoefficientsF16 *leaf_coefficients;
+  BackwardTaylorCoefficients *leaf_coefficients;
   CUDA_CHECK(cudaMallocAsync(&leaf_coefficients,
-                             leaf_count * sizeof(BackwardTaylorCoefficientsF16),
+                             leaf_count * sizeof(BackwardTaylorCoefficients),
                              m_build_stream));
   // initialize the atomic weights to 0
   float *atomic_weights;
-  
+
   CUDA_CHECK(cudaMallocAsync(&atomic_weights, (leaf_count - 1) * sizeof(float),
                              m_build_stream));
   thrust::fill_n(build_stream_policy, atomic_weights, leaf_count - 1, 0.F);
@@ -235,17 +239,12 @@ void GradientBackend::init(const float *queries, const float *grad_outputs) {
   CUDA_CHECK(cudaMallocAsync(
       &atomic_counters, (leaf_count - 1) * sizeof(uint32_t), m_build_stream));
   thrust::fill_n(build_stream_policy, atomic_counters, leaf_count - 1, 0);
-  BackwardTailorCoefficients *m2m_f32_coefficients;
-  CUDA_CHECK(cudaMallocAsync(&m2m_f32_coefficients,
-                             max_bvh8_nodes * sizeof(TailorCoefficients),
-                             m_build_stream));
   compute_internal_tailor_coefficients_m2m_backward(
       m_bvh8_nodes, bvh8_internal_parent_map, m_binary_aabbs + leaf_count - 1,
       leaf_coefficients, bvh8_leaf_parents, m_bvh8_leaf_pointers,
-      m_tailor_coefficients, m2m_f32_coefficients, bvh8_nodes_child_count,
+      m_taylor_coefficients, bvh8_nodes_child_count,
       leaf_count, atomic_counters, m_build_stream);
 
-  CUDA_CHECK(cudaFreeAsync(m2m_f32_coefficients, m_build_stream));
   CUDA_CHECK(cudaFreeAsync(leaf_coefficients, m_build_stream));
   CUDA_CHECK(cudaFreeAsync(atomic_counters, m_build_stream));
   CUDA_CHECK(cudaFreeAsync(bvh8_internal_parent_map, m_build_stream));
@@ -316,7 +315,7 @@ auto GradientBackend::compute(const float *points, const float *scaled_normals,
       geometry_to_internal,
       m_bvh8_nodes,
       m_bvh8_leaf_pointers,
-      m_tailor_coefficients,
+      m_taylor_coefficients,
       m_binary_aabbs + leaf_count - 1,
       SoAView<Vec3>{m_sorted_queries, m_query_count},
       m_sorted_grad_outputs,
@@ -392,7 +391,7 @@ auto GradientBackend::compute(const float *triangles_float,
       geometry_to_internal,
       m_bvh8_nodes,
       m_bvh8_leaf_pointers,
-      m_tailor_coefficients,
+      m_taylor_coefficients,
       m_binary_aabbs + leaf_count - 1,
       SoAView<Vec3>{m_sorted_queries, m_query_count},
       m_sorted_grad_outputs,
@@ -440,5 +439,234 @@ auto GradientBackend::compute(const float *vertices,
   // TODO sum up the contributions to the vertices
   CudaUniquePtr<float> result(
       vertex_gradients, CudaDeleter{reinterpret_cast<size_t>(compute_stream)});
+  return result;
+}
+
+auto GradientBackend::dump() const -> std::string {
+  // Edge Case 1: No geometry at all
+  if (m_query_count == 0) {
+    return "digraph BVH8 {\n}\n";
+  }
+
+  std::string result = "digraph BVH8 {\n";
+  result += "  node [fontname=\"Arial\", fontsize=10];\n";
+  result += "  rankdir=TB;\n\n";
+
+  // Edge Case 2: Only a single leaf exists (No internal nodes)
+  if (m_query_count <= LEAF_SIZE) {
+    std::vector<AABB> leaf_aabbs(1);
+    CUDA_CHECK(cudaMemcpy(leaf_aabbs.data(), m_binary_aabbs, sizeof(AABB),
+                          cudaMemcpyDeviceToHost));
+
+    std::vector<Vec3> queries(m_query_count);
+    CUDA_CHECK(cudaMemcpy(queries.data(), m_sorted_queries,
+                          m_query_count * sizeof(Vec3),
+                          cudaMemcpyDeviceToHost));
+    SoAView<Vec3> query_view{reinterpret_cast<float *>(queries.data()),
+                             m_query_count};
+
+    AABB leaf_aabb = leaf_aabbs[0];
+    Vec3 leaf_com = leaf_aabb.center_of_mass;
+
+    result += "  L0 [shape=none, label=<\n";
+    result += "    <TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\" "
+              "CELLPADDING=\"4\" BGCOLOR=\"#eaffea\">\n";
+    result += "      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#4CAF50\"><B><FONT "
+              "COLOR=\"white\">LEAF 0 (Root Leaf)</FONT></B></TD></TR>\n";
+    result +=
+        std::format("      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#c8e6c9\"><I>CoM: "
+                    "({:.4f}, {:.4f}, {:.4f})</I></TD></TR>\n",
+                    leaf_com.x, leaf_com.y, leaf_com.z);
+    result += std::format(
+        "      <TR><TD COLSPAN=\"4\"><FONT POINT-SIZE=\"9\">AABB "
+        "Min: ({:.3f}, {:.3f}, {:.3f})<BR/>AABB Max: ({:.3f}, "
+        "{:.3f}, {:.3f})</FONT></TD></TR>\n",
+        __half2float(leaf_aabb.min.x), __half2float(leaf_aabb.min.y),
+        __half2float(leaf_aabb.min.z), __half2float(leaf_aabb.max.x),
+        __half2float(leaf_aabb.max.y), __half2float(leaf_aabb.max.z));
+
+    // Append child geometry primitives using SoA view
+    for (size_t q_id = 0; q_id < m_query_count; q_id++) {
+      const Vec3 &q = Vec3::load(query_view, q_id, m_query_count);
+      result += std::format(
+          "      <TR><TD>P{}</TD><TD COLSPAN=\"3\" ALIGN=\"LEFT\"><FONT "
+          "POINT-SIZE=\"9\">{}</FONT></TD></TR>\n",
+          q_id, q.dump());
+    }
+    result += "    </TABLE>>];\n}\n";
+    return result;
+  }
+
+  // --- Standard BVH8 Multi-Node Multi-Leaf Gathering ---
+  uint32_t node_count = 0;
+  CUDA_CHECK(cudaMemcpy(&node_count, m_bvh8_node_count, sizeof(uint32_t),
+                        cudaMemcpyDeviceToHost));
+
+  std::vector<BVH8Node> bvh8_nodes(node_count);
+  CUDA_CHECK(cudaMemcpy(bvh8_nodes.data(), m_bvh8_nodes,
+                        sizeof(BVH8Node) * node_count, cudaMemcpyDeviceToHost));
+
+  uint32_t leaf_count = (m_query_count + LEAF_SIZE - 1) / LEAF_SIZE;
+  std::vector<AABB> leaf_aabbs(leaf_count);
+  CUDA_CHECK(cudaMemcpy(leaf_aabbs.data(), m_binary_aabbs + leaf_count - 1,
+                        sizeof(AABB) * leaf_count, cudaMemcpyDeviceToHost));
+
+  std::vector<Vec3> queries(m_query_count);
+  CUDA_CHECK(cudaMemcpy(queries.data(), m_sorted_queries,
+                        m_query_count * sizeof(Vec3), cudaMemcpyDeviceToHost));
+  SoAView<Vec3> geometry_view{reinterpret_cast<float *>(queries.data()),
+                              m_query_count};
+
+  std::vector<LeafPointers> leaf_pointers(node_count);
+  CUDA_CHECK(cudaMemcpy(leaf_pointers.data(), m_bvh8_leaf_pointers,
+                        node_count * sizeof(LeafPointers),
+                        cudaMemcpyDeviceToHost));
+
+  // Pull unpacked values into your local host stack tracking vector
+  std::vector<BackwardTaylorCoefficients> node_coefficients(node_count);
+  CUDA_CHECK(cudaMemcpy(node_coefficients.data(), m_taylor_coefficients,
+                        sizeof(BackwardTaylorCoefficients) * node_count,
+                        cudaMemcpyDeviceToHost));
+
+  // Breadth-First Search (BFS) matching your visualization layout
+  std::queue<uint32_t> queue;
+  queue.push(0); // Start at Root Internal Node
+  int empty_counter = 0;
+
+  while (!queue.empty()) {
+    uint32_t current_id = queue.front();
+    queue.pop();
+
+    const BVH8Node &current_node = bvh8_nodes[current_id];
+    BackwardTaylorCoefficients node_coeff = node_coefficients[current_id];
+    AABB aabb = current_node.getAABB();
+    Vec3 node_com = aabb.center_of_mass;
+
+    // 1. Render Internal Node Layout Block
+    result += std::format("  N{} [shape=none, label=<\n", current_id);
+    result += "    <TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\" "
+              "CELLPADDING=\"4\" BGCOLOR=\"#f0faff\">\n";
+    result +=
+        std::format("      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#2196F3\"><B><FONT "
+                    "COLOR=\"white\">NODE {}</FONT></B></TD></TR>\n",
+                    current_id);
+    result +=
+        std::format("      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#bbdefb\"><I>CoM: "
+                    "({:.4f}, {:.4f}, {:.4f})</I></TD></TR>\n",
+                    node_com.x, node_com.y, node_com.z);
+    result += std::format(
+        "      <TR><TD COLSPAN=\"4\"><FONT POINT-SIZE=\"9\">AABB Min: ({:.3f}, "
+        "{:.3f}, {:.3f})<BR/>AABB Max: ({:.3f}, {:.3f}, "
+        "{:.3f})</FONT></TD></TR>\n",
+        __half2float(aabb.min.x), __half2float(aabb.min.y),
+        __half2float(aabb.min.z), __half2float(aabb.max.x),
+        __half2float(aabb.max.y), __half2float(aabb.max.z));
+
+    // Render Internal Node Taylor Expansion Blocks
+    result += std::format("      <TR><TD BGCOLOR=\"#bbdefb\"><B>1st "
+                          "Order</B></TD><TD>{:.4f}</TD></TR>\n",
+                          node_coeff.zero_order);
+    result += std::format(
+        "      <TR><TD BGCOLOR=\"#bbdefb\"><B>1st "
+        "Order</B></TD><TD>{:.4f}</TD><TD>{:.4f}</TD><TD>{:.4f}</TD></TR>\n",
+        node_coeff.first_order.x, node_coeff.first_order.y,
+        node_coeff.first_order.z);
+
+    result += "      <TR><TD ROWSPAN=\"3\" BGCOLOR=\"#bbdefb\"><B>2nd "
+              "Order</B></TD>\n";
+    Mat3x3 second_order = Mat3x3::from_sym(node_coeff.second_order);
+    for (int r = 0; r < 3; ++r) {
+      if (r > 0)
+        result += "      <TR>\n";
+      result += std::format(
+          "        <TD>{:.4f}</TD><TD>{:.4f}</TD><TD>{:.4f}</TD></TR>\n",
+          node_coeff.second_order.data[r * 3 + 0],
+          node_coeff.second_order.data[r * 3 + 1],
+          node_coeff.second_order.data[r * 3 + 2]);
+    }
+    result += "    </TABLE>>];\n";
+
+    // 2. Parse Child Pointers Sequentially
+    uint32_t child_base = current_node.child_base;
+    uint32_t child_offset = 0;
+    LeafPointers current_leaf_pointers = leaf_pointers[current_id];
+
+    for (size_t child_id = 0; child_id < 8; child_id++) {
+      ChildType child_type = current_node.getChildMeta(child_id);
+      switch (child_type) {
+      case ChildType::INTERNAL: {
+        uint32_t next_idx = child_offset++ + child_base;
+        queue.push(next_idx);
+        result += std::format("  N{} -> N{} [label=\"{}\", weight=3];\n",
+                              current_id, next_idx, child_id);
+        break;
+      }
+      case ChildType::LEAF: {
+        uint32_t l_id = current_leaf_pointers.indices[child_id];
+        AABB leaf_aabb = leaf_aabbs[l_id];
+
+        Vec3 leaf_com = leaf_aabb.center_of_mass;
+
+        // Render Leaf Block
+        result += std::format("  L{} [shape=none, label=<\n", l_id);
+        result += "    <TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\" "
+                  "CELLPADDING=\"4\" BGCOLOR=\"#eaffea\">\n";
+        result += std::format(
+            "      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#4CAF50\"><B><FONT "
+            "COLOR=\"white\">LEAF {}</FONT></B></TD></TR>\n",
+            l_id);
+        result += std::format(
+            "      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#c8e6c9\"><I>CoM: ({:.4f}, "
+            "{:.4f}, {:.4f})</I></TD></TR>\n",
+            leaf_com.x, leaf_com.y, leaf_com.z);
+
+        // Box Dimension Comparison (Reconstructed Compression vs True Bounds)
+        result += std::format(
+            "      <TR><TD COLSPAN=\"4\"><FONT POINT-SIZE=\"9\" "
+            "COLOR=\"#333333\">"
+            "AABB Min: ({:.2f}, {:.2f}, {:.2f}) Max: ({:.2f}, {:.2f}, {:.2f})"
+            "</FONT></TD></TR>\n",
+            __half2float(leaf_aabb.min.x), __half2float(leaf_aabb.min.y),
+            __half2float(leaf_aabb.min.z), __half2float(leaf_aabb.max.x),
+            __half2float(leaf_aabb.max.y), __half2float(leaf_aabb.max.z));
+
+        // Extract and render local SoA query points bounded by the leaf
+        result += std::format(
+            "      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#c8e6c9\"><I>Geometry (Max "
+            "{} Packets)</I></TD></TR>\n",
+            LEAF_SIZE);
+        size_t g_off = l_id * LEAF_SIZE;
+        for (size_t g_id = 0; g_id < LEAF_SIZE; g_id++) {
+          size_t global_idx = g_off + g_id;
+          if (global_idx >= m_query_count)
+            break;
+
+          const Vec3 &q = Vec3::load(geometry_view, global_idx, m_query_count);
+          result += std::format(
+              "      <TR><TD>Q{}</TD><TD COLSPAN=\"3\" ALIGN=\"LEFT\"><FONT "
+              "POINT-SIZE=\"8\">{}</FONT></TD></TR>\n",
+              g_id, q.dump());
+        }
+
+        result += "    </TABLE>>];\n";
+        result += std::format(
+            "  N{} -> L{} [label=\"{}\", color=\"#4CAF50\", penwidth=2];\n",
+            current_id, l_id, child_id);
+        break;
+      }
+      case ChildType::EMPTY: {
+        int e_id = empty_counter++;
+        result +=
+            std::format("  E{} [label=\"\", shape=point, color=gray];\n", e_id);
+        result += std::format(
+            "  N{} -> E{} [style=dotted, color=gray, arrowhead=none];\n",
+            current_id, e_id);
+        break;
+      }
+      }
+    }
+  }
+
+  result += "}\n";
   return result;
 }

@@ -17,14 +17,14 @@ struct alignas(64) TaylorCoefficientsF16 {
 
 // For m2m
 // 120 byte aligned to 128 bytes
-struct alignas(128) TailorCoefficients {
+struct alignas(128) TaylorCoefficients {
   Vec3 zero_order;
   Mat3x3 first_order;
   Tensor3_compressed second_order;
 
   __host__ __device__ static auto from_f16(const TaylorCoefficientsF16 &t)
-      -> TailorCoefficients {
-    TailorCoefficients result;
+      -> TaylorCoefficients {
+    TaylorCoefficients result;
     result.zero_order = Vec3::from_f16(t.zero_order);
     result.first_order = Mat3x3::from_f16(t.first_order);
     result.second_order = Tensor3_compressed::from_f16(t.second_order);
@@ -33,27 +33,9 @@ struct alignas(128) TailorCoefficients {
 };
 
 // ###### BACKWARD ########################
-// 26 byte content aligned to 32 byte
-struct alignas(32) BackwardTaylorCoefficientsF16 {
-  Mat3x3_bf16 second_order; // 20
-  Vec3_f16 first_order; // 8
-  half zero_order; // 2
-};
-
-// For m2m
-// 53 byte aligned to 64 byte
-struct alignas(64) BackwardTailorCoefficients {
+// 40 byte
+struct BackwardTaylorCoefficients {
   float zero_order;
   Vec3 first_order;
-  Mat3x3 second_order;
-
-  __host__ __device__ static auto
-  from_f16(const BackwardTaylorCoefficientsF16 &t)
-      -> BackwardTailorCoefficients {
-    BackwardTailorCoefficients result;
-    result.zero_order = __half2float(t.zero_order);
-    result.first_order = Vec3::from_f16(t.first_order);
-    result.second_order = Mat3x3::from_bf16(t.second_order);
-    return result;
-  }
+  SymMat3x3 second_order;
 };

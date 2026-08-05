@@ -6,6 +6,8 @@
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime_api.h>
+#include <format>
+#include <string>
 #include <vector_types.h>
 
 struct Vec3;
@@ -428,6 +430,17 @@ struct Vec3 {
     m.data[8] = z * b.z;
     return m;
   }
+  __host__ __device__ __forceinline__ auto tensor_square() const -> SymMat3x3 {
+    // Outer product with itself
+    SymMat3x3 m;
+    m.data[0] = x*x;
+    m.data[1] = x*y;
+    m.data[2] = x*z;
+    m.data[3] = y*y;
+    m.data[4] = y*z;
+    m.data[5] = z*z;
+    return m;
+  }
   __host__ __device__ __forceinline__ friend auto operator*(const Mat3x3 &lhs,
                                                             const Vec3 &v)
       -> Vec3 {
@@ -435,6 +448,15 @@ struct Vec3 {
     result.x = lhs.data[0] * v.x + lhs.data[1] * v.y + lhs.data[2] * v.z;
     result.y = lhs.data[3] * v.x + lhs.data[4] * v.y + lhs.data[5] * v.z;
     result.z = lhs.data[6] * v.x + lhs.data[7] * v.y + lhs.data[8] * v.z;
+    return result;
+  }
+  __host__ __device__ __forceinline__ friend auto operator*(const SymMat3x3 &lhs,
+                                                            const Vec3 &v)
+      -> Vec3 {
+    Vec3 result;
+    result.x = lhs.data[0] * v.x + lhs.data[1] * v.y + lhs.data[2] * v.z;
+    result.y = lhs.data[1] * v.x + lhs.data[3] * v.y + lhs.data[4] * v.z;
+    result.z = lhs.data[2] * v.x + lhs.data[4] * v.y + lhs.data[5] * v.z;
     return result;
   }
   __host__ __device__ __forceinline__ static auto cross(const Vec3 &a,
@@ -448,7 +470,14 @@ struct Vec3 {
     y = __half2float(v.y);
     z = __half2float(v.z);
   }
+
+  [[nodiscard]] auto dump() const -> std::string {
+    // Returns a compact, single-line representation safe for HTML labels
+    return std::format("({:.2f}, {:.2f}, {:.2f})",
+                       x, y, z);
+  }
 };
+
 
 __host__ __device__ __forceinline__ auto Vec3_f16::operator=(const Vec3 &v)
     -> Vec3_f16 {

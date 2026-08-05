@@ -212,7 +212,7 @@ class GradientEngine {
 public:
   GradientEngine(const Vec3_t &queries, const Scalar_t &grad_output)
       : m_impl{GradientBackend(queries.shape(0), queries.device_id())} {
-        // TODO initialize after the checks, not in the constructor!
+    // TODO initialize after the checks, not in the constructor!
     if (queries.shape(0) != grad_output.shape(0)) {
       throw std::runtime_error(
           "There have to be the same number of queries as grad_output!");
@@ -223,16 +223,16 @@ public:
     }
     m_impl.init(queries.data(), grad_output.data());
   }
+
   ~GradientEngine() = default;
 
   // PointNormal
-  auto compute(const Vec3_t &points,
-               const Vec3_t &scaled_normals, float beta = -1.F,
-               float epsilon = -1.F, const uint64_t stream = 0)
-      -> GradResult_t {
-    CudaUniquePtr<float> raw_ptr_unique = m_impl.compute(
-        points.data(), scaled_normals.data(),
-        points.shape(0), beta, epsilon, stream);
+  auto compute(const Vec3_t &points, const Vec3_t &scaled_normals,
+               float beta = -1.F, float epsilon = -1.F,
+               const uint64_t stream = 0) -> GradResult_t {
+    CudaUniquePtr<float> raw_ptr_unique =
+        m_impl.compute(points.data(), scaled_normals.data(), points.shape(0),
+                       beta, epsilon, stream);
 
     CudaDeleter deleter = raw_ptr_unique.get_deleter();
     float *raw_ptr = raw_ptr_unique.release();
@@ -248,13 +248,11 @@ public:
   }
 
   // Mesh
-  auto compute(const Vec3_t &vertices,
-               const TriangleIdx_t &triangle_indices, float beta = -1.F,
-               const uint64_t stream = 0) -> GradResult_t {
+  auto compute(const Vec3_t &vertices, const TriangleIdx_t &triangle_indices,
+               float beta = -1.F, const uint64_t stream = 0) -> GradResult_t {
     CudaUniquePtr<float> raw_ptr_unique = m_impl.compute(
-        vertices.data(), triangle_indices.data(),
-        vertices.shape(0), triangle_indices.shape(0),
-        beta, stream);
+        vertices.data(), triangle_indices.data(), vertices.shape(0),
+        triangle_indices.shape(0), beta, stream);
 
     CudaDeleter deleter = raw_ptr_unique.get_deleter();
     float *raw_ptr = raw_ptr_unique.release();
@@ -269,11 +267,10 @@ public:
     return {raw_ptr, {vertices.shape(0), 3, 3}, owner};
   }
   // Triangles
-  auto compute(const Triangle_t &triangles,
-               float beta = -1.F, const uint64_t stream = 0) -> GradResult_t {
+  auto compute(const Triangle_t &triangles, float beta = -1.F,
+               const uint64_t stream = 0) -> GradResult_t {
     CudaUniquePtr<float> raw_ptr_unique =
-        m_impl.compute(triangles.data(),
-                       triangles.shape(0), beta, stream);
+        m_impl.compute(triangles.data(), triangles.shape(0), beta, stream);
 
     CudaDeleter deleter = raw_ptr_unique.get_deleter();
     float *raw_ptr = raw_ptr_unique.release();
@@ -286,6 +283,11 @@ public:
       delete g;
     });
     return {raw_ptr, {triangles.shape(0), 3, 3}, owner};
+  }
+
+  [[nodiscard]] auto dump() const -> std::string {
+    std::string result = m_impl.dump();
+    return result;
   }
 
 private:
@@ -892,5 +894,10 @@ NB_MODULE(winder_module, m) {
                     output[i, 1] represents the gradient of the loss 
                       with respect to the source positions at index i (dL/dp)
                       Calculated as: dL/dp = (dL/dw)^T * (dw/dp).
-            )doc");
+            )doc")
+
+      .def("dump", &GradientEngine::dump, nb::sig("def dump(self) -> str"),
+           R"doc(
+            Returns a detailed string representation of the internal BVH8 Tree.
+          )doc");
 }

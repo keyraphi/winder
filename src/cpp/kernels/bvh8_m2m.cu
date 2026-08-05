@@ -23,7 +23,7 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
     const AABB *leaf_aabbs, const TaylorCoefficientsF16 *leaf_coefficients,
     const uint32_t *leaf_parents, const LeafPointers *leaf_pointers,
     TaylorCoefficientsF16 *node_tailor_coefficients,
-    TailorCoefficients *m2m_f32_coefficients, const uint32_t *nodes_child_count,
+    TaylorCoefficients *m2m_f32_coefficients, const uint32_t *nodes_child_count,
     const uint32_t leaf_count, uint32_t *atomic_counters) {
 
   uint32_t leaf_idx = threadIdx.x + blockIdx.x * blockDim.x;
@@ -59,13 +59,13 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
         continue;
       }
       Vec3 child_center;
-      TailorCoefficients child_coefficients;
+      TaylorCoefficients child_coefficients;
       if (node.getChildMeta(i) == ChildType::LEAF) {
         uint32_t leaf_idx = leaf_pointers[current_node_idx].indices[i];
         const AABB &leaf_aabb = leaf_aabbs[leaf_idx];
         child_center = leaf_aabb.center_of_mass;
         child_coefficients =
-            TailorCoefficients::from_f16(leaf_coefficients[leaf_idx]);
+            TaylorCoefficients::from_f16(leaf_coefficients[leaf_idx]);
       } else {
         uint32_t child_idx = node.child_base + internal_child_count;
         internal_child_count++;
@@ -172,7 +172,7 @@ __global__ void compute_internal_tailor_coefficients_m2m_kernel(
     node_tailor_coefficients[current_node_idx].second_order = second_order;
     // store accumulated in m2m_f32_coefficients (full resolution)
     m2m_f32_coefficients[current_node_idx] =
-        TailorCoefficients{zero_order, first_order, second_order};
+        TaylorCoefficients{zero_order, first_order, second_order};
 
     __threadfence(); // ensure the tailor coefficients of childs are written
                      // before continuing with the next
@@ -185,7 +185,7 @@ void compute_internal_tailor_coefficients_m2m(
     const AABB *leaf_aabbs, const TaylorCoefficientsF16 *leaf_coefficients,
     const uint32_t *leaf_parents, const LeafPointers *leaf_pointers,
     TaylorCoefficientsF16 *node_tailor_coefficients,
-    TailorCoefficients *m2m_f32_coefficients, const uint32_t *nodes_child_count,
+    TaylorCoefficients *m2m_f32_coefficients, const uint32_t *nodes_child_count,
     const uint32_t leaf_count, uint32_t *atomic_counters,
     const cudaStream_t &stream) {
   uint32_t threads = 256;
@@ -200,11 +200,9 @@ void compute_internal_tailor_coefficients_m2m(
 
 __global__ void compute_internal_tailor_coefficients_m2m_backward_kernel(
     BVH8Node *nodes, const uint32_t *internal_parent_map,
-    const AABB *leaf_aabbs,
-    const BackwardTaylorCoefficientsF16 *leaf_coefficients,
+    const AABB *leaf_aabbs, const BackwardTaylorCoefficients *leaf_coefficients,
     const uint32_t *leaf_parents, const LeafPointers *leaf_pointers,
-    BackwardTaylorCoefficientsF16 *node_tailor_coefficients,
-    BackwardTailorCoefficients *m2m_f32_coefficients,
+    BackwardTaylorCoefficients *node_tailor_coefficients,
     const uint32_t *nodes_child_count, const uint32_t leaf_count,
     uint32_t *atomic_counters) {
 
@@ -230,7 +228,7 @@ __global__ void compute_internal_tailor_coefficients_m2m_backward_kernel(
 
     float zero_order = 0.F;
     Vec3 first_order = {0.F, 0.F, 0.F};
-    Mat3x3 second_order = {0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F};
+    SymMat3x3 second_order = {0.F, 0.F, 0.F, 0.F, 0.F, 0.F};
 
     uint32_t internal_child_count = 0;
 #pragma unroll
@@ -239,13 +237,12 @@ __global__ void compute_internal_tailor_coefficients_m2m_backward_kernel(
         continue;
       }
       Vec3 child_center;
-      BackwardTailorCoefficients child_coefficients;
+      BackwardTaylorCoefficients child_coefficients;
       if (node.getChildMeta(i) == ChildType::LEAF) {
         uint32_t leaf_idx = leaf_pointers[current_node_idx].indices[i];
         const AABB &leaf_aabb = leaf_aabbs[leaf_idx];
         child_center = leaf_aabb.center_of_mass;
-        child_coefficients =
-            BackwardTailorCoefficients::from_f16(leaf_coefficients[leaf_idx]);
+        child_coefficients = leaf_coefficients[leaf_idx];
       } else {
         uint32_t child_idx = node.child_base + internal_child_count;
         internal_child_count++;
@@ -253,7 +250,7 @@ __global__ void compute_internal_tailor_coefficients_m2m_backward_kernel(
         child_center = child_node._aabb_com;
 
         // Load the float32 coefficients (no quantization happened here)
-        child_coefficients = m2m_f32_coefficients[child_idx];
+        child_coefficients = node_tailor_coefficients[child_idx];
       }
 
       // Merge child coefficients into parent tailor by recentering child
@@ -268,7 +265,7 @@ __global__ void compute_internal_tailor_coefficients_m2m_backward_kernel(
       first_order += child_first + zero_child * shift_vector;
       // second order
       // M_2' = M_2 + M_1 (x) v + v (x) M_1 + M_0 * (v (x) v)
-      const Mat3x3 &child_second = child_coefficients.second_order;
+      const SymMat3x3 &child_second = child_coefficients.second_order;
       const float *c2 = child_second.data;
       const float vx = shift_vector.x;
       const float vy = shift_vector.y;
@@ -279,23 +276,20 @@ __global__ void compute_internal_tailor_coefficients_m2m_backward_kernel(
       const float g0 = zero_child;
 
       // We rely on nvccs CSE here
-      second_order.data[0] += c2[0] + 2.0f * g1x * vx + g0 * vx * vx;
-      second_order.data[1] += c2[1] + g1x * vy + vx * g1y + g0 * vx * vy;
-      second_order.data[2] += c2[2] + g1x * vz + vx * g1z + g0 * vx * vz;
-      second_order.data[3] += c2[3] + g1y * vx + vy * g1x + g0 * vy * vx;
-      second_order.data[4] += c2[4] + 2.0f * g1y * vy + g0 * vy * vy;
-      second_order.data[5] += c2[5] + g1y * vz + vy * g1z + g0 * vy * vz;
-      second_order.data[6] += c2[6] + g1z * vx + vz * g1x + g0 * vz * vx;
-      second_order.data[7] += c2[7] + g1z * vy + vz * g1y + g0 * vz * vy;
-      second_order.data[8] += c2[8] + 2.0f * g1z * vz + g0 * vz * vz;
+      second_order.data[0] += c2[0] + 2.0F * g1x * vx + g0 * vx * vx; // xx
+      second_order.data[1] += c2[1] + g1x * vy + vx * g1y + g0 * vx * vy; // xy
+      second_order.data[2] += c2[2] + g1x * vz + vx * g1z + g0 * vx * vz; // xz
+      // second_order.data[3] += c2[3] + g1y * vx + vy * g1x + g0 * vy * vx; // yx == xy
+      second_order.data[3] += c2[3] + 2.0F * g1y * vy + g0 * vy * vy; // yy
+      second_order.data[4] += c2[4] + g1y * vz + vy * g1z + g0 * vy * vz; // yz
+      // second_order.data[6] += c2[6] + g1z * vx + vz * g1x + g0 * vz * vx; // zx == xz
+      // second_order.data[7] += c2[7] + g1z * vy + vz * g1y + g0 * vz * vy; // zy == yz
+      second_order.data[5] += c2[5] + 2.0F * g1z * vz + g0 * vz * vz; // zz
     }
-    // store accumulated coefficients
+    // store accumulated coefficients (f32 resolution)
     node_tailor_coefficients[current_node_idx].zero_order = zero_order;
     node_tailor_coefficients[current_node_idx].first_order = first_order;
     node_tailor_coefficients[current_node_idx].second_order = second_order;
-    // store accumulated in m2m_f32_coefficients (full resolution)
-    m2m_f32_coefficients[current_node_idx] =
-        BackwardTailorCoefficients{zero_order, first_order, second_order};
 
     __threadfence(); // ensure the tailor coefficients of childs are written
                      // before continuing with the next
@@ -306,10 +300,9 @@ __global__ void compute_internal_tailor_coefficients_m2m_backward_kernel(
 void compute_internal_tailor_coefficients_m2m_backward(
     BVH8Node *nodes, const uint32_t *internal_parent_map,
     const AABB *leaf_aabbs,
-    const BackwardTaylorCoefficientsF16 *leaf_coefficients,
+    const BackwardTaylorCoefficients *leaf_coefficients,
     const uint32_t *leaf_parents, const LeafPointers *leaf_pointers,
-    BackwardTaylorCoefficientsF16 *node_tailor_coefficients,
-    BackwardTailorCoefficients *m2m_f32_coefficients,
+    BackwardTaylorCoefficients *node_tailor_coefficients,
     const uint32_t *nodes_child_count, const uint32_t leaf_count,
     uint32_t *atomic_counters, const cudaStream_t &stream) {
   uint32_t threads = 256;
@@ -317,7 +310,7 @@ void compute_internal_tailor_coefficients_m2m_backward(
   compute_internal_tailor_coefficients_m2m_backward_kernel<<<blocks, threads, 0,
                                                              stream>>>(
       nodes, internal_parent_map, leaf_aabbs, leaf_coefficients, leaf_parents,
-      leaf_pointers, node_tailor_coefficients, m2m_f32_coefficients,
+      leaf_pointers, node_tailor_coefficients,
       nodes_child_count, leaf_count, atomic_counters);
   CUDA_CHECK(cudaGetLastError());
 }

@@ -76,8 +76,8 @@ TEST(M2M, AllOrdersQuantizationAware) {
 
   for (size_t i = 0; i < leaf_count; ++i) {
     Vec3 leaf_center = leaf_aabbs_h[i].center_of_mass;
-    TailorCoefficients child_coefficients =
-        TailorCoefficients::from_f16(leaf_coeffs_f16_h[i]);
+    TaylorCoefficients child_coefficients =
+        TaylorCoefficients::from_f16(leaf_coeffs_f16_h[i]);
 
     Vec3 shift = leaf_center - root_parent_center;
     const Vec3 &zero_child = child_coefficients.zero_order;

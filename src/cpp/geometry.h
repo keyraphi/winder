@@ -15,28 +15,6 @@
 #include <string>
 #include <vector_types.h>
 
-// symmetric 3x3 matrix for tailor coefficient computation
-struct SymMat3x3 {
-  // 0:xx, 1:xy, 2:xz, 3:yy, 4:yz, 5:zz
-  float data[6];
-
-  __host__ __device__ __forceinline__ static auto zero() -> SymMat3x3 {
-    return {0.F, 0.F, 0.F, 0.F, 0.F, 0.F};
-  }
-
-  __host__ __device__ __forceinline__ auto
-  operator+(const SymMat3x3 &other) const -> SymMat3x3 {
-    return {data[0] + other.data[0], data[1] + other.data[1],
-            data[2] + other.data[2], data[3] + other.data[3],
-            data[4] + other.data[4], data[5] + other.data[5]};
-  }
-
-  __host__ __device__ __forceinline__ auto operator*(float s) const
-      -> SymMat3x3 {
-    return {data[0] * s, data[1] * s, data[2] * s,
-            data[3] * s, data[4] * s, data[5] * s};
-  }
-};
 
 struct Triangle {
   Vec3 v0, v1, v2;

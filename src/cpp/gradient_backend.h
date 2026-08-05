@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <driver_types.h>
+#include <string>
 
 class GradientBackend {
 public:
@@ -24,6 +25,8 @@ public:
   auto compute(const float *triangles, size_t geometry_count, float beta = -1,
                uint64_t stream = 0) -> CudaUniquePtr<float>;
 
+  [[nodiscard]] auto dump() const -> std::string;
+
 private:
   const int m_device;
   const size_t m_query_count;
@@ -37,7 +40,7 @@ private:
   AABB *m_binary_aabbs;
   uint32_t *m_bvh8_node_count;
   BVH8Node *m_bvh8_nodes;
-  BackwardTaylorCoefficientsF16 *m_tailor_coefficients;
+  BackwardTaylorCoefficients *m_taylor_coefficients;
   LeafPointers *m_bvh8_leaf_pointers;
 
   cudaEvent_t m_tree_construction_finished_event;

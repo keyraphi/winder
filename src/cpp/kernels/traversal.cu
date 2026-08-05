@@ -453,7 +453,7 @@ struct PointNormalGradientKernelParams {
   const uint32_t *sort_indirections;
   const BVH8Node *bvh8_nodes;
   const LeafPointers *bvh8_leaf_pointers;
-  const BackwardTaylorCoefficientsF16 *node_coefficients;
+  const BackwardTaylorCoefficients *node_coefficients;
   const AABB *leaf_aabbs;
   const float *sorted_grad_outputs;
   float *gradients;
@@ -476,7 +476,7 @@ __global__ void __launch_bounds__(128) compute_point_normal_gradient_kernel(
   // Each warp has its own shared traversal stack.
   __shared__ uint32_t shared_stack[4][64];
   __shared__ BVH8Node current_node_cache[4];
-  __shared__ BackwardTaylorCoefficientsF16 current_taylor_coefficients_cache[4];
+  __shared__ BackwardTaylorCoefficients current_taylor_coefficients_cache[4];
   __shared__ LeafPointers shared_leaf_ptrs[4];
   uint32_t warp_tile_base;
 
@@ -564,13 +564,13 @@ __global__ void __launch_bounds__(128) compute_point_normal_gradient_kernel(
       uint32_t load_taylor_coefficients_mask =
           __ballot_sync(0xFFFFFFFF, need_taylor_coefficients);
       if (load_taylor_coefficients_mask > 0) {
-        load_shared_cooperative<BackwardTaylorCoefficientsF16>(
+        load_shared_cooperative<BackwardTaylorCoefficients>(
             &current_taylor_coefficients_cache[warp_id],
             params.node_coefficients + current_node_idx, lane_id);
         __syncwarp();
       }
       if (need_taylor_coefficients) {
-        BackwardTaylorCoefficientsF16 &current_node_coefficients =
+        BackwardTaylorCoefficients &current_node_coefficients =
             current_taylor_coefficients_cache[warp_id];
         AABB parent_aabb = current_node.getAABB();
         // Do approximation
@@ -815,7 +815,7 @@ struct TriangleGradientKernelParams {
   const uint32_t *sort_indirections;
   const BVH8Node *bvh8_nodes;
   const LeafPointers *bvh8_leaf_pointers;
-  const BackwardTaylorCoefficientsF16 *node_coefficients;
+  const BackwardTaylorCoefficients *node_coefficients;
   const AABB *leaf_aabbs;
   const float *sorted_grad_outputs;
   float *gradients;
@@ -838,7 +838,7 @@ __global__ void __launch_bounds__(128, 4) compute_triangle_gradient_kernel(
   // Each warp has its own shared traversal stack.
   __shared__ uint32_t shared_stack[4][64];
   __shared__ BVH8Node current_node_cache[4];
-  __shared__ BackwardTaylorCoefficientsF16 current_taylor_coefficients_cache[4];
+  __shared__ BackwardTaylorCoefficients current_taylor_coefficients_cache[4];
   __shared__ LeafPointers shared_leaf_ptrs[4];
   __shared__ Triangle shared_warp_geometry[4][32]; // Here not as registers
   uint32_t warp_tile_base;
@@ -931,13 +931,13 @@ __global__ void __launch_bounds__(128, 4) compute_triangle_gradient_kernel(
       uint32_t load_taylor_coefficients_mask =
           __ballot_sync(0xFFFFFFFF, need_taylor_coefficients);
       if (load_taylor_coefficients_mask > 0) {
-        load_shared_cooperative<BackwardTaylorCoefficientsF16>(
+        load_shared_cooperative<BackwardTaylorCoefficients>(
             &current_taylor_coefficients_cache[warp_id],
             params.node_coefficients + current_node_idx, lane_id);
         __syncwarp();
       }
       if (need_taylor_coefficients) {
-        BackwardTaylorCoefficientsF16 &current_node_coefficients =
+        BackwardTaylorCoefficients &current_node_coefficients =
             current_taylor_coefficients_cache[warp_id];
         AABB parent_aabb = current_node.getAABB();
         // Do approximation

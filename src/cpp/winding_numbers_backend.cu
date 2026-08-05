@@ -313,9 +313,9 @@ void WindingNumbersBackend<Triangle>::initialize_triangle_data(
   CUDA_CHECK(cudaMallocAsync(
       &atomic_counters, (leaf_count - 1) * sizeof(uint32_t), m_build_stream));
   thrust::fill_n(m_build_stream_policy, atomic_counters, leaf_count - 1, 0);
-  TailorCoefficients *m2m_f32_coefficients;
+  TaylorCoefficients *m2m_f32_coefficients;
   CUDA_CHECK(cudaMallocAsync(&m2m_f32_coefficients,
-                             max_bvh8_nodes * sizeof(TailorCoefficients),
+                             max_bvh8_nodes * sizeof(TaylorCoefficients),
                              m_build_stream));
   compute_internal_tailor_coefficients_m2m(
       m_bvh8_nodes, bvh8_internal_parent_map, m_binary_aabbs + leaf_count - 1,
@@ -459,9 +459,9 @@ void WindingNumbersBackend<PointNormal>::initialize_point_data(
   CUDA_CHECK(cudaMallocAsync(
       &atomic_counters, (leaf_count - 1) * sizeof(uint32_t), m_build_stream));
   thrust::fill_n(m_build_stream_policy, atomic_counters, leaf_count - 1, 0);
-  TailorCoefficients *m2m_f32_coefficients;
+  TaylorCoefficients *m2m_f32_coefficients;
   CUDA_CHECK(cudaMallocAsync(&m2m_f32_coefficients,
-                             max_bvh8_nodes * sizeof(TailorCoefficients),
+                             max_bvh8_nodes * sizeof(TaylorCoefficients),
                              m_build_stream));
   compute_internal_tailor_coefficients_m2m(
       m_bvh8_nodes, bvh8_internal_parent_map, m_binary_aabbs + leaf_count - 1,
@@ -730,8 +730,8 @@ auto WindingNumbersBackend<Geometry>::dump() const -> std::string {
     queue.pop();
 
     const BVH8Node &current_node = bvh8_nodes[current_id];
-    TailorCoefficients node_coeff =
-        TailorCoefficients::from_f16(node_coefficients[current_id]);
+    TaylorCoefficients node_coeff =
+        TaylorCoefficients::from_f16(node_coefficients[current_id]);
     AABB aabb = current_node.getAABB();
     Vec3 node_com = aabb.center_of_mass;
 
@@ -810,8 +810,8 @@ auto WindingNumbersBackend<Geometry>::dump() const -> std::string {
         uint32_t l_id = current_leaf_pointers.indices[child_id];
         AABB leaf_aabb = leaf_aabbs[l_id];
 
-        TailorCoefficients coeff =
-            TailorCoefficients::from_f16(leaf_coefficients[l_id]);
+        TaylorCoefficients coeff =
+            TaylorCoefficients::from_f16(leaf_coefficients[l_id]);
         Vec3 leaf_com = leaf_aabb.center_of_mass;
 
         // Render Leaf Block

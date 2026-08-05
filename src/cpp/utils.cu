@@ -1,5 +1,6 @@
 #include "aabb.h"
 #include "geometry.h"
+#include "kernels/common.cuh"
 #include "utils.h"
 #include "vec3.h"
 #include <cmath>
@@ -77,14 +78,14 @@ struct MergeAABB {
   }
 };
 
-__constant__ SceneParams d_scene_params;
-
 template <IsPrimitiveGeometry PrimitiveGeometry> struct GeometryToMorton {
+  float scale;
+  Vec3 min_p;
+
   __device__ auto operator()(const PrimitiveGeometry &g) const -> uint64_t {
-    const float scale = d_scene_params.scale;
-    const Vec3 min_p = Vec3::from_f16(d_scene_params.bounds.min);
-    // Scale to range [0, 1]
     const Vec3 geometry_center = g.centroid();
+
+    // Scale to range [0, 1]
     float tx = (geometry_center.x - min_p.x) * scale;
     float ty = (geometry_center.y - min_p.y) * scale;
     float tz = (geometry_center.z - min_p.z) * scale;
@@ -98,15 +99,43 @@ template <IsPrimitiveGeometry PrimitiveGeometry> struct GeometryToMorton {
         static_cast<uint32_t>(fminf(fmaxf(tz * 2097151.F, 0.F), 2097151.F));
 
     // Expand bits (interleave x, y, z)
-    return morton3D_63bit(x, y, z);
+    uint64_t result = morton3D_63bit(x, y, z);
+    printf("### %f, %f, %f; %u, %u, %u -> %llu\n", tx, ty, tz, x, y, z, result);
+    return result;
   }
 };
+
+template <IsPrimitiveGeometry PrimitiveGeometry>
+__global__ void geometry_to_morton_kernel(
+    const PrimitiveGeometry *__restrict__ geometry,
+    const uint32_t geometry_count, const float scale, const float min_x,
+    const float min_y, const float min_z, uint64_t *__restrict__ morton_codes) {
+  uint32_t idx = threadIdx.x + blockIdx.x * blockDim.x;
+  if (idx >= geometry_count) {
+    return;
+  }
+
+  const Vec3 geometry_center = geometry[idx].centroid();
+  // Scale to range [0, 1]
+  float tx = (geometry_center.x - min_x) * scale;
+  float ty = (geometry_center.y - min_y) * scale;
+  float tz = (geometry_center.z - min_z) * scale;
+
+  // Fixed 21-bit integer quantization range [0, 2097151]
+  auto x = static_cast<uint32_t>(fminf(fmaxf(tx * 2097151.F, 0.F), 2097151.F));
+  auto y = static_cast<uint32_t>(fminf(fmaxf(ty * 2097151.F, 0.F), 2097151.F));
+  auto z = static_cast<uint32_t>(fminf(fmaxf(tz * 2097151.F, 0.F), 2097151.F));
+
+  // Expand bits (interleave x, y, z)
+  uint64_t result = morton3D_63bit(x, y, z);
+
+  morton_codes[idx] = result;
+}
 
 template <IsPrimitiveGeometry PrimitiveGeometry>
 auto initializeMortonCodes(const PrimitiveGeometry *geometry,
                            uint64_t *geometry_morton_codes, const size_t count,
                            cudaStream_t stream) -> void {
-
   auto build_stream_policy = thrust::cuda::par.on(stream);
 
   // compute scene bound
@@ -120,19 +149,19 @@ auto initializeMortonCodes(const PrimitiveGeometry *geometry,
   Vec3 extent = Vec3::from_f16(scene_bounds.diagonal());
   float max_dim = fmaxf(extent.x, fmaxf(extent.y, extent.z));
   float scale = (max_dim > 1e-9F) ? 1.F / max_dim : 0.F;
+  Vec3 min_p = Vec3::from_f16(scene_bounds.min);
 
-  SceneParams scen_params{scale, scene_bounds};
-
-  CUDA_CHECK(cudaMemcpyToSymbolAsync(d_scene_params, &scen_params,
-                                     sizeof(SceneParams), 0,
-                                     cudaMemcpyHostToDevice, stream));
-
-  thrust::transform(build_stream_policy, geometry, geometry + count,
-                    geometry_morton_codes,
-                    GeometryToMorton<PrimitiveGeometry>{});
+  uint32_t threads = 256;
+  uint32_t grid = (count + threads - 1) / threads;
+  geometry_to_morton_kernel<<<grid, threads, 0, stream>>>(
+      geometry, count, scale, min_p.x, min_p.y, min_p.z, geometry_morton_codes);
 }
 
+template void initializeMortonCodes<Vec3>(const Vec3 *geometry,
+                                          uint64_t *geometry_morton_codes,
+                                          size_t count, cudaStream_t stream);
 
-template void initializeMortonCodes<Vec3>(const Vec3 *geometry, uint64_t *geometry_morton_codes, size_t count, cudaStream_t stream);
-
-template void initializeMortonCodes<Triangle>(const Triangle *geometry, uint64_t *geometry_morton_codes, size_t count, cudaStream_t stream);
+template void initializeMortonCodes<Triangle>(const Triangle *geometry,
+                                              uint64_t *geometry_morton_codes,
+                                              size_t count,
+                                              cudaStream_t stream);

@@ -119,7 +119,7 @@ def test_triangle_gradients(
 ):
     triangles = vertices[indices]
     triangles_torch = torch.from_numpy(triangles).to(torch.float32).to("cuda:0")
-    grad_output = torch.randn([query_count], dtype=torch.float32, device="cuda:0")
+    grad_output = torch.randn([query_count], dtype=torch.float32, device="cuda:0") * 100
     queries = generate_queries(vertices, query_mode, query_count)
     queries_torch = torch.from_numpy(queries).to(torch.float32).to("cuda:0")
     torch.cuda.synchronize()
@@ -149,6 +149,8 @@ def test_triangle_gradients(
     t0 = time()
     grad_engine = winder.GradientEngine(queries_torch, grad_output)
     torch.cuda.synchronize()
+    with open("/tmp/grad_engine_dump.dot", "w") as f:
+        f.write(grad_engine.dump())
     print(f"Building Engine took {time() - t0} sec")
     t0 = time()
     grads = torch.from_dlpack(grad_engine.compute(triangles_torch, beta=-1 if beta is None else beta))

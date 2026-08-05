@@ -12,7 +12,7 @@
     }                                                                          \
   } while (0)
 
-__host__ __device__ inline auto expand_bits(uint32_t v) -> uint32_t {
+__host__ __device__ __forceinline__ auto expand_bits(uint32_t v) -> uint32_t {
   // (v<<16+v<<0)
   v = (v * 0x00010001U) & 0xFF0000FFU;
   // (v<<8+v<<0)
@@ -24,12 +24,12 @@ __host__ __device__ inline auto expand_bits(uint32_t v) -> uint32_t {
   return v;
 }
 
-__host__ __device__ inline auto morton3D_30bit(uint32_t x, uint32_t y,
+__host__ __device__ __forceinline__ auto morton3D_30bit(uint32_t x, uint32_t y,
                                                uint32_t z) -> uint32_t {
   return (expand_bits(x) << 2) | (expand_bits(y) << 1) | expand_bits(z);
 }
 
-__host__ __device__ inline auto splitBy3(uint32_t v) -> uint64_t {
+__host__ __device__ __forceinline__ auto splitBy3(uint32_t v) -> uint64_t {
   // see
   // https://www.forceflow.be/2013/10/07/morton-encodingdecoding-through-bit-interleaving-implementations/
   uint64_t x = v & 0x1fffff; // we only look at the first 21 bits
@@ -49,11 +49,12 @@ __host__ __device__ inline auto splitBy3(uint32_t v) -> uint64_t {
   return x;
 }
 
-__host__ __device__ inline uint64_t morton3D_63bit(uint32_t x, uint32_t y, uint32_t z) {
+__host__ __device__ __forceinline__ uint64_t morton3D_63bit(uint32_t x, uint32_t y, uint32_t z) {
   // see
   // https://www.forceflow.be/2013/10/07/morton-encodingdecoding-through-bit-interleaving-implementations/
   uint64_t answer = 0;
   answer |= splitBy3(x) | splitBy3(y) << 1 | splitBy3(z) << 2;
+  // printf(" -- %u, %u, %u -> %lu\n", x, y, z, answer);
   return answer;
 }
 
