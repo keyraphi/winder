@@ -1016,6 +1016,9 @@ __global__ void __launch_bounds__(128, 4) compute_triangle_gradient_kernel(
             auto *my_gradient_ptr = reinterpret_cast<float *>(&my_gradient);
             const auto *my_contribution_ptr =
                 reinterpret_cast<const float *>(&my_contribution);
+            //
+            // TODO TEST IF non cooperative summation is more efficient
+            //
 #pragma unroll 9
             for (int i = 0; i < 9; ++i) {
               float reduced = warp_reduce_add_xor(my_contribution_ptr[i]);

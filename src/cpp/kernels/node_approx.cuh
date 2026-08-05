@@ -581,7 +581,7 @@ __device__ __forceinline__ auto compute_node_gradient_approximation(
       0.5F * g20
   };
 
-  const Vec3 u_dirs[6] = {
+  const Vec3 u_dirs[6] = { // in local memory
       {1.F, 0.F, 0.F},
       {0.F, 1.F, 0.F},
       {0.F, 0.F, 1.F},
@@ -594,10 +594,10 @@ __device__ __forceinline__ auto compute_node_gradient_approximation(
 
   // Keep this loop to reuse working registers across directions
   for (int k = 0; k < 6; ++k) {
-    const float weight = u_weights[k];
+    const float weight = u_weights[k]; // TODO local memory
     if (weight == 0.F) continue;
 
-    const Vec3 u = u_dirs[k];
+    const Vec3 u = u_dirs[k]; // TODO leads to local memory access - use switch case or something like that
 
     float d_du[3];
     float d2_du2[3];
