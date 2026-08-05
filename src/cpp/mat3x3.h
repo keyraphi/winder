@@ -45,6 +45,9 @@ struct SymMat3x3 {
     SymMat3x3 result = *this;
     return result -= m;
   }
+  __host__ __device__ __forceinline__ auto trace() const -> float {
+    return data[0] + data[3] + data[5];
+  }
 };
 
 /**

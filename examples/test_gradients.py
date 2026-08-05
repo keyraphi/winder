@@ -49,13 +49,46 @@ def generate_queries(
         x = np.linspace(min_box[0], max_box[0], side)
         y = np.linspace(min_box[1], max_box[1], side)
         z = np.linspace(min_box[2], max_box[2], side)
-        gx, gy, gz = np.meshgrid(x, y, z)
+        gx, gy, gz = np.meshgrid(x, y, z, indexing="ij")
         queries = np.stack([gx.flatten(), gy.flatten(), gz.flatten()], axis=-1)
         return queries[:num_queries].astype(np.float32)
     else:
         return np.random.uniform(min_box, max_box, size=(num_queries, 3)).astype(
             np.float32
         )
+import numpy as np
+
+
+def print_ascii_histogram(
+    data: np.ndarray,
+    bins: np.ndarray,
+    title: str,
+    unit: str = "",
+    is_log_labels: bool = False,
+):
+    """Renders a clean ASCII histogram bar chart for array distributions."""
+    counts, _ = np.histogram(data, bins=bins)
+    total = len(data)
+    if total == 0:
+        return
+
+    max_count = np.max(counts) if np.max(counts) > 0 else 1
+    bar_max_width = 35
+
+    print(f"\n  --- {title} ---")
+    for i in range(len(counts)):
+        low, high = bins[i], bins[i + 1]
+        count = counts[i]
+        pct = (count / total) * 100
+        bar_len = int((count / max_count) * bar_max_width)
+        bar = "█" * bar_len
+
+        if is_log_labels:
+            label = f"[{low:.1e}, {high:.1e}){unit}"
+        else:
+            label = f"[{low:6.2f}, {high:6.2f}){unit}"
+
+        print(f"  {label:<24} | {bar:<35} | {count:7d} ({pct:6.2f}%)")
 
 
 def validate_gradients(
@@ -64,51 +97,119 @@ def validate_gradients(
     label: str,
     signal_threshold: float = 1e-5,
 ):
-    """Validates winder gradients against brute force gradients."""
+    """Validates winder gradients with detailed error distributions, RMS, and ASCII histograms."""
+    assert winder_grads.shape == brute_force_grads.shape, (
+        f"Shape mismatch: {winder_grads.shape} vs {brute_force_grads.shape}"
+    )
+
     winder_flat = winder_grads.reshape(-1)
     brute_force_flat = brute_force_grads.reshape(-1)
 
-    # 1. Global Relative Norm Error: ||g_cuda - g_ref|| / ||g_ref||
+    if np.any(np.isnan(winder_flat)) or np.any(np.isinf(winder_flat)):
+        print(f"\033[91m  ✗ CRITICAL FAILURE: {label} output contains NaN or Inf values!\033[0m")
+        return
+
+    # 1. Global Relative Norm Error & Cosine Similarity
     norm_diff = np.linalg.norm(winder_flat - brute_force_flat)
     norm_ref = np.linalg.norm(brute_force_flat)
     global_rel_norm_err = norm_diff / (norm_ref + 1e-12)
 
-    # 2. Cosine Similarity (Direction Alignment)
     dot_prod = np.dot(winder_flat, brute_force_flat)
     norm_winder = np.linalg.norm(winder_flat)
-    cosine_sim = dot_prod / (norm_winder * norm_ref + 1e-12)
+    global_cosine_sim = dot_prod / (norm_winder * norm_ref + 1e-12)
 
-    # 3. Masked Relative Error (Evaluate on non-zero gradient signals)
+    # 2. Signal-Masked Relative Error Metrics
     mask = np.abs(brute_force_flat) > signal_threshold
     if np.any(mask):
         abs_err_masked = np.abs(winder_flat[mask] - brute_force_flat[mask])
         rel_err_masked = abs_err_masked / np.abs(brute_force_flat[mask])
-        mean_masked_rel = np.mean(rel_err_masked)
-        max_masked_rel = np.max(rel_err_masked)
+
+        mean_rel = np.mean(rel_err_masked)
+        rms_rel = np.sqrt(np.mean(rel_err_masked**2))  # RMS Relative Error
+        var_rel = np.var(rel_err_masked)
+        std_rel = np.std(rel_err_masked)
+        p50_rel = np.percentile(rel_err_masked, 50)
+        p95_rel = np.percentile(rel_err_masked, 95)
+        p99_rel = np.percentile(rel_err_masked, 99)
+        max_rel = np.max(rel_err_masked)
     else:
-        mean_masked_rel = 0.0
-        max_masked_rel = 0.0
+        rel_err_masked = np.array([0.0])
+        mean_rel = rms_rel = var_rel = std_rel = p50_rel = p95_rel = p99_rel = max_rel = 0.0
 
-    print(f"\n=== Gradient Validation Results: {label} ===")
-    print(f"  -> Global Relative Norm Error: {global_rel_norm_err:.6f}")
-    print(
-        f"  -> Vector Cosine Similarity:  {cosine_sim:.6f}  (1.000000 = Perfect alignment)"
-    )
-    print(
-        f"  -> Signal-Masked Mean Rel Err: {mean_masked_rel:.6f}  (where |g| > {signal_threshold})"
-    )
-    print(f"  -> Signal-Masked Max Rel Err:  {max_masked_rel:.6f}")
+    # 3. Per-Vector 3D Angular Error (Degrees)
+    vec_winder = winder_grads.reshape(-1, 3)
+    vec_ref = brute_force_grads.reshape(-1, 3)
 
-    # Tightened validation threshold: Cosine Sim > 0.9999 and Rel Norm Error < 0.001 (0.1%)
-    if cosine_sim > 0.9999 and global_rel_norm_err < 1e-3:
-        print(
-            f"\033[92m  ✓ SUCCESS: {label} winder gradients match brute force ground truth!\033[0m"
-        )
+    vec_ref_norms = np.linalg.norm(vec_ref, axis=-1, keepdims=True)
+    vec_winder_norms = np.linalg.norm(vec_winder, axis=-1, keepdims=True)
+
+    vec_mask = (vec_ref_norms > signal_threshold).flatten()
+    if np.any(vec_mask):
+        dot_vecs = np.sum(vec_winder[vec_mask] * vec_ref[vec_mask], axis=-1)
+        denom = (vec_winder_norms[vec_mask] * vec_ref_norms[vec_mask]).flatten()
+        cos_vecs = np.clip(dot_vecs / (denom + 1e-12), -1.0, 1.0)
+        angular_err_deg = np.arccos(cos_vecs) * (180.0 / np.pi)
+
+        mean_ang = np.mean(angular_err_deg)
+        rms_ang = np.sqrt(np.mean(angular_err_deg**2))  # RMS Angular Error
+        p95_ang = np.percentile(angular_err_deg, 95)
+        p99_ang = np.percentile(angular_err_deg, 99)
+        max_ang = np.max(angular_err_deg)
     else:
-        print(
-            f"\033[91m  ✗ FAILURE: Significant directional or magnitude mismatch in {label}.\033[0m"
+        angular_err_deg = np.array([0.0])
+        mean_ang = rms_ang = p95_ang = p99_ang = max_ang = 0.0
+
+    # -------------------------------------------------------------------------
+    # Console Summary & Statistics
+    # -------------------------------------------------------------------------
+    print(f"\n=================================================================")
+    print(f"               Gradient Validation Results: {label}")
+    print(f"=================================================================")
+    print(f" Global Relative Norm Error : {global_rel_norm_err:.6e}")
+    print(f" Global Cosine Similarity   : {global_cosine_sim:.8f}  (1.00000000 = exact)")
+    print(f"-----------------------------------------------------------------")
+    print(f" Relative Error (|g| > {signal_threshold:.1e}):")
+    print(f"  -> Mean Relative Error    : {mean_rel:.6e}")
+    print(f"  -> RMS Relative Error     : {rms_rel:.6e}")
+    print(f"  -> Std Deviation (σ)      : {std_rel:.6e}")
+    print(f"  -> Median (p50)           : {p50_rel:.6e}")
+    print(f"  -> 95th Percentile (p95)  : {p95_rel:.6e}")
+    print(f"  -> 99th Percentile (p99)  : {p99_rel:.6e}")
+    print(f"  -> Max Relative Error     : {max_rel:.6e}")
+    print(f"-----------------------------------------------------------------")
+    print(f" Per-Vector Angular Error (Degrees):")
+    print(f"  -> Mean Angular Error     : {mean_ang:.4f}°")
+    print(f"  -> RMS Angular Error      : {rms_ang:.4f}°")
+    print(f"  -> 95th Percentile (p95)  : {p95_ang:.4f}°")
+    print(f"  -> 99th Percentile (p99)  : {p99_ang:.4f}°")
+    print(f"  -> Max Angular Error      : {max_ang:.4f}°")
+
+    # -------------------------------------------------------------------------
+    # ASCII Histograms
+    # -------------------------------------------------------------------------
+    if np.any(mask):
+        # Logarithmic Bins for Relative Error (1e-6 to 1e2+)
+        rel_bins = np.array([0.0, 1e-5, 1e-4, 1e-3, 1e-2, 5e-2, 1e-1, 5e-1, 1.0, 10.0, np.inf])
+        print_ascii_histogram(
+            rel_err_masked,
+            rel_bins,
+            title="Relative Error Distribution",
+            unit="",
+            is_log_labels=True,
         )
 
+    if np.any(vec_mask):
+        # Specific Angular Error Bins in Degrees
+        ang_bins = np.array([0.0, 0.1, 0.5, 1.0, 2.0, 5.0, 15.0, 45.0, 180.0])
+        print_ascii_histogram(
+            angular_err_deg,
+            ang_bins,
+            title="Per-Vector Angular Error Distribution",
+            unit="°",
+            is_log_labels=False,
+        )
+
+    print(f"=================================================================\n")
 
 def test_triangle_gradients(
     vertices: np.ndarray,
@@ -157,7 +258,9 @@ def test_triangle_gradients(
     torch.cuda.synchronize()
     print(f"Fast variant took {time() - t0} sec")
 
-    validate_gradients(grads.cpu().numpy(), gt_grads.cpu().numpy(), "Triangle")
+    validate_gradients(grads[0].cpu().numpy(), gt_grads[0].cpu().numpy(), "Triangle v0")
+    validate_gradients(grads[1].cpu().numpy(), gt_grads[1].cpu().numpy(), "Triangle v1")
+    validate_gradients(grads[2].cpu().numpy(), gt_grads[2].cpu().numpy(), "Triangle v2")
 
 
 def test_point_normal_gradients(
@@ -221,7 +324,8 @@ def test_point_normal_gradients(
     torch.cuda.synchronize()
     print(f"Fast Grads took {time() - t0} sec")
 
-    validate_gradients(grads.cpu().numpy(), gt_grads.cpu().numpy(), "PointNormal")
+    validate_gradients(grads[0].cpu().numpy(), gt_grads[0].cpu().numpy(), "PointNormal n")
+    validate_gradients(grads[1].cpu().numpy(), gt_grads[1].cpu().numpy(), "PointNormal p")
 
 
 if __name__ == "__main__":

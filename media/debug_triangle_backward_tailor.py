@@ -157,9 +157,6 @@ def compute_node_gradient_approximation(
     order: int = 2,  # 0, 1, or 2
 ) -> np.ndarray:
     """Simulates CUDA __device__ gradient computation in pure float32.
-
-    Inputs G0, G1, and G2 are truncated to float16 to mimic CUDA half/bf16
-    inputs before promotion to float32 registers.
     """
     # -------------------------------------------------------------------------
     # 1. Inputs, Half-Precision Conversion & Non-Dimensionalization
@@ -169,21 +166,21 @@ def compute_node_gradient_approximation(
     com = Vec3.from_numpy(center_of_mass.astype(np.float32))
 
     # Convert G0, G1, G2 to half-precision (float16) first, then float32 registers
-    # G0_f32 = np.float32(G0)
-    # G1_vec = Vec3.from_numpy(G1.astype(np.float32))
-    # G2_f16 = G2.astype(np.float32)
+    G0_f32 = np.float32(G0)
+    G1_vec = Vec3.from_numpy(G1.astype(np.float32))
+    G2_f16 = G2.astype(np.float32)
 
-    G0_f32 = np.float32(np.float16(G0))
-    G1_f16 = G1.astype(np.float16)
-    G1_vec = Vec3.from_numpy(G1_f16.astype(np.float32))
-
-    def _to_bf16(arr):
-        u32 = arr.astype(np.float32).view(np.uint32)
-        lsb = (u32 >> 16) & 1
-        u32 += 0x7FFF + lsb
-        return (u32 & 0xFFFF0000).view(np.float32)
-
-    G2_f16 = _to_bf16(G2)
+    # G0_f32 = np.float32(np.float16(G0))
+    # G1_f16 = G1.astype(np.float16)
+    # G1_vec = Vec3.from_numpy(G1_f16.astype(np.float32))
+    #
+    # def _to_bf16(arr):
+    #     u32 = arr.astype(np.float32).view(np.uint32)
+    #     lsb = (u32 >> 16) & 1
+    #     u32 += 0x7FFF + lsb
+    #     return (u32 & 0xFFFF0000).view(np.float32)
+    #
+    # G2_f16 = _to_bf16(G2)
 
     r = [v[i] - com for i in range(3)]
     d_raw = [r[i].norm() for i in range(3)]
@@ -1139,6 +1136,7 @@ def run_random_monte_carlo_suite(num_trials: int = 1000):
     np.random.seed(1337)
 
     errs_0th, errs_1st, errs_2nd = [], [], []
+    cos_0th, cos_1st, cos_2nd = [], [], []
     gains_0_to_1, gains_1_to_2, gains_total = [], [], []
     monotonic_count = 0
 
@@ -1173,13 +1171,31 @@ def run_random_monte_carlo_suite(num_trials: int = 1000):
         if norm_gt < 1e-12:
             continue
 
+        norm_t0 = np.linalg.norm(grad_t0)
+        norm_t1 = np.linalg.norm(grad_t1)
+        norm_t2 = np.linalg.norm(grad_t2)
+
+        # Relative Errors
         rel_err0 = np.linalg.norm(grad_gt - grad_t0) / norm_gt
         rel_err1 = np.linalg.norm(grad_gt - grad_t1) / norm_gt
         rel_err2 = np.linalg.norm(grad_gt - grad_t2) / norm_gt
 
+        # Cosine Similarities (Frobenius inner product over full gradient matrix)
+        cos0 = np.sum(grad_gt * grad_t0) / (norm_gt * norm_t0) if norm_t0 > 1e-12 else 0.0
+        cos1 = np.sum(grad_gt * grad_t1) / (norm_gt * norm_t1) if norm_t1 > 1e-12 else 0.0
+        cos2 = np.sum(grad_gt * grad_t2) / (norm_gt * norm_t2) if norm_t2 > 1e-12 else 0.0
+
+        cos0 = float(np.clip(cos0, -1.0, 1.0))
+        cos1 = float(np.clip(cos1, -1.0, 1.0))
+        cos2 = float(np.clip(cos2, -1.0, 1.0))
+
         errs_0th.append(rel_err0)
         errs_1st.append(rel_err1)
         errs_2nd.append(rel_err2)
+
+        cos_0th.append(cos0)
+        cos_1st.append(cos1)
+        cos_2nd.append(cos2)
 
         # Record gain ratios (clamped for floating point safety)
         g1 = rel_err0 / max(rel_err1, 1e-15)
@@ -1203,8 +1219,13 @@ def run_random_monte_carlo_suite(num_trials: int = 1000):
 
     print("--- MEAN RELATIVE ERRORS ---")
     print(f"  0th-Order (Monopole):      {np.mean(errs_0th):.4e}")
-    print(f"  1st-Order (+ Dipole):       {np.mean(errs_1st):.4e}")
+    print(f"  1st-Order (+ Dipole):        {np.mean(errs_1st):.4e}")
     print(f"  2nd-Order (+ Quadrupole):   {np.mean(errs_2nd):.4e}")
+
+    print("\n--- COSINE SIMILARITY (DIRECTIONAL ACCURACY) ---")
+    print(f"  0th-Order: Mean = {np.mean(cos_0th):.6f}, Variance = {np.var(cos_0th):.4e}")
+    print(f"  1st-Order: Mean = {np.mean(cos_1st):.6f}, Variance = {np.var(cos_1st):.4e}")
+    print(f"  2nd-Order: Mean = {np.mean(cos_2nd):.6f}, Variance = {np.var(cos_2nd):.4e}")
 
     print("\n--- ORDER-BY-ORDER ERROR REDUCTION GAINS (GEOMETRIC MEAN) ---")
     print(f"  0th -> 1st Order Gain:     {geom_gain_0_to_1:.2f}x error reduction")
@@ -1217,125 +1238,6 @@ def run_random_monte_carlo_suite(num_trials: int = 1000):
     )
     print("=" * 88)
 
-
-# def run_convergence_suite():
-#     print("=" * 80)
-#     print("RUNNING DISTANCE SCALING & CONVERGENCE TEST SUITE")
-#     print("=" * 80)
-#
-#     np.random.seed(42)
-#
-#     # Define base triangle
-#     triangle = np.array([[1.2, 0.1, -0.2], [0.3, 1.4, 0.1], [-0.1, 0.2, 1.6]])
-#     tri_centroid = np.mean(triangle, axis=0)
-#
-#     # Base cluster parameters
-#     cluster_radius = 0.2
-#     direction = np.array([0.6, 0.8, 1.0])
-#     direction /= np.linalg.norm(direction)
-#
-#     distances = [10.0, 5.0, 2.5, 1.25]
-#
-#     prev_err0, prev_err1, prev_err2 = None, None, None
-#
-#     print(
-#         f"{'Distance':<10} | {'0th Relative Err':<18} | {'1st Relative Err':<18} | {'2nd Relative Err':<18}"
-#     )
-#     print("-" * 75)
-#
-#     for dist in distances:
-#         center = tri_centroid + direction * dist
-#         points, weights = generate_random_cluster(
-#             center, cluster_radius, num_points=100
-#         )
-#
-#         x_c, G0, G1, G2 = compute_cluster_moments(points, weights)
-#
-#         grad_gt = compute_exact_ground_truth(triangle, points, weights)
-#         grad_t0 = compute_node_gradient_approximation(
-#             triangle, x_c, G0, G1, G2, order=0
-#         )
-#         grad_t1 = compute_node_gradient_approximation(
-#             triangle, x_c, G0, G1, G2, order=1
-#         )
-#         grad_t2 = compute_node_gradient_approximation(
-#             triangle, x_c, G0, G1, G2, order=2
-#         )
-#
-#         norm_gt = np.linalg.norm(grad_gt)
-#         err0 = np.linalg.norm(grad_gt - grad_t0) / norm_gt
-#         err1 = np.linalg.norm(grad_gt - grad_t1) / norm_gt
-#         err2 = np.linalg.norm(grad_gt - grad_t2) / norm_gt
-#
-#         drop0 = f"({prev_err0 / err0:.1f}x)" if prev_err0 else ""
-#         drop1 = f"({prev_err1 / err1:.1f}x)" if prev_err1 else ""
-#         drop2 = f"({prev_err2 / err2:.1f}x)" if prev_err2 else ""
-#
-#         print(
-#             f"{dist:<10.2f} | {err0:<10.2e} {drop0:<7} | {err1:<10.2e} {drop1:<7} | {err2:<10.2e} {drop2:<7}"
-#         )
-#
-#         prev_err0, prev_err1, prev_err2 = err0, err1, err2
-#
-#     print("\n")
-#
-#
-# def run_random_monte_carlo_suite(num_trials: int = 50):
-#     print("=" * 80)
-#     print(f"RUNNING MONTE CARLO RANDOM TRIALS (N={num_trials})")
-#     print("=" * 80)
-#
-#     np.random.seed(1337)
-#     passed_trials = 0
-#
-#     errs_0th, errs_1st, errs_2nd = [], [], []
-#
-#     for trial in range(num_trials):
-#         triangle = generate_random_triangle(scale=2.0)
-#         tri_centroid = np.mean(triangle, axis=0)
-#
-#         dist = np.random.uniform(4.0, 10.0)
-#         dir_vec = np.random.normal(0.0, 1.0, size=3)
-#         dir_vec /= np.linalg.norm(dir_vec)
-#
-#         cluster_center = tri_centroid + dir_vec * dist
-#         cluster_radius = np.random.uniform(0.1, 0.4)
-#
-#         points, weights = generate_random_cluster(
-#             cluster_center, cluster_radius, num_points=40
-#         )
-#         x_c, G0, G1, G2 = compute_cluster_moments(points, weights)
-#
-#         grad_gt = compute_exact_ground_truth(triangle, points, weights)
-#         grad_t2 = compute_taylor_gradient(triangle, x_c, G0, G1, G2, order=2)
-#         grad_t1 = compute_taylor_gradient(triangle, x_c, G0, G1, G2, order=1)
-#         grad_t0 = compute_taylor_gradient(triangle, x_c, G0, G1, G2, order=0)
-#
-#         norm_gt = np.linalg.norm(grad_gt)
-#         if norm_gt < 1e-12:
-#             continue
-#
-#         rel_err2 = np.linalg.norm(grad_gt - grad_t2) / norm_gt
-#         rel_err1 = np.linalg.norm(grad_gt - grad_t1) / norm_gt
-#         rel_err0 = np.linalg.norm(grad_gt - grad_t0) / norm_gt
-#
-#         errs_0th.append(rel_err0)
-#         errs_1st.append(rel_err1)
-#         errs_2nd.append(rel_err2)
-#
-#         # Verification criterion: 2nd-order error must be significantly better than 0th order
-#         if rel_err2 < 0.05 and rel_err2 < rel_err0:
-#             passed_trials += 1
-#
-#     print(f"Mean Relative Error (0th-Order): {np.mean(errs_0th):.4e}")
-#     print(f"Mean Relative Error (1st-Order): {np.mean(errs_1st):.4e}")
-#     print(f"Mean Relative Error (2nd-Order): {np.mean(errs_2nd):.4e}")
-#     print(
-#         f"Passed Threshold Validation:     {passed_trials} / {len(errs_2nd)} trials ({100 * passed_trials / len(errs_2nd):.1f}%)"
-#     )
-#     print("=" * 80)
-#
-#
 if __name__ == "__main__":
     run_convergence_suite()
     run_random_monte_carlo_suite(num_trials=1000)

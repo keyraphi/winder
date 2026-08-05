@@ -347,156 +347,6 @@ __device__ __forceinline__ auto compute_node_approximation(
   return result;
 }
 
-/**
- * @brief Computes the unscaled Zero-Order Taylor contractions for the
- * PointNormal gradients.
- *
- * Mathematical formulation:
- * - grad_n_0 = G_0 * r_hat
- * - grad_p_0 = G_0 * [ 3 * (r_hat · m) * r_hat - m ]
- *
- * @param G_0 Scalar zero-order query moment.
- * @param r_hat Unit displacement vector from source position p to cluster
- * center (||r_hat|| = 1).
- * @param m Area-weighted normal / dipole moment vector of the point.
- * @param out_c0_n Output unscaled contraction for normal gradient (FP16).
- * @param out_c0_p Output unscaled contraction for position gradient (FP16).
- */
-__device__ __forceinline__ void
-computeZeroOrderGradientContribution(const half &G_0, const Vec3_f16 &r_hat,
-                                     const Vec3_f16 &m, Vec3_f16 &out_c0_n,
-                                     Vec3_f16 &out_c0_p) {
-  // grad_n_0 = G_0 * r_hat
-  out_c0_n.x = __hmul(G_0, r_hat.x);
-  out_c0_n.y = __hmul(G_0, r_hat.y);
-  out_c0_n.z = __hmul(G_0, r_hat.z);
-
-  // Dot product: r_dot_m = r_hat . m
-  half2 r_xy = __halves2half2(r_hat.x, r_hat.y);
-  half2 m_xy = __halves2half2(m.x, m.y);
-  half2 prod_xy = __hmul2(r_xy, m_xy);
-  half r_dot_m = __hadd(__hadd(__low2half(prod_xy), __high2half(prod_xy)),
-                        __hmul(r_hat.z, m.z));
-
-  half three_r_dot_m = __hmul(r_dot_m, __float2half(3.F));
-
-  // 3 * (r_hat . m) * r_hat - m
-  half2 r_xy_scaled =
-      __hmul2(r_xy, __halves2half2(three_r_dot_m, three_r_dot_m));
-  half2 grad_p0_xy = __hsub2(r_xy_scaled, m_xy);
-  half grad_p0_z = __hsub(__hmul(r_hat.z, three_r_dot_m), m.z);
-
-  // Scale by G_0
-  out_c0_p.x = __hmul(G_0, __low2half(grad_p0_xy));
-  out_c0_p.y = __hmul(G_0, __high2half(grad_p0_xy));
-  out_c0_p.z = __hmul(G_0, grad_p0_z);
-}
-
-/**
- * @brief Computes the unscaled First-Order Taylor contractions for the
- * PointNormal gradients.
- *
- * Mathematical formulation:
- * - grad_n_1 = G_1 - 3 * (r_hat · G_1) * r_hat
- * - grad_p_1 = 3 * (r_hat · m) * G_1 + 3 * (G_1 · m) * r_hat + 3 * (r_hat ·
- * G_1) * m
- *              - 15 * (r_hat · G_1) * (r_hat · m) * r_hat
- *
- * @param G_1 Vector first-order query moment.
- * @param r_hat Unit displacement vector from source position p to cluster
- * center.
- * @param m Area-weighted normal / dipole moment vector.
- * @param out_c1_n Output unscaled contraction for normal gradient (FP16).
- * @param out_c1_p Output unscaled contraction for position gradient (FP16).
- */
-__device__ __forceinline__ void
-computeFirstOrderGradientContribution(const Vec3_f16 &G_1,
-                                      const Vec3_f16 &r_hat, const Vec3_f16 &m,
-                                      Vec3_f16 &out_c1_n, Vec3_f16 &out_c1_p) {
-  // Dot Products
-  const half r_dot_q1 = r_hat.dot(G_1);
-  const half r_dot_m = r_hat.dot(m);
-  const half q1_dot_m = G_1.dot(m);
-
-  // Normal Gradient
-  const half three_r_dot_q1 = __hmul(r_dot_q1, __float2half(3.0F));
-  out_c1_n = G_1 - (r_hat * three_r_dot_q1);
-
-  // Position Gradient: Promote dot products to FP32 registers
-  const float f_r_dot_q1 = __half2float(r_dot_q1);
-  const float f_r_dot_m = __half2float(r_dot_m);
-  const float f_q1_dot_m = __half2float(q1_dot_m);
-
-  const float f_three_r_dot_m = 3.0F * f_r_dot_m;
-  const float f_three_r_dot_q1 = 3.0F * f_r_dot_q1;
-  const float f_r_coeff = 3.0F * f_q1_dot_m - 15.0F * f_r_dot_q1 * f_r_dot_m;
-
-  // 3 * (r·m)*G_1 + 3 * (r·G_1)*m + coeff * r_hat
-  const Vec3 grad_p_f32 =
-      Vec3{__half2float(G_1.x), __half2float(G_1.y), __half2float(G_1.z)} *
-          f_three_r_dot_m +
-      Vec3{__half2float(m.x), __half2float(m.y), __half2float(m.z)} *
-          f_three_r_dot_q1 +
-      Vec3{__half2float(r_hat.x), __half2float(r_hat.y),
-           __half2float(r_hat.z)} *
-          f_r_coeff;
-
-  out_c1_p = Vec3_f16::from_float(grad_p_f32);
-}
-
-/**
- * @brief Computes the unscaled Second-Order Taylor contractions for the
- * PointNormal gradients.
- *
- * Performs matrix-vector contractions between the rank-2 moment matrix G_2,
- * unit vector r_hat, and normal vector m.
- *
- * @param G_2 Symmetric second-order query moment tensor (3x3 matrix).
- * @param r_hat Unit displacement vector.
- * @param m Area-weighted normal / dipole moment vector.
- * @param out_c2_n Output unscaled contraction for normal gradient.
- * @param out_c2_p Output unscaled contraction for position gradient.
- */
-__device__ __forceinline__ void computeSecondOrderGradientContribution(
-    const Mat3x3_bf16 &G_2, const Vec3_bf16 &r_hat, const Vec3_bf16 &m,
-    Vec3_bf16 &out_c2_n, Vec3_bf16 &out_c2_p) {
-
-  // 1. Matrix-Vector Products & Trace
-  const Vec3_bf16 G_2_r =
-      G_2 * r_hat; // Assumes Mat3x3_bf16::operator*(Vec3_bf16)
-  const Vec3_bf16 G_2_m = G_2 * m;
-  const __nv_bfloat16 trace_G_2 = G_2.trace();
-
-  // 2. Quadratic Forms via Vec3_bf16::dot
-  const __nv_bfloat16 q_rr = r_hat.dot(G_2_r);
-  const __nv_bfloat16 q_rm = r_hat.dot(G_2_m);
-  const __nv_bfloat16 m_r = r_hat.dot(m);
-
-  // 3. Scalar Prefactors evaluated in FP32 registers (prevents intermediate
-  // precision loss)
-  const float f_q_rr = __bfloat162float(q_rr);
-  const float f_q_rm = __bfloat162float(q_rm);
-  const float f_m_r = __bfloat162float(m_r);
-  const float f_trace = __bfloat162float(trace_G_2);
-
-  const float f_c_nr = 7.5F * f_q_rr - 1.5F * f_trace;
-  const float f_c_rp =
-      15.0F * f_q_rm + (7.5F * f_trace - 52.5F * f_q_rr) * f_m_r;
-  const float f_15_m_r = 15.0F * f_m_r;
-
-  // Convert scalar prefactors back to bfloat16 for vector scaling
-  const __nv_bfloat16 c_nr = __float2bfloat16(f_c_nr);
-  const __nv_bfloat16 c_rp = __float2bfloat16(f_c_rp);
-  const __nv_bfloat16 bf_15m = __float2bfloat16(f_15_m_r);
-  const __nv_bfloat16 bf_3 = __float2bfloat16(3.0F);
-
-  // 4. Vector Contractions
-  // grad_n_2 = c_nr * r_hat - 3 * (G_2 * r_hat)
-  out_c2_n = (r_hat * c_nr) - (G_2_r * bf_3);
-
-  // grad_p_2 = 15*m_r*(G_2*r) + c_r_p*r_hat + c_nr*m - 3*(G_2*m)
-  out_c2_p = (G_2_r * bf_15m) + (r_hat * c_rp) + (m * c_nr) - (G_2_m * bf_3);
-}
 
 /**
  * @brief Computes the complete multi-order Taylor approximation of loss
@@ -514,102 +364,72 @@ __device__ __forceinline__ void computeSecondOrderGradientContribution(
 __device__ __forceinline__ auto compute_node_gradient_approximation(
     const PointNormal &geometry, const Vec3 &center_of_mass, const float G_0,
     const Vec3 &G_1, const SymMat3x3 &G_2) -> PointNormal {
-  // Vec3 r = center_of_mass - geometry.p;
-  // float inv_norm_r = r.inv_length();
-  //
-  // Vec3_f16 r_hat_f16 = Vec3_f16::from_float(r * inv_norm_r);
-  // Vec3_bf16 r_hat_bf16 = Vec3_bf16::from_float(r * inv_norm_r);
-  // Vec3_f16 m_f16 = Vec3_f16::from_float(geometry.n);
-  //
-  // float inv_norm_r2 = inv_norm_r * inv_norm_r;
-  // float inv_norm_r3 = inv_norm_r2 * inv_norm_r;
-  // float inv_norm_r4 = inv_norm_r3 * inv_norm_r;
-  // float inv_norm_r5 = inv_norm_r4 * inv_norm_r;
-  //
-  // constexpr float inv_4pi = 0.07957747154F;
-  //
-  // // Dipole scale factors: 1/(4pi*R^2), 1/(4pi*R^3), 1/(4pi*R^4)
-  // float factor_n_0 = inv_4pi * inv_norm_r2;
-  // float factor_n_1 = inv_4pi * inv_norm_r3;
-  // float factor_n_2 = inv_4pi * inv_norm_r4;
-  //
-  // // Position scale factors: 1/(4pi*R^3), 1/(4pi*R^4), 1/(4pi*R^5)
-  // float factor_p_0 = factor_n_1;
-  // float factor_p_1 = factor_n_2;
-  // float factor_p_2 = inv_4pi * inv_norm_r5;
-  //
-  // Vec3_f16 c0_n, c0_p;
-  // Vec3_f16 c1_n, c1_p;
-  // Vec3_bf16 c2_n, c2_p;
-  //
-  // computeZeroOrderGradientContribution(G_0, r_hat_f16, m_f16, c0_n, c0_p);
-  // computeFirstOrderGradientContribution(G_1, r_hat_f16, m_f16, c1_n, c1_p);
-  // computeSecondOrderGradientContribution(
-  //     G_2, r_hat_bf16, Vec3_bf16::from_f16(m_f16), c2_n, c2_p);
-  //
-  // PointNormal grad;
-  //
-  // // Accumulate normal gradient in FP32
-  // grad.n.x = __half2float(c0_n.x) * factor_n_0 +
-  //            __half2float(c1_n.x) * factor_n_1 +
-  //            __bfloat162float(c2_n.x) * factor_n_2;
-  // grad.n.y = __half2float(c0_n.y) * factor_n_0 +
-  //            __half2float(c1_n.y) * factor_n_1 +
-  //            __bfloat162float(c2_n.y) * factor_n_2;
-  // grad.n.z = __half2float(c0_n.z) * factor_n_0 +
-  //            __half2float(c1_n.z) * factor_n_1 +
-  //            __bfloat162float(c2_n.z) * factor_n_2;
-  //
-  // // Accumulate position gradient in FP32
-  // grad.p.x = __half2float(c0_p.x) * factor_p_0 +
-  //            __half2float(c1_p.x) * factor_p_1 +
-  //            __bfloat162float(c2_p.x) * factor_p_2;
-  // grad.p.y = __half2float(c0_p.y) * factor_p_0 +
-  //            __half2float(c1_p.y) * factor_p_1 +
-  //            __bfloat162float(c2_p.y) * factor_p_2;
-  // grad.p.z = __half2float(c0_p.z) * factor_p_0 +
-  //            __half2float(c1_p.z) * factor_p_1 +
-  //            __bfloat162float(c2_p.z) * factor_p_2;
-  //
-  // if (cuda::std::isnan(grad.p.x) || cuda::std::isinf(grad.p.x) ||
-  //     cuda::std::isnan(grad.p.y) || cuda::std::isinf(grad.p.y) ||
-  //     cuda::std::isnan(grad.p.z) || cuda::std::isinf(grad.p.z) ||
-  //     cuda::std::isnan(grad.n.x) || cuda::std::isinf(grad.n.x) ||
-  //     cuda::std::isnan(grad.n.y) || cuda::std::isinf(grad.n.y) ||
-  //     cuda::std::isnan(grad.n.z) || cuda::std::isinf(grad.n.z)) {
-  //   float r_len = r.length();
-  //   printf("[GRAD BREAKDOWN]\n"
-  //          "  COM: (%.4f, %.4f, %.4f) | geom.p: (%.4f, %.4f, %.4f) | dist r: "
-  //          "%.6e\n"
-  //          "  inv_norm_r: %.6e | factor_n_2 (1/r^4): %.6e | factor_p_2 "
-  //          "(1/r^5): %.6e\n"
-  //          "  G0: %.4f | c2_p: (%.4f, %.4f, %.4f) | c2_n: (%.4f, %.4f, %.4f)\n",
-  //          center_of_mass.x, center_of_mass.y, center_of_mass.z, geometry.p.x,
-  //          geometry.p.y, geometry.p.z, r_len, inv_norm_r, factor_n_2,
-  //          factor_p_2, __half2float(G_0), __bfloat162float(c2_p.x),
-  //          __bfloat162float(c2_p.y), __bfloat162float(c2_p.z),
-  //          __bfloat162float(c2_n.x), __bfloat162float(c2_n.y),
-  //          __bfloat162float(c2_n.z));
-  // }
-  //
-  // return grad;
+
+  const Vec3 r_vec = center_of_mass - geometry.p;
+  const float R2 = r_vec.length2();
+
+  // Singular condition check (R < 1e-10 -> R^2 < 1e-20)
+  if (R2 < 1e-20F) {
+    return PointNormal{Vec3::zero(), Vec3::zero()};
+  }
+
+  // Fast GPU reciprocal square root & power chain
+  const float inv_R = rsqrtf(R2);
+  const float inv_R2 = inv_R * inv_R;
+  const float inv_R3 = inv_R2 * inv_R;
+  const float inv_R4 = inv_R2 * inv_R2;
+  const float inv_R5 = inv_R3 * inv_R2;
+
+  const Vec3 r_hat = r_vec * inv_R;
+  const Vec3 m = geometry.n;
+
+  // Primary projections
+  const float m_r = r_hat.dot(m);
+  const float r_dot_G1 = r_hat.dot(G_1);
+  const float G1_dot_m = G_1.dot(m);
+
+  // Order 2 tensor-vector products and trace contractions
+  const Vec3 G2_r = G_2 * r_hat;
+  const Vec3 G2_m = G_2 * m;
+  const float tr_G2 = G_2.trace();
+  const float q_rr = r_hat.dot(G2_r);
+  const float q_rm = r_hat.dot(G2_m);
+
+  // Order 2 contraction scalar constants
+  const float c_nr = 7.5F * q_rr - 1.5F * tr_G2;
+  const float c_rp = 15.F * q_rm + (7.5F * tr_G2 - 52.5F * q_rr) * m_r;
+
+  // -------------------------------------------------------------------------
+  // Collect scalar coefficients for grad_m:
+  // grad_m = r_hat * s_m_r + G_1 * s_m_g1 + G2_r * s_m_g2r
+  // -------------------------------------------------------------------------
+  const float s_m_r = G_0 * inv_R2 - 3.F * r_dot_G1 * inv_R3 + c_nr * inv_R4;
+  const float s_m_g1 = inv_R3;
+  const float s_m_g2r = -3.F * inv_R4;
+
+  const Vec3 grad_m = r_hat * s_m_r + G_1 * s_m_g1 + G2_r * s_m_g2r;
+
+  // -------------------------------------------------------------------------
+  // Collect scalar coefficients for grad_p:
+  // grad_p = r_hat * s_p_r + m * s_p_m + G_1 * s_p_g1 + G2_r * s_p_g2r + G2_m *
+  // s_p_g2m
+  // -------------------------------------------------------------------------
+  const float s_p_r = 3.F * m_r * G_0 * inv_R3 +
+                      (3.F * G1_dot_m - 15.F * r_dot_G1 * m_r) * inv_R4 -
+                      c_rp * inv_R5;
+  const float s_p_m = -G_0 * inv_R3 + 3.F * r_dot_G1 * inv_R4 - c_nr * inv_R5;
+  const float s_p_g1 = 3.F * m_r * inv_R4;
+  const float s_p_g2r = -15.F * m_r * inv_R5;
+  const float s_p_g2m = 3.F * inv_R5;
+
+  const Vec3 grad_p = r_hat * s_p_r + m * s_p_m + G_1 * s_p_g1 +
+                      G2_r * s_p_g2r + G2_m * s_p_g2m;
+
+  constexpr float INV_4PI = -0.07957747154594767F; // -1.0 / (4.0 * pi)
+
+  return PointNormal{.p=grad_p * INV_4PI, .n=grad_m * INV_4PI};
 }
 
-/**
- * @brief Helper to reconstruct an FP32 vertex gradient from scaled FP16 order
- * terms.
- */
-__device__ __forceinline__ Vec3 reconstruct_vertex(
-    const Vec3_f16 &term0, float scale_0th, const Vec3_f16 &term1,
-    float scale_1st, const Vec3_f16 &term2, float scale_2nd) {
-  return Vec3{
-      __half2float(term0.x) * scale_0th + __half2float(term1.x) * scale_1st +
-          __half2float(term2.x) * scale_2nd,
-      __half2float(term0.y) * scale_0th + __half2float(term1.y) * scale_1st +
-          __half2float(term2.y) * scale_2nd,
-      __half2float(term0.z) * scale_0th + __half2float(term1.z) * scale_1st +
-          __half2float(term2.z) * scale_2nd};
-}
 
 /**
  * @brief Scale-invariant 0th + 1st + 2nd order Taylor approximation of loss
@@ -619,6 +439,241 @@ __device__ __forceinline__ auto compute_node_gradient_approximation(
     const Triangle &geometry, const Vec3 &center_of_mass, const float G_0,
     const Vec3 &G_1, const SymMat3x3 &G_2) -> Triangle {
 
+  // -------------------------------------------------------------------------
+  // 1. Inputs & Non-Dimensionalization
+  // -------------------------------------------------------------------------
+  Vec3 r[3];
+  float d_raw[3];
+
+  r[0] = geometry.v0 - center_of_mass;
+  r[1] = geometry.v1 - center_of_mass;
+  r[2] = geometry.v2 - center_of_mass;
+  #pragma unroll
+  for (int i = 0; i < 3; ++i) {
+    d_raw[i] = r[i].length();
+  }
+
+  float L_ref = fmaxf(fmaxf(d_raw[0], d_raw[1]), d_raw[2]);
+  if (L_ref < 1e-12F) {
+    L_ref = 1e-12F;
+  }
+
+  const float inv_L  = 1.F / L_ref;
+  const float inv_L2 = inv_L * inv_L;
+
+  Vec3 r_bar[3];
+  float d[3];
+  Vec3 r_hat[3];
+
+  #pragma unroll
+  for (int i = 0; i < 3; ++i) {
+    r_bar[i] = r[i] * inv_L;
+    d[i]     = d_raw[i] * inv_L;
+    r_hat[i] = r_bar[i] * (1.F / d[i]);
+  }
+
+  const float G0_bar = G_0;
+  const Vec3 G1_bar  = G_1 * inv_L;
+
+  // SymMat3x3 indexing (0:xx, 1:xy, 2:xz, 3:yy, 4:yz, 5:zz)
+  const float g00 = G_2.data[0] * inv_L2;
+  const float g01 = G_2.data[1] * inv_L2;
+  const float g20 = G_2.data[2] * inv_L2;
+  const float g11 = G_2.data[3] * inv_L2;
+  const float g12 = G_2.data[4] * inv_L2;
+  const float g22 = G_2.data[5] * inv_L2;
+
+  // -------------------------------------------------------------------------
+  // 2. Base 0th-Order Field Evaluation (T0)
+  // -------------------------------------------------------------------------
+  Vec3 U[3];
+  float alpha[3];
+  Vec3 V[3];
+
+  #pragma unroll
+  for (int p = 0; p < 3; ++p) {
+    const int j = (p + 1) % 3;
+    const int m = (p + 2) % 3;
+
+    U[p] = Vec3::cross(r_bar[j], r_bar[m]);
+    const float dot_jm = r_bar[j].dot(r_bar[m]);
+    alpha[p] = d[j] * d[m] + dot_jm;
+    V[p] = r_hat[p] * alpha[p] + r_bar[j] * d[m] + r_bar[m] * d[j];
+  }
+
+  const float N = r_bar[0].dot(U[0]);
+
+  const float dot12 = r_bar[1].dot(r_bar[2]);
+  const float dot20 = r_bar[2].dot(r_bar[0]);
+  const float dot01 = r_bar[0].dot(r_bar[1]);
+  const float D = d[0] * d[1] * d[2] + dot12 * d[0] + dot20 * d[1] + dot01 * d[2];
+
+  const float S = N * N + D * D;
+  const float inv_S  = 1.F / S;
+  const float inv_S2 = inv_S * inv_S;
+  const float inv_S3 = inv_S2 * inv_S;
+
+  Vec3 W[3];
+  Vec3 T0[3];
+
+  #pragma unroll
+  for (int p = 0; p < 3; ++p) {
+    W[p]  = U[p] * D - V[p] * N;
+    T0[p] = W[p] * (G0_bar * (2.F * inv_S));
+  }
+
+  const Vec3 U_sum = U[0] + U[1] + U[2];
+  const Vec3 V_sum = V[0] + V[1] + V[2];
+
+  // -------------------------------------------------------------------------
+  // 3. Exact 1st Directional Derivative Operator (T1)
+  // -------------------------------------------------------------------------
+  const Vec3 e = -G1_bar;
+
+  float d_de[3];
+  Vec3 r_hat_de[3];
+
+  #pragma unroll
+  for (int p = 0; p < 3; ++p) {
+    d_de[p]     = r_hat[p].dot(e);
+    r_hat_de[p] = (e - r_hat[p] * d_de[p]) * (1.F / d[p]);
+  }
+
+  Vec3 U_de[3];
+  float alpha_de[3];
+  Vec3 V_de[3];
+
+  #pragma unroll
+  for (int p = 0; p < 3; ++p) {
+    const int j = (p + 1) % 3;
+    const int m = (p + 2) % 3;
+
+    U_de[p] = Vec3::cross(r_bar[j] - r_bar[m], e);
+    alpha_de[p] = d[m] * d_de[j] + d[j] * d_de[m] + (r_bar[j] + r_bar[m]).dot(e);
+    V_de[p] = r_hat[p] * alpha_de[p] 
+            + r_hat_de[p] * alpha[p] 
+            + r_bar[j] * d_de[m] 
+            + r_bar[m] * d_de[j] 
+            + e * (d[j] + d[m]);
+  }
+
+  const float N_de = U_sum.dot(e);
+  const float D_de = V_sum.dot(e);
+  const float S_de = 2.F * N * N_de + 2.F * D * D_de;
+
+  Vec3 T1[3];
+
+  #pragma unroll
+  for (int p = 0; p < 3; ++p) {
+    const Vec3 W_de_p = (U[p] * D_de + U_de[p] * D) - (V[p] * N_de + V_de[p] * N);
+    T1[p] = W_de_p * (2.F * inv_S) - W[p] * (2.F * S_de * inv_S2);
+  }
+
+  // -------------------------------------------------------------------------
+  // 4. Exact 2nd Directional Derivative Operator (T2 via Polarization)
+  // -------------------------------------------------------------------------
+  const float u_weights[6] = {
+      0.5F * (g00 - g01 - g20),
+      0.5F * (g11 - g01 - g12),
+      0.5F * (g22 - g12 - g20),
+      0.5F * g01,
+      0.5F * g12,
+      0.5F * g20
+  };
+
+  const Vec3 u_dirs[6] = {
+      {1.F, 0.F, 0.F},
+      {0.F, 1.F, 0.F},
+      {0.F, 0.F, 1.F},
+      {1.F, 1.F, 0.F},
+      {0.F, 1.F, 1.F},
+      {1.F, 0.F, 1.F}
+  };
+
+  Vec3 T2[3] = {Vec3::zero(), Vec3::zero(), Vec3::zero()};
+
+  // Keep this loop to reuse working registers across directions
+  for (int k = 0; k < 6; ++k) {
+    const float weight = u_weights[k];
+    if (weight == 0.F) continue;
+
+    const Vec3 u = u_dirs[k];
+
+    float d_du[3];
+    float d2_du2[3];
+    Vec3 r_hat_du[3];
+    Vec3 r_hat2_du2[3];
+
+    #pragma unroll
+    for (int p = 0; p < 3; ++p) {
+      d_du[p]   = r_hat[p].dot(u);
+      d2_du2[p] = (1.F - d_du[p] * d_du[p]) / d[p];
+
+      r_hat_du[p]   = (u - r_hat[p] * d_du[p]) / d[p];
+      r_hat2_du2[p] = (r_hat_du[p] * (-2.F * d_du[p]) - r_hat[p] * d2_du2[p]) / d[p];
+    }
+
+    Vec3 U_du[3];
+    float alpha_du[3];
+    float alpha2_du2[3];
+    Vec3 V_du[3];
+    Vec3 V2_du2[3];
+
+    #pragma unroll
+    for (int p = 0; p < 3; ++p) {
+      const int j = (p + 1) % 3;
+      const int m = (p + 2) % 3;
+
+      U_du[p]       = Vec3::cross(r_bar[j] - r_bar[m], u);
+      alpha_du[p]   = d[m] * d_du[j] + d[j] * d_du[m] + (r_bar[j] + r_bar[m]).dot(u);
+      alpha2_du2[p] = d2_du2[j] * d[m] + 2.F * d_du[j] * d_du[m] + d[j] * d2_du2[m] + 2.F;
+
+      V_du[p] = r_hat[p] * alpha_du[p] 
+              + r_hat_du[p] * alpha[p] 
+              + r_bar[j] * d_du[m] 
+              + r_bar[m] * d_du[j] 
+              + u * (d[j] + d[m]);
+
+      V2_du2[p] = r_hat[p] * alpha2_du2[p]
+                + r_hat_du[p] * (2.F * alpha_du[p])
+                + r_hat2_du2[p] * alpha[p]
+                + r_bar[j] * d2_du2[m]
+                + r_bar[m] * d2_du2[j]
+                + u * (2.F * d_du[m] + 2.F * d_du[j]);
+    }
+
+    const float N_du   = U_sum.dot(u);
+    const float D_du   = V_sum.dot(u);
+    const float D2_du2 = V_du[0].dot(u) + V_du[1].dot(u) + V_du[2].dot(u);
+
+    const float S_du   = 2.F * N * N_du + 2.F * D * D_du;
+    const float S2_du2 = 2.F * (N_du * N_du) + 2.F * (D_du * D_du) + 2.F * D * D2_du2;
+
+    #pragma unroll
+    for (int p = 0; p < 3; ++p) {
+      const Vec3 W_du_p = (U[p] * D_du + U_du[p] * D) - (V[p] * N_du + V_du[p] * N);
+      const Vec3 W2_du2_p = (U[p] * D2_du2 + U_du[p] * (2.F * D_du)) 
+                          - (V_du[p] * (2.F * N_du) + V2_du2[p] * N);
+
+      const Vec3 Q_p = W2_du2_p * (2.F * inv_S)
+                     - W_du_p * (4.F * S_du * inv_S2)
+                     - W[p] * (2.F * S2_du2 * inv_S2)
+                     + W[p] * (4.F * S_du * S_du * inv_S3);
+
+      T2[p] += Q_p * weight;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 5. Final Assembly
+  // -------------------------------------------------------------------------
+  constexpr float INV_4PI = 0.07957747154594767F; // 1.0 / (4.0 * pi)
+  const float scale = INV_4PI * inv_L;
+
+  Triangle result;
+  result.v0 = (T0[0]+T1[0]+T2[0]) * scale;
+  result.v1 = (T0[1]+T1[1]+T2[1]) * scale;
+  result.v2 = (T0[2]+T1[2]+T2[2]) * scale;
+
+  return result;
 }
-
-
