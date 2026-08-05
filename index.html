@@ -996,398 +996,323 @@
     <!-- SUBSECTION 5.1: POINT-NORMAL PRIMITIVES                            -->
     <!-- ================================================================= -->
     <div class="mb-10">
-        <h3 class="text-xl font-bold text-slate-900 mb-4 pb-2 border-b border-slate-100 flex items-center gap-2">
-            <span class="text-slate-400">5.1</span> Point-Normal Primitives (Position & Normal Dipole Gradients)
-        </h3>
-        <p class="text-slate-700 leading-relaxed mb-6">
-            For point-cloud primitives defined by position $\mathbf{p} \in \mathbb{R}^3$ and an area-weighted normal/dipole moment vector $\mathbf{m} \in \mathbb{R}^3$, the loss sensitivity is decomposed into gradients w.r.t. position $\nabla_{\mathbf{p}} \mathcal{L}$ and normal dipole orientation $\nabla_{\mathbf{m}} \mathcal{L}$. Let $\mathbf{r} = \mathbf{x}_c - \mathbf{p}$ denote the displacement vector from source position $\mathbf{p}$ to query cluster centroid $\mathbf{x}_c$, with metric distance $R = \|\mathbf{r}\|_2$ and normalized direction $\hat{\mathbf{r}} = \mathbf{r} / R$.
+    <h3 class="text-xl font-bold text-slate-900 mb-4 pb-2 border-b border-slate-100 flex items-center gap-2">
+        <span class="text-slate-400">5.1</span> Point-Normal Primitives (Position & Normal Dipole Gradients)
+    </h3>
+    <p class="text-slate-700 leading-relaxed mb-6">
+        For point-cloud primitives defined by position $\mathbf{p} \in \mathbb{R}^3$ and an area-weighted normal/dipole moment vector $\mathbf{m} \in \mathbb{R}^3$, loss sensitivity decomposes into gradients with respect to position $\nabla_{\mathbf{p}} \mathcal{L}$ and normal dipole orientation $\nabla_{\mathbf{m}} \mathcal{L}$. Let $\mathbf{r} = \mathbf{x}_c - \mathbf{p}$ denote the displacement vector from source position $\mathbf{p}$ to query cluster centroid $\mathbf{x}_c$, with Euclidean distance $R = \|\mathbf{r}\|_2$ and unit ray $\hat{\mathbf{r}} = \mathbf{r} / R$.
+    </p>
+
+    <!-- 5.1.1 0th-Order Contractions -->
+    <div class="mb-8 bg-slate-50 p-5 rounded-lg border border-slate-200/80">
+        <h4 class="text-lg font-semibold text-slate-900 mb-2">5.1.1 0th-Order Moment Contractions ($G_0$)</h4>
+        <p class="text-slate-700 text-sm leading-relaxed mb-3">
+            Interacting with the scalar zero-order moment $G_0$, the unscaled dipole contraction $\mathbf{c}_{0,n}$ and position contraction $\mathbf{c}_{0,p}$ evaluate to:
         </p>
-
-        <!-- 5.1.1 0th-Order Contractions -->
-        <div class="mb-8 bg-slate-50 p-5 rounded-lg border border-slate-200/80">
-            <h4 class="text-lg font-semibold text-slate-900 mb-2">5.1.1 0th-Order Moment Contractions ($G_0$)</h4>
-            <p class="text-slate-700 text-sm leading-relaxed mb-3">
-                Interacting with the scalar zero-order moment $G_0$, the unscaled normal contraction $\mathbf{c}_{0,n}$ and position contraction $\mathbf{c}_{0,p}$ evaluate to:
-            </p>
-            <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-                $$\begin{aligned}
-                \mathbf{c}_{0,n} &= G_0 \hat{\mathbf{r}} \\
-                \mathbf{c}_{0,p} &= G_0 \left[ 3 (\hat{\mathbf{r}} \cdot \mathbf{m}) \hat{\mathbf{r}} - \mathbf{m} \right]
-                \end{aligned}$$
-            </div>
-        </div>
-
-        <!-- 5.1.2 1st-Order Contractions -->
-        <div class="mb-8">
-            <h4 class="text-lg font-semibold text-slate-900 mb-2">5.1.2 1st-Order Moment Contractions ($\mathbf{G}_1$)</h4>
-            <p class="text-slate-700 leading-relaxed mb-3">
-                Directional coupling with the first-order vector moment $\mathbf{G}_1$ involves projection operators along $\hat{\mathbf{r}}$ and dipole orientation $\mathbf{m}$:
-            </p>
-            <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-                $$\begin{aligned}
-                \mathbf{c}_{1,n} &= \mathbf{G}_1 - 3 (\hat{\mathbf{r}} \cdot \mathbf{G}_1) \hat{\mathbf{r}} \\
-                \mathbf{c}_{1,p} &= 3 (\hat{\mathbf{r}} \cdot \mathbf{m}) \mathbf{G}_1 + 3 (\mathbf{G}_1 \cdot \mathbf{m}) \hat{\mathbf{r}} + 3 (\hat{\mathbf{r}} \cdot \mathbf{G}_1) \mathbf{m} - 15 (\hat{\mathbf{r}} \cdot \mathbf{G}_1) (\hat{\mathbf{r}} \cdot \mathbf{m}) \hat{\mathbf{r}}
-                \end{aligned}$$
-            </div>
-        </div>
-
-        <!-- 5.1.3 2nd-Order Contractions -->
-        <div class="mb-8">
-            <h4 class="text-lg font-semibold text-slate-900 mb-2">5.1.3 2nd-Order Tensor Contractions ($\mathbf{G}_2$)</h4>
-            <p class="text-slate-700 leading-relaxed mb-3">
-                Higher-order curvature contributions contract the rank-2 moment tensor $\mathbf{G}_2 \in \mathbb{R}^{3 \times 3}$ against $\hat{\mathbf{r}}$ and $\mathbf{m}$. Defining matrix products $\mathbf{G}_{2,r} = \mathbf{G}_2 \hat{\mathbf{r}}$, $\mathbf{G}_{2,m} = \mathbf{G}_2 \mathbf{m}$, trace $\operatorname{Tr}(\mathbf{G}_2) = \sum_{i=0}^2 G_{2,ii}$, and quadratic forms:
-            </p>
-            <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-                $$q_{rr} = \hat{\mathbf{r}}^\top \mathbf{G}_2 \hat{\mathbf{r}}, \qquad q_{rm} = \hat{\mathbf{r}}^\top \mathbf{G}_2 \mathbf{m}, \qquad m_r = \hat{\mathbf{r}} \cdot \mathbf{m}$$
-            </div>
-            <p class="text-slate-700 leading-relaxed my-3">
-                The scalar projection coefficients $c_{nr}$ and $c_{rp}$ are computed as:
-            </p>
-            <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-                $$\begin{aligned}
-                c_{nr} &= 7.5 \, q_{rr} - 1.5 \operatorname{Tr}(\mathbf{G}_2) \\
-                c_{rp} &= 15 \, q_{rm} + \left( 7.5 \operatorname{Tr}(\mathbf{G}_2) - 52.5 \, q_{rr} \right) m_r
-                \end{aligned}$$
-            </div>
-            <p class="text-slate-700 leading-relaxed my-3">
-                yielding the unscaled second-order contractions $\mathbf{c}_{2,n}$ and $\mathbf{c}_{2,p}$:
-            </p>
-            <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-                $$\begin{aligned}
-                \mathbf{c}_{2,n} &= c_{nr} \hat{\mathbf{r}} - 3 \mathbf{G}_{2,r} \\
-                \mathbf{c}_{2,p} &= 15 m_r \mathbf{G}_{2,r} + c_{rp} \hat{\mathbf{r}} + c_{nr} \mathbf{m} - 3 \mathbf{G}_{2,m}
-                \end{aligned}$$
-            </div>
-        </div>
-
-        <!-- 5.1.4 Multi-Order Scale Accumulation -->
-        <div class="bg-cyan-50/60 p-5 rounded-lg border border-cyan-200/80">
-            <h4 class="text-lg font-semibold text-cyan-950 mb-2">5.1.4 Physical Scale Factors & Final Accumulation</h4>
-            <p class="text-slate-700 text-sm leading-relaxed mb-3">
-                The unscaled half-precision contractions $\mathbf{c}_{k,n}$ and $\mathbf{c}_{k,p}$ ($k \in \{0, 1, 2\}$) are cast to $\text{FP32}$ and weighted by power-law distance decay factors scaled by $\frac{1}{4\pi}$:
-            </p>
-            <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-                $$\begin{aligned}
-                \nabla_{\mathbf{m}} \mathcal{L} &= \frac{1}{4\pi} \left[ \frac{1}{R^2} \mathbf{c}_{0,n} + \frac{1}{R^3} \mathbf{c}_{1,n} + \frac{1}{R^4} \mathbf{c}_{2,n} \right] \\
-                \nabla_{\mathbf{p}} \mathcal{L} &= \frac{1}{4\pi} \left[ \frac{1}{R^3} \mathbf{c}_{0,p} + \frac{1}{R^4} \mathbf{c}_{1,p} + \frac{1}{R^5} \mathbf{c}_{2,p} \right]
-                \end{aligned}$$
-            </div>
+        <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+            $$\begin{aligned}
+            \mathbf{c}_{0,n} &= G_0 \hat{\mathbf{r}} \\
+            \mathbf{c}_{0,p} &= G_0 \left[ 3 (\hat{\mathbf{r}} \cdot \mathbf{m}) \hat{\mathbf{r}} - \mathbf{m} \right]
+            \end{aligned}$$
         </div>
     </div>
-    <!-- ================================================================= -->
+
+    <!-- 5.1.2 1st-Order Contractions -->
+    <div class="mb-8">
+        <h4 class="text-lg font-semibold text-slate-900 mb-2">5.1.2 1st-Order Moment Contractions ($\mathbf{G}_1$)</h4>
+        <p class="text-slate-700 leading-relaxed mb-3">
+            Directional coupling with the first-order vector moment $\mathbf{G}_1$ involves projection operators along $\hat{\mathbf{r}}$ and dipole orientation $\mathbf{m}$:
+        </p>
+        <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+            $$\begin{aligned}
+            \mathbf{c}_{1,n} &= \mathbf{G}_1 - 3 (\hat{\mathbf{r}} \cdot \mathbf{G}_1) \hat{\mathbf{r}} \\
+            \mathbf{c}_{1,p} &= 3 (\hat{\mathbf{r}} \cdot \mathbf{m}) \mathbf{G}_1 + 3 (\mathbf{G}_1 \cdot \mathbf{m}) \hat{\mathbf{r}} + 3 (\hat{\mathbf{r}} \cdot \mathbf{G}_1) \mathbf{m} - 15 (\hat{\mathbf{r}} \cdot \mathbf{G}_1) (\hat{\mathbf{r}} \cdot \mathbf{m}) \hat{\mathbf{r}}
+            \end{aligned}$$
+        </div>
+    </div>
+
+    <!-- 5.1.3 2nd-Order Contractions -->
+    <div class="mb-8">
+        <h4 class="text-lg font-semibold text-slate-900 mb-2">5.1.3 2nd-Order Tensor Contractions ($\mathbf{G}_2$)</h4>
+        <p class="text-slate-700 leading-relaxed mb-3">
+            Higher-order curvature contributions contract the rank-2 moment tensor $\mathbf{G}_2 \in \mathbb{R}^{3 \times 3}$ against $\hat{\mathbf{r}}$ and $\mathbf{m}$. Defining matrix products $\mathbf{G}_{2,r} = \mathbf{G}_2 \hat{\mathbf{r}}$, $\mathbf{G}_{2,m} = \mathbf{G}_2 \mathbf{m}$, trace $\operatorname{Tr}(\mathbf{G}_2) = \sum_{i=0}^2 G_{2,ii}$, and quadratic forms:
+        </p>
+        <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+            $$q_{rr} = \hat{\mathbf{r}}^\top \mathbf{G}_2 \hat{\mathbf{r}}, \qquad q_{rm} = \hat{\mathbf{r}}^\top \mathbf{G}_2 \mathbf{m}, \qquad m_r = \hat{\mathbf{r}} \cdot \mathbf{m}$$
+        </div>
+        <p class="text-slate-700 leading-relaxed my-3">
+            The scalar projection coefficients $c_{nr}$ and $c_{rp}$ are computed as:
+        </p>
+        <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+            $$\begin{aligned}
+            c_{nr} &= 7.5 \, q_{rr} - 1.5 \operatorname{Tr}(\mathbf{G}_2) \\
+            c_{rp} &= 15 \, q_{rm} + \left( 7.5 \operatorname{Tr}(\mathbf{G}_2) - 52.5 \, q_{rr} \right) m_r
+            \end{aligned}$$
+        </div>
+        <p class="text-slate-700 leading-relaxed my-3">
+            yielding the unscaled second-order contractions $\mathbf{c}_{2,n}$ and $\mathbf{c}_{2,p}$:
+        </p>
+        <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+            $$\begin{aligned}
+            \mathbf{c}_{2,n} &= c_{nr} \hat{\mathbf{r}} - 3 \mathbf{G}_{2,r} \\
+            \mathbf{c}_{2,p} &= -15 m_r \mathbf{G}_{2,r} - c_{rp} \hat{\mathbf{r}} - c_{nr} \mathbf{m} + 3 \mathbf{G}_{2,m}
+            \end{aligned}$$
+        </div>
+    </div>
+
+    <!-- 5.1.4 Multi-Order Scale Accumulation -->
+    <div class="bg-cyan-50/60 p-5 rounded-lg border border-cyan-200/80">
+        <h4 class="text-lg font-semibold text-cyan-950 mb-2">5.1.4 Physical Scale Factors & Final Accumulation</h4>
+        <p class="text-slate-700 text-sm leading-relaxed mb-3">
+            The unscaled contractions $\mathbf{c}_{k,n}$ and $\mathbf{c}_{k,p}$ ($k \in \{0, 1, 2\}$) are accumulated with power-law distance decay factors and scaled by the negated global prefactor $-\frac{1}{4\pi}$ (accounting for displacement directionality $\mathbf{r} = \mathbf{x}_c - \mathbf{p}$):
+        </p>
+        <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+            $$\begin{aligned}
+            \nabla_{\mathbf{m}} \mathcal{L} &= -\frac{1}{4\pi} \left[ \frac{1}{R^2} \mathbf{c}_{0,n} + \frac{1}{R^3} \mathbf{c}_{1,n} + \frac{1}{R^4} \mathbf{c}_{2,n} \right] \\
+            \nabla_{\mathbf{p}} \mathcal{L} &= -\frac{1}{4\pi} \left[ \frac{1}{R^3} \mathbf{c}_{0,p} + \frac{1}{R^4} \mathbf{c}_{1,p} + \frac{1}{R^5} \mathbf{c}_{2,p} \right]
+            \end{aligned}$$
+        </div>
+    </div>
+</div>
+<!-- ================================================================= -->
+<!-- SUBSECTION 5.2: TRIANGLE MESH PRIMITIVES                          -->
+<!-- ================================================================= -->
+<div class="mb-10">
+    <h3 class="text-xl font-bold text-slate-900 mb-4 pb-2 border-b border-slate-100 flex items-center gap-2">
+        <span class="text-slate-400">5.2</span> Triangle Mesh Primitives (Exact Directional Taylor Expansion)
+    </h3>
+    <p class="text-slate-700 leading-relaxed mb-6">
+        To compute exact loss gradients with respect to the spatial coordinates of triangular mesh vertices $\mathbf{v}_k \in \mathbb{R}^3$ ($k \in \{0, 1, 2\}$), we formulate a local expansion around the geometric element centroid $\mathbf{x}_c = \frac{1}{3}\sum_{i=0}^2 \mathbf{v}_i$. The formulation contracts input spatial moments—scalar mass $G_0 \in \mathbb{R}$, first-order vector moment $\mathbf{G}_1 \in \mathbb{R}^3$, and second-order symmetric tensor moment $\mathbf{G}_2 \in \mathbb{R}^{3 \times 3}$—via non-dimensionalized vector field generators and exact analytical directional derivatives.
+    </p>
+
+    <!-- 5.2.1 Permutations and Non-Dimensionalization -->
+    <div class="mb-8 bg-slate-50 p-5 rounded-lg border border-slate-200/80">
+        <h4 class="text-lg font-semibold text-slate-900 mb-2">5.2.1 Kinematic Permutations & Scale Non-Dimensionalization</h4>
+        <p class="text-slate-700 text-sm leading-relaxed mb-3">
+            For any vertex index $p \in \{0, 1, 2\}$, adjacent vertices $(j, m)$ follow a right-handed cyclic permutation:
+        </p>
+        <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+            $$j = (p + 1) \bmod 3, \qquad m = (p + 2) \bmod 3$$
+        </div>
+        <p class="text-slate-700 text-sm leading-relaxed my-3">
+            To ensure numerical robustness and scale invariance across disparate simulation domains, displacement vectors $\mathbf{r}_p = \mathbf{v}_p - \mathbf{x}_c$ and moment tensors are normalized by a characteristic reference length $L_{\text{ref}}$:
+        </p>
+        <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+            $$\begin{aligned}
+            L_{\text{ref}} &= \max_{p \in \{0,1,2\}} \|\mathbf{r}_p\|_2 + \epsilon_d, \qquad &\bar{\mathbf{r}}_p &= \frac{\mathbf{r}_p}{L_{\text{ref}}} \\
+            \bar{G}_0 &= G_0, \qquad &\bar{\mathbf{G}}_1 &= \frac{\mathbf{G}_1}{L_{\text{ref}}}, \qquad &\bar{\mathbf{G}}_2 &= \frac{\mathbf{G}_2}{L_{\text{ref}}^2}
+            \end{aligned}$$
+        </div>
+        <p class="text-xs text-slate-500 italic">
+            where $\epsilon_d = 10^{-12}$ prevents division-by-zero singularities in collapsed geometry.
+        </p>
+    </div>
+
+    <!-- 5.2.2 Base 0th-Order Field Evaluation -->
+    <div class="mb-8">
+        <h4 class="text-lg font-semibold text-slate-900 mb-2">5.2.2 Base 0th-Order Generator Field ($\mathbf{T}_0$)</h4>
+        <p class="text-slate-700 leading-relaxed mb-3">
+            Let $d_p = \|\bar{\mathbf{r}}_p\|_2$ and unit ray directions $\hat{\mathbf{r}}_p = \bar{\mathbf{r}}_p / d_p$. The geometric cross-product vector $\mathbf{U}_p$, scalar invariants $N$ and $D$, denominator metric $S$, and base generator field $\mathbf{W}_p$ evaluate to:
+        </p>
+        <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+            $$\begin{aligned}
+            \mathbf{U}_p &= \bar{\mathbf{r}}_j \times \bar{\mathbf{r}}_m, \qquad N = \bar{\mathbf{r}}_0 \cdot \mathbf{U}_0 \\
+            D &= d_0 d_1 d_2 + (\bar{\mathbf{r}}_1 \cdot \bar{\mathbf{r}}_2)d_0 + (\bar{\mathbf{r}}_2 \cdot \bar{\mathbf{r}}_0)d_1 + (\bar{\mathbf{r}}_0 \cdot \bar{\mathbf{r}}_1)d_2 \\
+            S &= N^2 + D^2, \qquad \mathbf{W}_p = D \mathbf{U}_p - N \left[ (\alpha_p \hat{\mathbf{r}}_p + d_m \bar{\mathbf{r}}_j + d_j \bar{\mathbf{r}}_m) \right]
+            \end{aligned}$$
+        </div>
+        <p class="text-slate-700 leading-relaxed my-3">
+            where metric weight $\alpha_p = d_j d_m + (\bar{\mathbf{r}}_j \cdot \bar{\mathbf{r}}_m)$. The resulting 0th-order response vector $\mathbf{T}_0^{(p)}$ is:
+        </p>
+        <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+            $$\mathbf{T}_0^{(p)} = \bar{G}_0 \left( \frac{2}{S} \right) \mathbf{W}_p$$
+        </div>
+    </div>
+
+    <!-- 5.2.3 Exact 1st Directional Derivative Operator -->
+    <div class="mb-8">
+        <h4 class="text-lg font-semibold text-slate-900 mb-2">5.2.3 Exact 1st-Order Directional Variations ($\mathbf{T}_1$)</h4>
+        <p class="text-slate-700 leading-relaxed mb-3">
+            Linear directional variations induced by the vector moment perturbation $\mathbf{e} = -\bar{\mathbf{G}}_1$ are formulated via exact product rules. Radial length and ray directional derivatives are given by:
+        </p>
+        <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+            $$d_{de, p} = \hat{\mathbf{r}}_p \cdot \mathbf{e}, \qquad \hat{\mathbf{r}}_{de, p} = \frac{\mathbf{e} - (\hat{\mathbf{r}}_p \cdot \mathbf{e})\hat{\mathbf{r}}_p}{d_p}$$
+        </div>
+        <p class="text-slate-700 leading-relaxed my-3">
+            Propagating these through the cross-products $\mathbf{U}_p$ and auxiliary vectors $\mathbf{V}_p$ with invariant variations $N_{de} = \mathbf{U}_{\text{sum}} \cdot \mathbf{e}$ and $D_{de} = \mathbf{V}_{\text{sum}} \cdot \mathbf{e}$ (where $\mathbf{U}_{\text{sum}} = \sum \mathbf{U}_p$ and $\mathbf{V}_{\text{sum}} = \sum \mathbf{V}_p$) yields:
+        </p>
+        <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+            $$\begin{aligned}
+            \mathbf{W}_{de, p} &= (D_{de} \mathbf{U}_p + D \mathbf{U}_{de, p}) - (N_{de} \mathbf{V}_p + N \mathbf{V}_{de, p}) \\
+            S_{de} &= 2 N N_{de} + 2 D D_{de} \\
+            \mathbf{T}_1^{(p)} &= \left( \frac{2}{S} \right) \mathbf{W}_{de, p} - \left( \frac{2 S_{de}}{S^2} \right) \mathbf{W}_p
+            \end{aligned}$$
+        </div>
+    </div>
+
+    <!-- 5.2.4 Second-Order Tensor Contraction via Polarization -->
+    <div class="mb-8">
+        <h4 class="text-lg font-semibold text-slate-900 mb-2">5.2.4 Second-Order Tensor Contraction via Polarization ($\mathbf{T}_2$)</h4>
+        <p class="text-slate-700 leading-relaxed mb-3">
+            To bypass spectral decomposition overhead while strictly matching GPU-aligned float32 precision, the Hessian contraction against the symmetric tensor $\bar{\mathbf{G}}_2$ is evaluated via polarization across six canonical basis directions $\mathbf{u} \in \{(1,0,0), (0,1,0), (0,0,1), (1,1,0), (0,1,1), (1,0,1)\}$.
+        </p>
+        <p class="text-slate-700 leading-relaxed mb-3">
+            Given symmetric tensor components $g_{ij} = \bar{\mathbf{G}}_2[i, j]$, the polarization weights $w_{\mathbf{u}}$ are defined as:
+        </p>
+        <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+            $$\begin{aligned}
+            w_{e0} &= 0.5(g_{00} - g_{01} - g_{20}), \quad w_{e1} = 0.5(g_{11} - g_{01} - g_{12}), \quad w_{e2} = 0.5(g_{22} - g_{12} - g_{20}) \\
+            w_{e01} &= 0.5 g_{01}, \quad w_{e12} = 0.5 g_{12}, \quad w_{e20} = 0.5 g_{20}
+            \end{aligned}$$
+        </div>
+        <p class="text-slate-700 leading-relaxed my-3">
+            For each basis direction $\mathbf{u}$, first and second directional derivatives ($d_{du}, d2_{du2}, \mathbf{U}_{du}, \mathbf{V}_{du}, \mathbf{V}2_{du2}, N_{du}, D_{du}, D2_{du2}$) combine to form second-order generator responses $\mathbf{W}2_{du2, p}$:
+        </p>
+        <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+            $$\begin{aligned}
+            \mathbf{Q}_p(\mathbf{u}) &= \left(\frac{2}{S}\right)\mathbf{W}2_{du2, p} - \left(\frac{4 S_{du}}{S^2}\right)\mathbf{W}_{du, p} - \left(\frac{2 S2_{du2}}{S^2}\right)\mathbf{W}_p + \left(\frac{4 S_{du}^2}{S^3}\right)\mathbf{W}_p \\
+            \mathbf{T}_2^{(p)} &= \sum_{\mathbf{u}} w_{\mathbf{u}} \mathbf{Q}_p(\mathbf{u})
+            \end{aligned}$$
+        </div>
+    </div>
+
+    <!-- 5.2.5 Physical Gradient Reassembly -->
+    <div class="bg-cyan-50/60 p-5 rounded-lg border border-cyan-200/80">
+        <h4 class="text-lg font-semibold text-cyan-950 mb-2">5.2.5 Final Gradient Reassembly</h4>
+        <p class="text-slate-700 text-sm leading-relaxed mb-3">
+            The total physical gradient with respect to vertex coordinate $\mathbf{v}_p$ is synthesized by accumulating all non-dimensionalized orders and scaling by the reciprocal solid angle prefactor and reference length:
+        </p>
+        <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+            $$\nabla_{\mathbf{v}_p} \mathcal{L} = \frac{1}{4\pi L_{\text{ref}}} \left[ \mathbf{T}_0^{(p)} + \mathbf{T}_1^{(p)} + \mathbf{T}_2^{(p)} \right]$$
+        </div>
+    </div>
+</div>
+
+<!-- ================================================================= -->
 <!-- SUBSECTION 5.2: TRIANGLE MESH PRIMITIVES                            -->
 <!-- ================================================================= -->
-<section>
-  <h3 class="text-xl font-bold text-slate-900 mb-4 pb-2 border-b border-slate-100 flex items-center gap-2">
-    <span class="text-slate-400">5.2</span> Triangle Mesh Primitives (Vertex Position Gradients)
+  <h3 class="text-2xl font-sans font-bold text-slate-900 mb-4 pb-2 border-b border-slate-300">
+    5.2 Sensitivity Derivation for Triangle Mesh Primitives
   </h3>
 
-  <p class="text-slate-700 leading-relaxed mb-6">
-    To compute the sensitivity of the loss function $\mathcal{L}$ with respect to the positions of the triangle vertices $\mathbf{v}_k \in \mathbb{R}^3$ ($k \in \{0, 1, 2\}$), we construct a truncated Taylor series expansion around the geometric center of mass $\mathbf{x}_c$. The loss gradient contribution is evaluated via directional contractions of the order moments $(G_0, \mathbf{G}_1, \mathbf{G}_2)$ against a scale-invariant dimensionless vector field $F_k$, its Jacobian $\nabla F_k$, and its Hessian $\mathcal{H}_{F_k}$.
+  <p class="mb-4 text-justify">
+    To compute the gradient of a generic loss scalar field $\mathcal{L}$ with respect to the spatial coordinates of a triangular mesh primitive with vertices $\mathbf{v}_k \in \mathbb{R}^3$ ($k \in \{0, 1, 2\}$), we formulate a local directional expansion. Let $\mathbf{x}_c = \frac{1}{3}\sum_{i=0}^2 \mathbf{v}_i$ denote the geometric centroid of the element. The loss sensitivity is evaluated by contracting input spatial order moments—represented by the scalar mass $G_0 \in \mathbb{R}$, the first-order vector moment $\mathbf{G}_1 \in \mathbb{R}^3$, and the second-order symmetric moment tensor $\mathbf{G}_2 \in \mathbb{R}^{3 \times 3}$—against a scale-invariant generator field $F_k(\bar{\mathbf{r}})$ and its higher-order spatial derivatives.
   </p>
 
-  <!-- 5.2.1 Scale Normalization & Permutations -->
-  <div class="mb-8 bg-slate-50 p-5 rounded-lg border border-slate-200/80">
-    <h4 class="text-lg font-semibold text-slate-900 mb-2">5.2.1 Cyclic Permutations & Non-Dimensionalization</h4>
-    <p class="text-slate-700 text-sm leading-relaxed mb-3">
-      For any vertex index $k \in \{0, 1, 2\}$, adjacent vertex indices $(j, m)$ follow the right-handed cyclic permutation rule:
+  <!-- 5.2.1 Permutations and Non-Dimensionalization -->
+  <div class="my-6">
+    <h4 class="text-lg font-sans font-semibold text-slate-900 mb-2">5.2.1 Kinematic Permutations & Scale Non-Dimensionalization</h4>
+    <p class="mb-3 text-justify">
+      For any vertex index $k \in \{0, 1, 2\}$, adjacent vertices $(j, m)$ follow a right-handed cyclic permutation:
     </p>
-    <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+    <div class="my-3 bg-slate-50 p-4 rounded border border-slate-200 text-center font-sans">
       $$j = (k + 1) \bmod 3, \qquad m = (k + 2) \bmod 3 \implies (k, j, m) \in \{(0,1,2), (1,2,0), (2,0,1)\}$$
     </div>
-    <p class="text-slate-700 text-sm leading-relaxed my-3">
-      Displacement vectors $\mathbf{r}_k = \mathbf{v}_k - \mathbf{x}_c$ and input moment tensors are scaled by a characteristic domain length $L_{\text{ref}}$ to prevent overflow/underflow:
+    <p class="mb-3 text-justify">
+      To maintain scale invariance and ensure numerical conditioning across disparate physical domains, displacement vectors $\mathbf{r}_k = \mathbf{v}_k - \mathbf{x}_c$ and moment quantities are non-dimensionalized by a characteristic length $L_{\text{ref}}$:
     </p>
-    <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+    <div class="my-3 bg-slate-50 p-4 rounded border border-slate-200 text-center font-sans">
       $$\begin{aligned}
-      L_{\text{ref}} &= \max_{k \in \{0,1,2\}} \|\mathbf{r}_k\|_2, \qquad &\bar{\mathbf{r}}_k &= \frac{\mathbf{r}_k}{L_{\text{ref}}} \\
+      L_{\text{ref}} &= \max_{k \in \{0,1,2\}} \|\mathbf{r}_k\|_2 + \epsilon_d, \qquad &\bar{\mathbf{r}}_k &= \frac{\mathbf{r}_k}{L_{\text{ref}}} \\
       \bar{G}_0 &= G_0, \qquad &\bar{\mathbf{G}}_1 &= \frac{\mathbf{G}_1}{L_{\text{ref}}}, \qquad &\bar{\mathbf{G}}_2 &= \frac{\mathbf{G}_2}{L_{\text{ref}}^2}
       \end{aligned}$$
     </div>
+    <p class="text-xs text-slate-600 italic">
+      where $\epsilon_d = 10^{-12}$ prevents division-by-zero singularities in collapsed single-point primitives.
+    </p>
   </div>
 
-  <!-- 5.2.2 0th Order Term -->
-  <div class="mb-8">
-    <h4 class="text-lg font-semibold text-slate-900 mb-2">5.2.2 0th-Order Vector Field $F_k$</h4>
-    <p class="text-slate-700 leading-relaxed mb-3">
-      Let $d_k = \|\bar{\mathbf{r}}_k\|_2$ and $\hat{\mathbf{r}}_k = \bar{\mathbf{r}}_k / d_k$. The geometric primitive is parameterized by the cross-product normal vectors $\mathbf{U}_k$, tangential auxiliary vectors $\mathbf{V}_k$, and scalar invariants $N, D$:
+  <!-- 5.2.2 Evaluated Generator Vector Field -->
+  <div class="my-6">
+    <h4 class="text-lg font-sans font-semibold text-slate-900 mb-2">5.2.2 The Non-Dimensional Generator Field $F_k$</h4>
+    <p class="mb-3 text-justify">
+      Let $d_k = \|\bar{\mathbf{r}}_k\|_2$ and $\hat{\mathbf{r}}_k = \bar{\mathbf{r}}_k / d_k$. The geometric response of vertex $k$ is governed by the normal vector cross-product $\mathbf{U}_k \in \mathbb{R}^3$, the tangential auxiliary vector $\mathbf{V}_k \in \mathbb{R}^3$, and scalar invariants $N, D \in \mathbb{R}$:
     </p>
-    <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+    <div class="my-3 bg-slate-50 p-4 rounded border border-slate-200 text-center font-sans">
       $$\begin{aligned}
       \mathbf{U}_k &= \bar{\mathbf{r}}_j \times \bar{\mathbf{r}}_m, \quad k \in \{0,1,2\} \\
-      N &= \bar{\mathbf{r}}_0 \cdot \mathbf{U}_0 = \det([\bar{\mathbf{r}}_0, \bar{\mathbf{r}}_1, \bar{\mathbf{r}}_2]), \quad D = d_0 d_1 d_2 + \sum_{k=0}^2 (\bar{\mathbf{r}}_j \cdot \bar{\mathbf{r}}_m) d_k \\
-      \mathbf{V}_k &= \alpha_k \hat{\mathbf{r}}_k + d_m \bar{\mathbf{r}}_j + d_j \bar{\mathbf{r}}_m \quad \text{with} \quad \alpha_k = d_j d_m + (\bar{\mathbf{r}}_j \cdot \bar{\mathbf{r}}_m)
+      N &= \bar{\mathbf{r}}_0 \cdot \mathbf{U}_0 = \det([\bar{\mathbf{r}}_0, \bar{\mathbf{r}}_1, \bar{\mathbf{r}}_2]), \qquad D = d_0 d_1 d_2 + \sum_{p=0}^2 (\bar{\mathbf{r}}_j \cdot \bar{\mathbf{r}}_m) d_p \\
+      \alpha_k &= d_j d_m + (\bar{\mathbf{r}}_j \cdot \bar{\mathbf{r}}_m), \qquad \mathbf{V}_k = \alpha_k \hat{\mathbf{r}}_k + d_m \bar{\mathbf{r}}_j + d_j \bar{\mathbf{r}}_m
       \end{aligned}$$
     </div>
-    <p class="text-slate-700 leading-relaxed my-3">
-      Defining $S = N^2 + D^2$, the generator vector field $\mathbf{W}_k$ and 0th-order vertex response $F_k(\bar{\mathbf{r}})$ evaluate to:
+    <p class="mb-3 text-justify">
+      Defining the metric denominator $S = N^2 + D^2 + \epsilon_S$, the primary vector field generator $\mathbf{W}_k$ and zero-order response term $\mathbf{T}_k^{(0)}$ take the closed forms:
     </p>
-    <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+    <div class="my-3 bg-slate-50 p-4 rounded border border-slate-200 text-center font-sans">
       $$\mathbf{W}_k = D \mathbf{U}_k - N \mathbf{V}_k \implies F_k(\bar{\mathbf{r}}) = \frac{2}{S} \mathbf{W}_k \implies \mathbf{T}_k^{(0)} = \bar{G}_0 F_k(\bar{\mathbf{r}})$$
     </div>
   </div>
 
-  <!-- 5.2.3 Analytical Variations -->
-  <div class="mb-8 bg-slate-50 p-5 rounded-lg border border-slate-200/80">
-    <h4 class="text-lg font-semibold text-slate-900 mb-2">5.2.3 Explicit First-Order Variational Terms ($\delta \mathbf{U}_k$ and $\delta \mathbf{V}_k$)</h4>
-    <p class="text-slate-700 text-sm leading-relaxed mb-3">
-      Under spatial variation along the 1st-order moment vector $\bar{\mathbf{G}}_1$, the linear directional derivatives of the distance $d_p$ and unit ray direction $\hat{\mathbf{r}}_p$ (for $p \in \{0, 1, 2\}$) are:
+  <!-- 5.2.3 First-Order Directional Variations -->
+  <div class="my-6">
+    <h4 class="text-lg font-sans font-semibold text-slate-900 mb-2">5.2.3 First-Order Directional Contractions ($\mathbf{T}_k^{(1)}$)</h4>
+    <p class="mb-3 text-justify">
+      Linear directional variations induced by the vector moment $\bar{\mathbf{G}}_1 \in \mathbb{R}^3$ are derived via product rules. The directional derivatives for radial lengths $d_p$ and unit ray directions $\hat{\mathbf{r}}_p$ ($p \in \{0, 1, 2\}$) evaluate to:
     </p>
-    <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+    <div class="my-3 bg-slate-50 p-4 rounded border border-slate-200 text-center font-sans">
       $$\delta d_p = \hat{\mathbf{r}}_p \cdot \bar{\mathbf{G}}_1, \qquad \delta \hat{\mathbf{r}}_p = \frac{1}{d_p} \left[ \bar{\mathbf{G}}_1 - (\hat{\mathbf{r}}_p \cdot \bar{\mathbf{G}}_1)\hat{\mathbf{r}}_p \right]$$
     </div>
-    <p class="text-slate-700 text-sm leading-relaxed my-3">
-      Applying the vector cross and product rules yields exact closed-form expressions for $\delta \mathbf{U}_k$ and $\delta \mathbf{V}_k$:
+    <p class="mb-3 text-justify">
+      Applying these relations to the structural terms $\mathbf{U}_k$ and $\mathbf{V}_k$ yields the exact variation components:
     </p>
-    <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+    <div class="my-3 bg-slate-50 p-4 rounded border border-slate-200 text-center font-sans">
       $$\begin{aligned}
       \delta \mathbf{U}_k &= (\bar{\mathbf{r}}_j - \bar{\mathbf{r}}_m) \times \bar{\mathbf{G}}_1 \\
       \delta \alpha_k &= \left( d_m \hat{\mathbf{r}}_j + d_j \hat{\mathbf{r}}_m + \bar{\mathbf{r}}_j + \bar{\mathbf{r}}_m \right) \cdot \bar{\mathbf{G}}_1 \\
       \delta \mathbf{V}_k &= (\delta \alpha_k) \hat{\mathbf{r}}_k + \alpha_k (\delta \hat{\mathbf{r}}_k) + (\delta d_m) \bar{\mathbf{r}}_j + (\delta d_j) \bar{\mathbf{r}}_m + (d_j + d_m) \bar{\mathbf{G}}_1
       \end{aligned}$$
     </div>
-    <p class="text-slate-700 text-sm leading-relaxed my-3">
-      The variations of scalar invariants $N$ and $D$ match the scalar projection sums $S_U$ and $S_V$:
+    <p class="mb-3 text-justify">
+      Summing the directional projections $S_U = \sum_{p=0}^2 (\mathbf{U}_p \cdot \bar{\mathbf{G}}_1)$ and $S_V = \sum_{p=0}^2 (\mathbf{V}_p \cdot \bar{\mathbf{G}}_1)$, the total generator variation $\delta \mathbf{W}_k$ and first-order response vector $\mathbf{T}_k^{(1)}$ reduce to:
     </p>
-    <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-      $$S_U = \delta N = \sum_{p=0}^2 (\mathbf{U}_p \cdot \bar{\mathbf{G}}_1), \qquad S_V = \delta D = \sum_{p=0}^2 (\mathbf{V}_p \cdot \bar{\mathbf{G}}_1)$$
-    </div>
-  </div>
-
-  <!-- 5.2.4 1st Order Jacobian Contraction -->
-  <div class="mb-8">
-    <h4 class="text-lg font-semibold text-slate-900 mb-2">5.2.4 1st-Order Term ($\nabla F_k \cdot \bar{\mathbf{G}}_1$)</h4>
-    <p class="text-slate-700 leading-relaxed mb-3">
-      Combining the directional variations yields the total generator variation $\delta \mathbf{W}_k$ and scalar scaling coefficient $c_1$:
-    </p>
-    <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+    <div class="my-3 bg-slate-50 p-4 rounded border border-slate-200 text-center font-sans">
       $$\begin{aligned}
       \delta \mathbf{W}_k &= (D \delta \mathbf{U}_k + S_V \mathbf{U}_k) - (N \delta \mathbf{V}_k + S_U \mathbf{V}_k) \\
-      c_1 &= \frac{4}{S^2} \left( N S_U + D S_V \right) \\
+      c_1 &= -\frac{4}{S^2} \left( N S_U + D S_V \right) \\
       \mathbf{T}_k^{(1)} &= \frac{2}{S} \, \delta \mathbf{W}_k + c_1 \mathbf{W}_k
       \end{aligned}$$
     </div>
   </div>
 
-  <!-- 5.2.5 2nd Order Hessian Contraction -->
-  <div class="mb-8">
-    <h4 class="text-lg font-semibold text-slate-900 mb-2">5.2.5 2nd-Order Term $\frac{1}{2} \left( \bar{\mathbf{G}}_2 : \mathcal{H}_{F_k} \right)$</h4>
-    <p class="text-slate-700 leading-relaxed mb-3">
-      The analytical 2nd-order Taylor term contracts $\bar{\mathbf{G}}_2$ against metric gradients $\nabla S_p = 2(N \mathbf{U}_p + D \mathbf{V}_p)$ and tracing operators:
+  <!-- 5.2.4 Second-Order Direct Tensor Contraction -->
+  <div class="my-6">
+    <h4 class="text-lg font-sans font-semibold text-slate-900 mb-2">5.2.4 Second-Order Direct Tensor Contractions ($\mathbf{T}_k^{(2)}$)</h4>
+    <p class="mb-3 text-justify">
+      Evaluating the Hessian contraction against the symmetric tensor $\bar{\mathbf{G}}_2 \in \mathbb{R}^{3 \times 3}$ is performed directly in coordinate space without spectral transformation. We define the element metric gradient vectors $\nabla S_p \in \mathbb{R}^3$:
     </p>
-    <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-      $$\begin{aligned}
-      c_2 &= \frac{8}{S^3} \sum_{p=0}^2 \left( \nabla S_p^\top \bar{\mathbf{G}}_2 \nabla S_p \right) - \frac{4}{S^2} \operatorname{Tr}(\bar{\mathbf{G}}_2) \sum_{p=0}^2 \left( \|\mathbf{U}_p\|_2^2 + \|\mathbf{V}_p\|_2^2 \right) \\
-      \mathbf{T}_k^{(2)} &= c_2 \mathbf{W}_k + \frac{4}{S^2} \sum_{p=0}^2 \left( \delta \mathbf{W}_k \cdot (\bar{\mathbf{G}}_1 \otimes \nabla S_p) \right)
-      \end{aligned}$$
+    <div class="my-3 bg-slate-50 p-4 rounded border border-slate-200 text-center font-sans">
+      $$\nabla S_p = 2 \left( N \mathbf{U}_p + D \mathbf{V}_p \right), \quad p \in \{0, 1, 2\}$$
+    </div>
+    <p class="mb-3 text-justify">
+      The quadratic scalar coefficient $c_2$ is formed by contracting $\bar{\mathbf{G}}_2$ against $\nabla S_p$ alongside the trace $\operatorname{Tr}(\bar{\mathbf{G}}_2)$:
+    </p>
+    <div class="my-3 bg-slate-50 p-4 rounded border border-slate-200 text-center font-sans">
+      $$c_2 = \frac{8}{S^3} \sum_{p=0}^2 \left( \nabla S_p^\top \bar{\mathbf{G}}_2 \nabla S_p \right) - \frac{4}{S^2} \operatorname{Tr}(\bar{\mathbf{G}}_2) \sum_{p=0}^2 \left( \|\mathbf{U}_p\|_2^2 + \|\mathbf{V}_p\|_2^2 \right)$$
+    </div>
+    <p class="mb-3 text-justify">
+      Let $\mathbf{J}_{\mathbf{W}_k} \in \mathbb{R}^{3 \times 3}$ denote the full vector Jacobian of $\mathbf{W}_k$. The second-order Taylor vector contribution $\mathbf{T}_k^{(2)}$ synthesizes these bilinear forms:
+    </p>
+    <div class="my-3 bg-slate-50 p-4 rounded border border-slate-200 text-center font-sans">
+      $$\mathbf{T}_k^{(2)} = \frac{1}{2} \left[ c_2 \mathbf{W}_k + \frac{4}{S^2} \sum_{p=0}^2 \mathbf{J}_{\mathbf{W}_k} \left( \bar{\mathbf{G}}_2 \nabla S_p \right) \right]$$
+    </div>
+    
+    <div class="p-3 bg-blue-50/70 rounded border border-blue-200 text-xs text-slate-700">
+      <strong>Implementation Note (Computational Efficiency):</strong> Because the contraction involves bilinear quadratic forms ($\nabla S_p^\top \bar{\mathbf{G}}_2 \nabla S_p$) and standard matrix-vector products ($\bar{\mathbf{G}}_2 \nabla S_p$), spectral decomposition (e.g., EVD) is intentionally bypassed. Direct matrix-vector multiplication requires only 9 FMAD operations per sum index, preserving arithmetic density and avoiding special function unit (SFU) overhead in high-throughput GPU architectures.
     </div>
   </div>
 
-  <!-- 5.2.6 Physical Scale Reconstruction -->
-  <div class="bg-cyan-50/60 p-5 rounded-lg border border-cyan-200/80">
-    <h4 class="text-lg font-semibold text-cyan-950 mb-2">5.2.6 Physical Scale Reconstruction</h4>
-    <p class="text-slate-700 text-sm leading-relaxed mb-3">
-      The total loss gradient $\nabla_{\mathbf{v}_k} \mathcal{L}$ for vertex $\mathbf{v}_k$ is reassembled by restoring physical length scales with the solid angle factor $\frac{1}{4\pi}$:
+  <!-- 5.2.5 Physical Scale Reconstruction -->
+  <div class="my-6 p-4 bg-slate-100 rounded border border-slate-300">
+    <h4 class="text-lg font-sans font-semibold text-slate-900 mb-2">5.2.5 Physical Gradient Reassembly</h4>
+    <p class="mb-3 text-justify">
+      The total gradient of the loss $\mathcal{L}$ with respect to the physical coordinate vector $\mathbf{v}_k$ is reassembled by restoring physical length scales through inverse powers of $L_{\text{ref}}$ alongside the solid angle factor $\frac{1}{4\pi}$:
     </p>
-    <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-      $$\nabla_{\mathbf{v}_k} \mathcal{L} \approx \frac{1}{4\pi} \left[ \frac{1}{L_{\text{ref}}} \mathbf{T}_k^{(0)} + \frac{1}{L_{\text{ref}}^2} \mathbf{T}_k^{(1)} + \frac{1}{L_{\text{ref}}^3} \mathbf{T}_k^{(2)} \right]$$
+    <div class="my-3 bg-white p-4 rounded border border-slate-200 text-center font-sans">
+      $$\nabla_{\mathbf{v}_k} \mathcal{L} = \frac{1}{4\pi} \left[ \frac{1}{L_{\text{ref}}} \mathbf{T}_k^{(0)} + \frac{1}{L_{\text{ref}}^2} \mathbf{T}_k^{(1)} + \frac{1}{L_{\text{ref}}^3} \mathbf{T}_k^{(2)} \right]$$
     </div>
   </div>
+
 </section>
-
-    <!-- ================================================================= -->
-    <!-- SUBSECTION 5.2: TRIANGLE MESH PRIMITIVES                           -->
-    <!-- ================================================================= -->
-    <div>
-        <h3 class="text-xl font-bold text-slate-900 mb-4 pb-2 border-b border-slate-100 flex items-center gap-2">
-            <span class="text-slate-400">5.2</span> Triangle Mesh Primitives (Vertex Position Gradients)
-        </h3>
-
-        <p class="text-slate-700 leading-relaxed mb-6">
-            To compute the sensitivity of the loss function $\mathcal{L}$ with respect to the positions of the triangle vertices $\mathbf{v}_k \in \mathbb{R}^3$ ($k \in \{0, 1, 2\}$), we construct a truncated Taylor series expansion around the geometric center of mass $\mathbf{x}_c$. The loss gradient contribution is evaluated via directional contractions of the order moments $(G_0, \mathbf{G}_1, \mathbf{G}_2)$ against a scale-invariant dimensionless vector field $F_k$, its Jacobian $\nabla F_k$, and its Hessian $\mathcal{H}_{F_k}$.
-        </p>
-
-        <!-- 5.2.1 Scale Normalization -->
-        <div class="mb-8 bg-slate-50 p-5 rounded-lg border border-slate-200/80">
-            <h4 class="text-lg font-semibold text-slate-900 mb-2">5.2.1 Non-Dimensionalization & Scale Invariance</h4>
-            <p class="text-slate-700 text-sm leading-relaxed mb-3">
-                To ensure numerical stability in half-precision arithmetic ($\text{FP16}$), displacement vectors $\mathbf{r}_k = \mathbf{v}_k - \mathbf{x}_c$ and input moment tensors are normalized by a characteristic domain scale $L_{\text{ref}}$:
-            </p>
-            <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-                $$\begin{aligned}
-                L_{\text{ref}} &= \max_{k \in \{0,1,2\}} \|\mathbf{r}_k\|_2, \qquad &\bar{\mathbf{r}}_k &= \frac{\mathbf{r}_k}{L_{\text{ref}}} \\
-                \bar{G}_0 &= G_0, \qquad &\bar{\mathbf{G}}_1 &= \frac{\mathbf{G}_1}{L_{\text{ref}}}, \qquad &\bar{\mathbf{G}}_2 &= \frac{\mathbf{G}_2}{L_{\text{ref}}^2}
-                \end{aligned}$$
-            </div>
-        </div>
-
-        <!-- 5.2.2 0th Order Term -->
-        <div class="mb-8">
-            <h4 class="text-lg font-semibold text-slate-900 mb-2">5.2.2 0th-Order Vector Field $F_k$</h4>
-            <p class="text-slate-700 leading-relaxed mb-3">
-              Let $d_k = \|\bar{\mathbf{r}}_k\|_2$ and $\hat{\mathbf{r}}_k = \bar{\mathbf{r}}_k / d_k$. The geometric primitive is
-              parameterized by the cross-product normal vectors $\mathbf{U}_k$, tangential auxiliary vectors $\mathbf{V}_k$, and
-              scalar invariants $N, D, S$:
-            </p>
-            <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-              $$\begin{aligned}
-              \mathbf{U}_0 &= \bar{\mathbf{r}}_1 \times \bar{\mathbf{r}}_2, \quad \mathbf{U}_1 = \bar{\mathbf{r}}_2 \times
-              \bar{\mathbf{r}}_0, \quad \mathbf{U}_2 = \bar{\mathbf{r}}_0 \times \bar{\mathbf{r}}_1 \\
-              N &= \bar{\mathbf{r}}_0 \cdot \mathbf{U}_0 = \det([\bar{\mathbf{r}}_0, \bar{\mathbf{r}}_1, \bar{\mathbf{r}}_2]), \quad
-              D = d_0 d_1 d_2 + \sum_{k=0}^2 (\bar{\mathbf{r}}_j \cdot \bar{\mathbf{r}}_m) d_k \\
-              \mathbf{V}_k &= \hat{\mathbf{r}}_k \alpha_k + d_m \bar{\mathbf{r}}_j + d_j \bar{\mathbf{r}}_m \quad \text{with} \quad
-              \alpha_k = d_j d_m + (\bar{\mathbf{r}}_j \cdot \bar{\mathbf{r}}_m)
-              \end{aligned}$$
-            </div>
-            <p class="text-slate-700 leading-relaxed my-3">
-              Defining the solid-angle denominator norm $S = N^2 + D^2$, the generator vector field $\mathbf{W}_k$ and the
-              fundamental 0th-order vertex response field $F_k(\bar{\mathbf{r}}_0, \bar{\mathbf{r}}_1, \bar{\mathbf{r}}_2)$ are
-              defined as:
-            </p>
-            <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-              $$\mathbf{W}_k = D \mathbf{U}_k - N \mathbf{V}_k \implies F_k(\bar{\mathbf{r}}) = \frac{2}{S} \mathbf{W}_k$$
-            </div>
-            <p class="text-slate-700 leading-relaxed mt-3">
-              The 0th-order approximation term $\mathbf{T}_k^{(0)}$ simplifies to the scalar product:
-            </p>
-            <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-              $$\mathbf{T}_k^{(0)} = \bar{G}_0 F_k(\bar{\mathbf{r}}) = \bar{G}_0 \left( \frac{2}{S} \mathbf{W}_k \right)$$
-            </div>
-            </div>
-            
-            <!-- 5.2.3 1st Order Jacobian Contraction -->
-            <div class="mb-8">
-              <h4 class="text-lg font-semibold text-slate-900 mb-2">5.2.3 1st-Order Jacobian Contraction $(\nabla F_k \cdot
-                \bar{\mathbf{G}}_1)$</h4>
-              <p class="text-slate-700 leading-relaxed mb-3">
-                The 1st-order Taylor term corresponds to contracting the full spatial Jacobian $\nabla F_k \in \mathbb{R}^{3 \times
-                9}$ with the first-order moment vector $\bar{\mathbf{G}}_1$. Applying the product rule yields:
-              </p>
-              <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-                $$\mathbf{T}_k^{(1)} = \left( \nabla F_k \cdot \bar{\mathbf{G}}_1 \right) = \frac{2}{S} \, \delta \mathbf{W}_k +
-                \mathbf{W}_k \left( \nabla \left(\frac{2}{S}\right) \cdot \bar{\mathbf{G}}_1 \right)$$
-              </div>
-              <p class="text-slate-700 leading-relaxed my-3">
-                where $\delta \mathbf{W}_k = \left(\frac{\partial \mathbf{W}_k}{\partial \bar{\mathbf{r}}} \cdot
-                \bar{\mathbf{G}}_1\right)$ represents the directional variation of the generator vector:
-              </p>
-              <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-                $$\delta \mathbf{W}_k = \left( N \delta \mathbf{V}_k + S_U \mathbf{V}_k \right) - \left( D \delta \mathbf{U}_k + S_V
-                \mathbf{U}_k \right)$$
-              </div>
-              <p class="text-slate-700 leading-relaxed my-3">
-                with scalar projection sums $S_U = \sum_{j=0}^2 (\mathbf{U}_j \cdot \bar{\mathbf{G}}_1)$ and $S_V = \sum_{j=0}^2
-                (\mathbf{V}_j \cdot \bar{\mathbf{G}}_1)$. The scalar derivative coefficient $c_1$ governing the magnitude shift
-                along $\mathbf{W}_k$ evaluates to:
-              </p>
-              <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-                $$c_1 = \frac{4}{S^2} \left( N S_U + D S_V \right) \implies \mathbf{T}_k^{(1)} = \frac{2}{S} \, \delta \mathbf{W}_k
-                + c_1 \mathbf{W}_k$$
-              </div>
-            </div>
-            
-            <!-- 5.2.4 2nd Order Hessian Contraction -->
-            <div class="mb-8">
-              <h4 class="text-lg font-semibold text-slate-900 mb-2">5.2.4 2nd-Order Hessian Contraction $\frac{1}{2} \left(
-                \bar{\mathbf{G}}_2 : \mathcal{H}_{F_k} \right)$</h4>
-              <p class="text-slate-700 leading-relaxed mb-3">
-                The 2nd-order Taylor term accounts for spatial curvature via tensor contraction of the symmetric moment matrix
-                $\bar{\mathbf{G}}_2 \in \mathbb{R}^{3 \times 3}$ with the vector-valued Hessian hyper-tensor $\mathcal{H}_{F_k} =
-                \nabla^2 F_k$. Disentangling the field tensor decomposition into trace and quadric forms yields:
-              </p>
-              <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-                $$\mathbf{T}_k^{(2)} = \frac{1}{2} \left( \bar{\mathbf{G}}_2 : \mathcal{H}_{F_k} \right) = c_2 \mathbf{W}_k +
-                \frac{4}{S^2} \sum_{j=0}^2 \left( \delta \mathbf{W}_k \cdot (\bar{\mathbf{G}}_1 \otimes \nabla S_j) \right)$$
-              </div>
-              <p class="text-slate-700 leading-relaxed my-3">
-                Here, the scalar curvature coefficient $c_2$ contracts $\bar{\mathbf{G}}_2$ against the metric gradient $\nabla S_j
-                = 2(N \mathbf{U}_j + D \mathbf{V}_j)$ and Laplacian trace fields:
-              </p>
-              <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-                $$c_2 = \frac{8}{S^3} \sum_{j=0}^2 \left( \nabla S_j^\top \bar{\mathbf{G}}_2 \nabla S_j \right) - \frac{4}{S^2}
-                \operatorname{Tr}(\bar{\mathbf{G}}_2) \sum_{j=0}^2 \left( \|\mathbf{U}_j\|_2^2 + \|\mathbf{V}_j\|_2^2 \right)$$
-              </div>
-            </div>
-            
-            <!-- 5.2.5 Dimensional Reconstruction -->
-            <div class="bg-cyan-50/60 p-5 rounded-lg border border-cyan-200/80">
-              <h4 class="text-lg font-semibold text-cyan-950 mb-2">5.2.5 Physical Scale Reconstruction</h4>
-              <p class="text-slate-700 text-sm leading-relaxed mb-3">
-                Finally, the total loss gradient $\nabla_{\mathbf{v}_k} \mathcal{L}$ for each vertex $\mathbf{v}_k$ is reassembled
-                in double precision / FP32 by restoring physical length scales with the solid angle constant factor
-                $\frac{1}{4\pi}$:
-              </p>
-              <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-                $$\nabla_{\mathbf{v}_k} \mathcal{L} \approx \frac{1}{4\pi} \left[ \frac{1}{L_{\text{ref}}} \mathbf{T}_k^{(0)} +
-                \frac{1}{L_{\text{ref}}^2} \mathbf{T}_k^{(1)} + \frac{1}{L_{\text{ref}}^3} \mathbf{T}_k^{(2)} \right]$$
-              </div>
-            </div>
-            </div>
-            </section>
-
-            <section class="bg-white p-8 rounded-xl shadow-xs border border-slate-200/80 mt-6">
-              <div>
-                  <h3 class="text-base font-bold text-slate-900 mb-4 flex items-center gap-2">
-                      Engine Architecture Status &amp; Implementation Matrix
-                  </h3>
-
-                  <div class="space-y-4">
-                      <div class="border border-slate-200 rounded-lg overflow-hidden">
-                          <div class="bg-slate-50 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between">
-                              <span class="text-sm font-semibold text-slate-700">Forward Pass Evaluation Pipeline</span>
-                              <span class="text-xs bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded font-mono">Complete</span>
-                          </div>
-                          <div class="p-4 bg-white divide-y divide-slate-100">
-                              <div class="flex items-start gap-3 py-2">
-                                  <div class="mt-1 w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0"></div>
-                                  <div class="flex-1">
-                                      <p class="text-sm font-semibold text-slate-800">Reference Implementation (Brute-Force)</p>
-                                      <p class="text-xs text-slate-500 mt-0.5">Fully functional, templated codebase supporting both point clouds and
-                                        triangles. Serves as the exact numerical verification baseline for all accelerated tracking paths.</p>
-                                  </div>
-                              </div>
-                              <div class="flex items-start gap-3 py-2 pt-3">
-                                  <div class="mt-1 w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0"></div>
-                                  <div class="flex-1">
-                                      <p class="text-sm font-semibold text-slate-800">Tree-Accelerated Production Kernels (BVH8)</p>
-                                      <p class="text-xs text-slate-500 mt-0.5">Highly unified, template-driven pipelines for point clouds and triangles
-                                        running on an 8-way bounding volume hierarchy. Structural divergences are isolated strictly to the offline tree
-                                        construction routines. Mesh inputs undergo an automated conversion pass to triangle arrays prior to evaluation.</p>
-                                  </div>
-                              </div>
-                          </div>
-                      </div>
-
-                      <div class="border border-slate-200 rounded-lg overflow-hidden">
-                          <div class="bg-slate-50 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between">
-                              <span class="text-sm font-semibold text-slate-700">Backward Pass Differentiation Pipeline</span>
-                              <span class="text-xs bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded font-mono">In Active Development</span>
-                          </div>
-                          <div class="p-4 bg-white divide-y divide-slate-100">
-                              <div class="flex items-start gap-3 py-2">
-                                  <div class="mt-1 w-2 h-2 rounded-full bg-amber-400 flex-shrink-0"></div>
-                                  <div class="flex-1">
-                                      <p class="text-sm font-semibold text-slate-800">Theoretical Adjoint Framework</p>
-                                      <p class="text-xs text-slate-500 mt-0.5">The mathematical formulation for reverse-mode automatic differentiation via
-                                        multi-order query moments is established. Adjoint structures map uniformly across all primitive geometries.</p>
-                                  </div>
-                              </div>
-                              <div class="flex items-start gap-3 py-2 pt-3">
-                                  <div class="mt-1 w-2 h-2 rounded-full bg-slate-300 flex-shrink-0"></div>
-                                  <div class="flex-1">
-                                      <p class="text-sm font-semibold text-slate-700">Kernel Architecture Design</p>
-                                      <p class="text-xs text-slate-400 mt-0.5">Currently planning the underlying implementation details for parallel
-                                        backpropagation. Active tasks focus on determining optimal memory layouts and contraction logic for the dynamic
-                                        query-tree caching system.</p>
-                                  </div>
-                              </div>
-                          </div>
-                      </div>
-                  </div>
-              </div>
-
-          </div>
-        </section>
 
          <section class="bg-slate-900 text-white p-8 rounded-2xl shadow-xl space-y-8">
             <div>
