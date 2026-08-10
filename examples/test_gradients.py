@@ -250,9 +250,9 @@ def test_triangle_gradients(
     t0 = time()
     grad_engine = winder.GradientEngine(queries_torch, grad_output)
     torch.cuda.synchronize()
+    print(f"Building Engine took {time() - t0} sec")
     with open("/tmp/grad_engine_dump.dot", "w") as f:
         f.write(grad_engine.dump())
-    print(f"Building Engine took {time() - t0} sec")
     t0 = time()
     grads = torch.from_dlpack(grad_engine.compute(triangles_torch, beta=-1 if beta is None else beta))
     torch.cuda.synchronize()
