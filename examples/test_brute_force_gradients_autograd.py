@@ -57,6 +57,58 @@ def generate_queries(
         )
 
 
+def pytorch_mesh_winding_grads_chunked_64(
+    vertices: torch.Tensor,  # Shape: [K, 3] float64
+    indices: torch.Tensor,  # Shape: [N, 3] int64
+    queries: torch.Tensor,  # Shape: [Q, 3] float64
+    grad_output: torch.Tensor,  # Shape: [Q] float64
+    chunk_size: int = 50,
+) -> torch.Tensor:
+    """Computes exact float64 autograd gradients for shared Mesh vertices matching CUDA."""
+    v = vertices.clone().detach().requires_grad_(True)
+    num_queries = queries.shape[0]
+    inv_two_pi = 1.0 / (2.0 * math.pi)
+
+    for i in range(0, num_queries, chunk_size):
+        q_chunk = queries[i : i + chunk_size]
+        g_chunk = grad_output[i : i + chunk_size]
+
+        # Index shared vertices into per-triangle corners: [N, 3, 3]
+        tri_v = v[indices]
+
+        v0 = tri_v[:, 0, :][None, :, :]
+        v1 = tri_v[:, 1, :][None, :, :]
+        v2 = tri_v[:, 2, :][None, :, :]
+        q = q_chunk[:, None, :]
+
+        a = v0 - q
+        b = v1 - q
+        c = v2 - q
+
+        a2 = torch.sum(a * a, dim=-1) + 1e-30
+        b2 = torch.sum(b * b, dim=-1) + 1e-30
+        c2 = torch.sum(c * c, dim=-1) + 1e-30
+
+        inv_a = torch.rsqrt(a2)
+        inv_b = torch.rsqrt(b2)
+        inv_c = torch.rsqrt(c2)
+
+        cos_ab = torch.sum(a * b, dim=-1) * inv_a * inv_b
+        cos_ac = torch.sum(a * c, dim=-1) * inv_a * inv_c
+        cos_bc = torch.sum(b * c, dim=-1) * inv_b * inv_c
+
+        cross_bc = torch.cross(b, c, dim=-1)
+        det_norm = torch.sum(a * cross_bc, dim=-1) * inv_a * inv_b * inv_c
+        div_norm = 1.0 + cos_ab + cos_ac + cos_bc
+
+        sol_angle = torch.atan2(det_norm, div_norm) * inv_two_pi
+
+        loss_chunk = torch.sum(sol_angle * g_chunk[:, None])
+        loss_chunk.backward()
+
+    return v.grad
+
+
 def pytorch_triangle_winding_grads_chunked_64(
     vertices: torch.Tensor,  # Shape: [N, 3, 3] float64
     queries: torch.Tensor,  # Shape: [Q, 3] float64
@@ -111,51 +163,72 @@ def validate_gradients(
     ref_grads: np.ndarray,
     label: str,
     signal_threshold: float = 1e-5,
+    abs_tol: float = 1e-5,
 ):
-    """Validates CUDA gradients against reference float64 autograd."""
+    """Validates CUDA gradients against reference float64 autograd with zero-signal handling."""
     cuda_flat = cuda_grads.reshape(-1)
     ref_flat = ref_grads.reshape(-1)
 
-    # 1. Global Relative Norm Error: ||g_cuda - g_ref|| / ||g_ref||
+    max_ref_signal = np.max(np.abs(ref_flat))
+    max_cuda_signal = np.max(np.abs(cuda_flat))
+    max_abs_err = np.max(np.abs(cuda_flat - ref_flat))
+
+    has_active_signal = max_ref_signal > signal_threshold
+
     norm_diff = np.linalg.norm(cuda_flat - ref_flat)
     norm_ref = np.linalg.norm(ref_flat)
-    global_rel_norm_err = norm_diff / (norm_ref + 1e-12)
-
-    # 2. Cosine Similarity (Direction Alignment)
-    dot_prod = np.dot(cuda_flat, ref_flat)
     norm_cuda = np.linalg.norm(cuda_flat)
-    cosine_sim = dot_prod / (norm_cuda * norm_ref + 1e-12)
 
-    # 3. Masked Relative Error (Evaluate on non-zero gradient signals)
-    mask = np.abs(ref_flat) > signal_threshold
-    if np.any(mask):
+    print(f"\n=== Gradient Validation Results: {label} ===")
+    print(f"  -> Reference Signal Max |g|: {max_ref_signal:.6e}")
+    print(f"  -> CUDA Signal Max |g|:      {max_cuda_signal:.6e}")
+    print(f"  -> Maximum Absolute Error:   {max_abs_err:.6e}")
+
+    if not has_active_signal:
+        # --- Regime 1: Zero / Cancelled Signal (e.g. Closed Mesh Vertices) ---
+        print(
+            f"  -> Signal Status: [CANCELLED / NEAR ZERO] (All |g_ref| <= {signal_threshold})"
+        )
+
+        passed = max_abs_err < abs_tol
+        if passed:
+            print(
+                f"\033[92m  ✓ SUCCESS: {label} CUDA gradients analytically cancel to zero within abs tolerance ({abs_tol:.1e})!\033[0m"
+            )
+        else:
+            print(
+                f"\033[91m  ✗ FAILURE: {label} CUDA gradients exceed absolute zero-signal tolerance ({max_abs_err:.6e} > {abs_tol:.1e}).\033[0m"
+            )
+    else:
+        # --- Regime 2: Active Signal Present (e.g. Unshared Triangles) ---
+        global_rel_norm_err = norm_diff / (norm_ref + 1e-12)
+        dot_prod = np.dot(cuda_flat, ref_flat)
+        cosine_sim = dot_prod / (norm_cuda * norm_ref + 1e-12)
+
+        mask = np.abs(ref_flat) > signal_threshold
         abs_err_masked = np.abs(cuda_flat[mask] - ref_flat[mask])
         rel_err_masked = abs_err_masked / np.abs(ref_flat[mask])
         mean_masked_rel = np.mean(rel_err_masked)
         max_masked_rel = np.max(rel_err_masked)
-    else:
-        mean_masked_rel = 0.0
-        max_masked_rel = 0.0
 
-    print(f"\n=== Gradient Validation Results: {label} ===")
-    print(f"  -> Global Relative Norm Error: {global_rel_norm_err:.6f}")
-    print(
-        f"  -> Vector Cosine Similarity:  {cosine_sim:.6f}  (1.000000 = Perfect alignment)"
-    )
-    print(
-        f"  -> Signal-Masked Mean Rel Err: {mean_masked_rel:.6f}  (where |g| > {signal_threshold})"
-    )
-    print(f"  -> Signal-Masked Max Rel Err:  {max_masked_rel:.6f}")
+        print(f"  -> Global Relative Norm Error: {global_rel_norm_err:.6f}")
+        print(
+            f"  -> Vector Cosine Similarity:  {cosine_sim:.6f}  (1.000000 = Perfect alignment)"
+        )
+        print(
+            f"  -> Signal-Masked Mean Rel Err: {mean_masked_rel:.6f}  (where |g| > {signal_threshold})"
+        )
+        print(f"  -> Signal-Masked Max Rel Err:  {max_masked_rel:.6f}")
 
-    # Tightened validation threshold: Cosine Sim > 0.9999 and Rel Norm Error < 0.001 (0.1%)
-    if cosine_sim > 0.9999 and global_rel_norm_err < 1e-3:
-        print(
-            f"\033[92m  ✓ SUCCESS: {label} CUDA gradients match PyTorch autograd ground truth!\033[0m"
-        )
-    else:
-        print(
-            f"\033[91m  ✗ FAILURE: Significant directional or magnitude mismatch in {label}.\033[0m"
-        )
+        passed = (cosine_sim > 0.9999) and (global_rel_norm_err < 1e-3)
+        if passed:
+            print(
+                f"\033[92m  ✓ SUCCESS: {label} CUDA gradients match PyTorch autograd ground truth!\033[0m"
+            )
+        else:
+            print(
+                f"\033[91m  ✗ FAILURE: Significant directional or magnitude mismatch in {label}.\033[0m"
+            )
 
 
 def pytorch_point_normal_grads_chunked_64(
@@ -274,14 +347,11 @@ def test_point_normal_gradients(
     q_tensor = torch.from_numpy(queries).to(torch.float32).cuda()
     g_out_tensor = torch.from_numpy(grad_output).to(torch.float32).cuda()
 
-    print("DEBUG p_tensor:", p_tensor.shape, p_tensor.dtype, p_tensor.device)
-    print("DEBUG n_tensor:", n_tensor.shape, n_tensor.dtype, n_tensor.device)
-    print("DEBUG q_tensor:", q_tensor.shape, q_tensor.dtype, q_tensor.device)
-    print("DEBUG g_out_tensor:", g_out_tensor.shape, g_out_tensor.dtype, g_out_tensor.device)
-
 
     cuda_grads = torch.from_dlpack(
-        winder.brute_force_gradients(g_out_tensor, p_tensor, n_tensor, q_tensor, 1 / inv_epsilon)
+        winder.brute_force_gradients(
+            g_out_tensor, p_tensor, n_tensor, q_tensor, 1 / inv_epsilon
+        )
     )
 
     cuda_n_grads = cuda_grads[:, 0, :]
@@ -308,6 +378,72 @@ def test_point_normal_gradients(
     )
 
 
+def test_mesh_gradients(
+    vertices: np.ndarray,
+    indices: np.ndarray,
+    query_mode: str,
+    query_count: int = 100,
+):
+    print("\n=== Testing Mesh Gradients against PyTorch float64 Autograd ===")
+
+    num_vertices = len(vertices)
+    num_triangles = len(indices)
+
+    queries = generate_queries(vertices, query_mode, query_count)
+    grad_output = np.random.normal(size=(query_count,)).astype(np.float32)
+
+    v_tensor = torch.from_numpy(vertices).to(torch.float32).cuda()
+    idx_tensor = torch.from_numpy(indices.astype(np.uint32)).cuda()
+    q_tensor = torch.from_numpy(queries).cuda()
+    g_out_tensor = torch.from_numpy(grad_output).cuda()
+
+    # Call C++ nanobind overload for shared mesh vertices
+    cuda_grads = torch.from_dlpack(
+        winder.brute_force_gradients(
+            g_out_tensor,
+            v_tensor,
+            idx_tensor,
+            q_tensor,
+            torch.cuda.current_stream().cuda_stream,
+        )
+    )
+
+    print(
+        f"Evaluating PyTorch float64 autograd for {num_vertices} vertices across {num_triangles} triangles..."
+    )
+    v_64 = v_tensor.to(torch.float64)
+    idx_64 = torch.from_numpy(indices.astype(np.int64)).cuda()
+    q_64 = q_tensor.to(torch.float64)
+    g_out_64 = g_out_tensor.to(torch.float64)
+
+    ref_grads_64 = pytorch_mesh_winding_grads_chunked_64(v_64, idx_64, q_64, g_out_64)
+    ref_grads_32 = ref_grads_64.to(torch.float32)
+
+    validate_gradients(
+        cuda_grads.cpu().numpy(), ref_grads_32.cpu().numpy(), "Mesh Vertices"
+    )
+
+
+
+def slice_mesh_in_half(vertices: np.ndarray, indices: np.ndarray, dim: int = 2):
+    """Slices a mesh by keeping faces whose centroids are above the mean position along `dim`."""
+    # Compute face centroids [N, 3]
+    face_verts = vertices[indices]  # [N, 3, 3]
+    centroids = face_verts.mean(axis=1)  # [N, 3]
+
+    # Slice at the median/mean along specified axis
+    split_plane = np.median(centroids[:, dim])
+    mask = centroids[:, dim] > split_plane
+
+    sliced_indices = indices[mask]
+    return vertices, sliced_indices
+
+def drop_half_of_the_triangles(vertices: np.ndarray, indices: np.ndarray):
+    """Slices a mesh by keeping faces whose centroids are above the mean position along `dim`."""
+    choice = np.random.choice(np.arange(len(indices)), len(indices) // 2, replace=False)
+    return vertices, indices[choice]
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Verify generalized winding number analytical gradients against PyTorch float64 autograd."
@@ -321,8 +457,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--geometry_type",
         type=str,
-        choices=["PointNormal", "Triangle", "both"],
-        default="both",
+        choices=["PointNormal", "Triangle", "Mesh", "all"],
+        default="all",
         help="Choose primitive type",
     )
     parser.add_argument(
@@ -349,8 +485,11 @@ if __name__ == "__main__":
 
     print(f"Loading mesh structural data from: {args.obj_file}")
     vertices, _, _, indices, _, _ = igl.readOBJ(args.obj_file)
+    print("DEBUG", indices.shape)
+    vertices, indices = drop_half_of_the_triangles(*slice_mesh_in_half(vertices, indices))
+    print("DEBUG", indices.shape)
 
-    if args.geometry_type in ["Triangle", "both"]:
+    if args.geometry_type in ["Triangle", "all"]:
         test_triangle_gradients(
             vertices,
             indices,
@@ -358,7 +497,15 @@ if __name__ == "__main__":
             args.query_count,
         )
 
-    if args.geometry_type in ["PointNormal", "both"]:
+    if args.geometry_type in ["Mesh", "all"]:
+        test_mesh_gradients(
+            vertices,
+            indices,
+            args.query_mode,
+            args.query_count,
+        )
+
+    if args.geometry_type in ["PointNormal", "all"]:
         test_point_normal_gradients(
             vertices,
             indices,

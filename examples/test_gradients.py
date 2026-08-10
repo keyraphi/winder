@@ -263,6 +263,57 @@ def test_triangle_gradients(
     # Average global relative norm error across all 3 vertices
     return float(np.mean(errs))
 
+def test_mesh_gradients(
+    vertices: np.ndarray,
+    indices: np.ndarray,
+    query_mode: str,
+    query_count: int,
+    beta: None | float,
+) -> float:
+    vertices_torch = torch.from_numpy(vertices).to(torch.float32).to("cuda:0")
+    indices_torch = torch.from_numpy(indices).to(torch.uint32).to("cuda:0")
+    grad_output = torch.randn([query_count], dtype=torch.float32, device="cuda:0") * 100
+    queries = generate_queries(vertices, query_mode, query_count)
+    queries_torch = torch.from_numpy(queries).to(torch.float32).to("cuda:0")
+
+    torch.cuda.synchronize()
+    print("Forward:")
+    t0 = time()
+    wn = winder.brute_force_winding_numbers(vertices_torch, indices_torch, queries_torch)
+    torch.cuda.synchronize()
+    print(f"Brute force took {time() - t0} sec")
+    t0 = time()
+    engine = winder.WindingNumberEngine(vertices_torch, indices_torch)
+    torch.cuda.synchronize()
+    print(f"Building engine took {time() - t0} sec")
+    t0 = time()
+    wn = engine.compute(queries_torch)
+    torch.cuda.synchronize()
+    print(f"Computing winding numbers took {time() - t0} sec")
+
+    print("Backward:")
+    torch.cuda.synchronize()
+    t0 = time()
+    gt_grads = torch.from_dlpack(
+        winder.brute_force_gradients(grad_output, vertices_torch, indices_torch, queries_torch)
+    )
+    torch.cuda.synchronize()
+    print(f"Brute Force took {time() - t0} sec")
+
+    t0 = time()
+    grad_engine = winder.GradientEngine(queries_torch, grad_output)
+    torch.cuda.synchronize()
+    print(f"Building Engine took {time() - t0} sec")
+
+    t0 = time()
+    grads = torch.from_dlpack(grad_engine.compute(vertices_torch, indices_torch, beta=-1 if beta is None else beta))
+    torch.cuda.synchronize()
+    print(f"Fast variant took {time() - t0} sec")
+    print("DEBUG:", grads)
+
+    err = validate_gradients(grads.cpu().numpy(), gt_grads.cpu().numpy(), "Vertex")
+
+    return float(err)
 
 def test_point_normal_gradients(
     points: np.ndarray,
@@ -341,6 +392,7 @@ def write_run_to_csv(
     args: argparse.Namespace,
     pn_error: float | None,
     tri_error: float | None,
+    mesh_error: float | None,
 ):
     """Appends a single summary row for the entire benchmark run into the CSV."""
     file_exists = os.path.exists(csv_path)
@@ -356,6 +408,7 @@ def write_run_to_csv(
         "inv_epsilon",
         "pn_rel_norm_err",
         "tri_rel_norm_err",
+        "mesh_rel_norm_err",
     ]
 
     row = {
@@ -369,6 +422,7 @@ def write_run_to_csv(
         "inv_epsilon": args.inv_epsilon,
         "pn_rel_norm_err": f"{pn_error:.6e}" if pn_error is not None else "",
         "tri_rel_norm_err": f"{tri_error:.6e}" if tri_error is not None else "",
+        "mesh_rel_norm_err": f"{mesh_error:.6e}" if mesh_error is not None else "",
     }
 
     with open(csv_path, mode="a", newline="") as f:
@@ -432,6 +486,23 @@ def plot_comparison(csv_path: str):
     plt.tight_layout()
     plt.show()
 
+def slice_mesh_in_half(vertices: np.ndarray, indices: np.ndarray, dim: int = 2):
+    """Slices a mesh by keeping faces whose centroids are above the mean position along `dim`."""
+    # Compute face centroids [N, 3]
+    face_verts = vertices[indices]  # [N, 3, 3]
+    centroids = face_verts.mean(axis=1)  # [N, 3]
+
+    # Slice at the median/mean along specified axis
+    split_plane = np.median(centroids[:, dim])
+    mask = centroids[:, dim] > split_plane
+
+    sliced_indices = indices[mask]
+    return vertices, sliced_indices
+
+def drop_half_of_the_triangles(vertices: np.ndarray, indices: np.ndarray):
+    """Slices a mesh by keeping faces whose centroids are above the mean position along `dim`."""
+    choice = np.random.choice(np.arange(len(indices)), len(indices) // 2, replace=False)
+    return vertices, indices[choice]
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -446,8 +517,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--geometry_type",
         type=str,
-        choices=["PointNormal", "Triangle", "both"],
-        default="both",
+        choices=["PointNormal", "Triangle", "Mesh", "All"],
+        default="All",
         help="Choose primitive type",
     )
     parser.add_argument(
@@ -491,13 +562,14 @@ if __name__ == "__main__":
 
     print(f"Loading mesh structural data from: {args.obj_file}")
     vertices, _, _, indices, _, _ = igl.readOBJ(args.obj_file)
+    vertices, indices = drop_half_of_the_triangles(*slice_mesh_in_half(vertices, indices))
 
     print(f"INFO: object has {len(indices)} Triangles/PointNormals")
 
     pn_error = None
     tri_error = None
 
-    if args.geometry_type in ["PointNormal", "both"]:
+    if args.geometry_type in ["PointNormal", "All"]:
         points, normals, areas = mesh_to_point_surfels(vertices, indices)
         pn_error = test_point_normal_gradients(
             points,
@@ -509,12 +581,17 @@ if __name__ == "__main__":
             args.beta,
         )
 
-    if args.geometry_type in ["Triangle", "both"]:
+    if args.geometry_type in ["Triangle", "All"]:
         tri_error = test_triangle_gradients(
+            vertices, indices, args.query_mode, args.query_count, args.beta
+        )
+
+    if args.geometry_type in ["Mesh", "All"]:
+        mesh_error = test_mesh_gradients(
             vertices, indices, args.query_mode, args.query_count, args.beta
         )
 
     if args.label:
         timestamp_label = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{args.label}"
-        write_run_to_csv(args.csv_path, timestamp_label, args.label, args, pn_error, tri_error)
+        write_run_to_csv(args.csv_path, timestamp_label, args.label, args, pn_error, tri_error, mesh_error)
         plot_comparison(args.csv_path)

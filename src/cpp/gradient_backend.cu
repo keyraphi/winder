@@ -242,8 +242,8 @@ void GradientBackend::init(const float *queries, const float *grad_outputs) {
   compute_internal_tailor_coefficients_m2m_backward(
       m_bvh8_nodes, bvh8_internal_parent_map, m_binary_aabbs + leaf_count - 1,
       leaf_coefficients, bvh8_leaf_parents, m_bvh8_leaf_pointers,
-      m_taylor_coefficients, bvh8_nodes_child_count,
-      leaf_count, atomic_counters, m_build_stream);
+      m_taylor_coefficients, bvh8_nodes_child_count, leaf_count,
+      atomic_counters, m_build_stream);
 
   CUDA_CHECK(cudaFreeAsync(leaf_coefficients, m_build_stream));
   CUDA_CHECK(cudaFreeAsync(atomic_counters, m_build_stream));
@@ -435,8 +435,12 @@ auto GradientBackend::compute(const float *vertices,
   float *vertex_gradients;
   CUDA_CHECK(cudaMallocAsync(&vertex_gradients,
                              vertex_count * 3 * sizeof(float), compute_stream));
+  CUDA_CHECK(cudaMemsetAsync(vertex_gradients, 0,
+                             vertex_count * 3 * sizeof(float), compute_stream));
 
-  // TODO sum up the contributions to the vertices
+  accumulate_vertex_gradients(triangle_result.get(), triangle_indices,
+                              geometry_count, vertex_gradients, compute_stream);
+
   CudaUniquePtr<float> result(
       vertex_gradients, CudaDeleter{reinterpret_cast<size_t>(compute_stream)});
   return result;

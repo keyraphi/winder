@@ -183,7 +183,7 @@ auto brute_force_gradients(const Scalar_t &grad_output, const Vec3_t &vertices,
   nb::capsule owner(raw_ptr,
                     [](void *p) noexcept { winder_cuda::cuda_free(p); });
 
-  return {raw_ptr, {vertices.shape(0), 3, 3}, owner};
+  return {raw_ptr, {vertices.shape(0), 3}, owner};
 }
 
 auto brute_force_gradients(const Scalar_t &grad_output,
@@ -264,7 +264,7 @@ public:
       g->deleter(g->ptr);
       delete g;
     });
-    return {raw_ptr, {vertices.shape(0), 3, 3}, owner};
+    return {raw_ptr, {vertices.shape(0), 3}, owner};
   }
   // Triangles
   auto compute(const Triangle_t &triangles, float beta = -1.F,
@@ -568,7 +568,7 @@ NB_MODULE(winder_module, m) {
               "cuda], vertices: Array[K, 3; float32, cuda], triangle_indices: "
               "Array[N, 3; uint32_t, cuda], queries: Array[M, 3; float32, "
               "cuda], epsilon: float, stream: uint64_t = 0) -> Array[K, "
-              "2, 3; float32, cuda]"),
+              "3; float32, cuda]"),
       R"doc(
                 Compute the partial derivatives w.r.t. the given triangles vertex positions.
 
@@ -615,7 +615,7 @@ NB_MODULE(winder_module, m) {
         nb::sig("def brute_force_gradients(grad_output: Array[N; float32, "
                 "cuda], triangles: Array[N, 3, 3; uint32_t, cuda], queries: "
                 "Array[M, 3; float32, cuda], epsilon: float, stream: uint64_t "
-                "= 0) -> Array[N, 2, 3; float32, cuda]"),
+                "= 0) -> Array[N, 3, 3; float32, cuda]"),
         R"doc(
                 Compute the partial derivatives w.r.t. the given triangles vertex positions.
 

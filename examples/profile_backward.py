@@ -180,6 +180,7 @@ if __name__ == "__main__":
     queries = generate_fixed_grid_queries(vertices, args.query_count)
     grad_output = torch.randn(args.query_count, dtype=torch.float32, device="cuda:0")
 
+    torch.cuda.profiler.start()
     if args.geometry_type == "Triangle":
         profile_triangle(
             vertices,
@@ -201,3 +202,4 @@ if __name__ == "__main__":
             args.warmup,
             args.iters,
         )
+    torch.cuda.profiler.stop()

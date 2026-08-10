@@ -9,6 +9,7 @@
 #include "tensor3.h"
 #include "traversal.cuh"
 #include "vec3.h"
+#include "winding_numbers_backend.h"
 #include <cooperative_groups.h>
 #include <cooperative_groups/scan.h>
 #include <cstdint>
@@ -613,70 +614,31 @@ __global__ void __launch_bounds__(128) compute_point_normal_gradient_kernel(
         if (child_type == ChildType::LEAF) {
           uint32_t leaf_idx = shared_leaf_ptrs[warp_id].indices[child_idx];
 
-          uint32_t detailed_leaf_evaluation_mask =
-              __ballot_sync(0xFFFFFFFF, is_still_active);
+          if (is_still_active) {
+            constexpr float INV_PI_1_5 = 0.179587122F;
+            const float inv_epsilon3 =
+                params.inv_epsilon * params.inv_epsilon * params.inv_epsilon;
+            const float reg_term_const = inv_epsilon3 * INV_PI_1_5;
+            const float near_field_g_denum =
+                (INV_PI_1_5 * (1.F / 3.F)) * inv_epsilon3;
 
-          if (detailed_leaf_evaluation_mask == 0) {
-            // leaf contribution was approximated by all interested threads.
-            // Continue with next child.
-            continue;
-          }
-          // Detailed evaluation of leaf is needed for some threads.
-          uint32_t my_query_idx = leaf_idx * 32 + lane_id;
-          bool is_my_query_in_bounds = my_query_idx < params.query_count;
-          Vec3 my_query = Vec3::load(params.sorted_queries, my_query_idx,
-                                     params.query_count);
-          float my_grad_output = my_query_idx < params.query_count
-                                     ? params.sorted_grad_outputs[my_query_idx]
-                                     : 0.F;
-          // Use full warp to compute contributions of interested geometry one
-          // by one. We need some constants for that:
-          constexpr float INV_PI_1_5 = 0.179587122F;
-          const float inv_epsilon3 =
-              params.inv_epsilon * params.inv_epsilon * params.inv_epsilon;
-          const float reg_term_const = inv_epsilon3 * INV_PI_1_5;
-          const float near_field_g_denum =
-              (INV_PI_1_5 * (1.F / 3.F)) * inv_epsilon3;
-          while (detailed_leaf_evaluation_mask > 0) {
-            int current_leader = __ffs(detailed_leaf_evaluation_mask) - 1;
-            // set current leader bit to 0
-            detailed_leaf_evaluation_mask =
-                detailed_leaf_evaluation_mask & (~(1U << current_leader));
-            PointNormal shared_geometry;
-            // Get the geometry from leader
-            shared_geometry.p.x =
-                __shfl_sync(0xFFFFFFFF, my_geometry.p.x, current_leader);
-            shared_geometry.p.y =
-                __shfl_sync(0xFFFFFFFF, my_geometry.p.y, current_leader);
-            shared_geometry.p.z =
-                __shfl_sync(0xFFFFFFFF, my_geometry.p.z, current_leader);
-            shared_geometry.n.x =
-                __shfl_sync(0xFFFFFFFF, my_geometry.n.x, current_leader);
-            shared_geometry.n.y =
-                __shfl_sync(0xFFFFFFFF, my_geometry.n.y, current_leader);
-            shared_geometry.n.z =
-                __shfl_sync(0xFFFFFFFF, my_geometry.n.z, current_leader);
-            // compute the gradient contribution from my query
-            PointNormal my_contribution{.p = Vec3::zero(), .n = Vec3::zero()};
-            if (is_my_query_in_bounds) {
-              my_contribution = shared_geometry.gradContributionOfQuery(
-                  my_query, my_grad_output, params.inv_epsilon, reg_term_const,
+            for (uint32_t query_counter = 0; query_counter < LEAF_SIZE;
+                 ++query_counter) {
+              uint32_t query_idx = query_counter + leaf_idx * LEAF_SIZE;
+              if (query_idx >= params.query_count) {
+                break;
+              }
+              Vec3 query = Vec3::load(params.sorted_queries, query_idx,
+                                      params.query_count);
+              float grad_output = params.sorted_grad_outputs[query_idx];
+              my_gradient += my_geometry.gradContributionOfQuery(
+                  query, grad_output, params.inv_epsilon, reg_term_const,
                   near_field_g_denum);
             }
-            // sum up all contributions in warp
-            PointNormal total_contribution;
-            total_contribution.p.x = warp_reduce_add_xor(my_contribution.p.x);
-            total_contribution.p.y = warp_reduce_add_xor(my_contribution.p.y);
-            total_contribution.p.z = warp_reduce_add_xor(my_contribution.p.z);
-            total_contribution.n.x = warp_reduce_add_xor(my_contribution.n.x);
-            total_contribution.n.y = warp_reduce_add_xor(my_contribution.n.y);
-            total_contribution.n.z = warp_reduce_add_xor(my_contribution.n.z);
-            // only leader adds that contribution
-            if ((int)lane_id == current_leader) {
-              my_gradient += total_contribution;
-            }
           }
-        } else {
+        }
+
+        else {
           // Child is inner node
           uint32_t child_node_idx =
               current_node.child_base + added_inner_node_counter;
@@ -825,7 +787,6 @@ struct TriangleGradientKernelParams {
   uint32_t geometry_count;
   float beta_2;
 };
-
 // Kernel signature using __grid_constant__
 __global__ void __launch_bounds__(128) compute_triangle_gradient_kernel(
     __grid_constant__ const TriangleGradientKernelParams params) {
@@ -979,53 +940,18 @@ __global__ void __launch_bounds__(128) compute_triangle_gradient_kernel(
         if (child_type == ChildType::LEAF) {
           uint32_t leaf_idx = shared_leaf_ptrs[warp_id].indices[child_idx];
 
-          uint32_t detailed_leaf_evaluation_mask =
-              __ballot_sync(0xFFFFFFFF, is_still_active);
-
-          if (detailed_leaf_evaluation_mask == 0) {
-            // leaf contribution was approximated by all interested threads.
-            // Continue with next child.
-            continue;
-          }
-          // Detailed evaluation of leaf is needed for some threads.
-          uint32_t my_query_idx = leaf_idx * 32 + lane_id;
-          bool is_my_query_in_bounds = my_query_idx < params.query_count;
-          Vec3 my_query = Vec3::load(params.sorted_queries, my_query_idx,
-                                     params.query_count);
-          float my_grad_output = my_query_idx < params.query_count
-                                     ? params.sorted_grad_outputs[my_query_idx]
-                                     : 0.F;
-          // Use full warp to compute contributions of interested geometry one
-          // by one.
-          while (detailed_leaf_evaluation_mask > 0) {
-            int current_leader = __ffs(detailed_leaf_evaluation_mask) - 1;
-            // set current leader bit to 0
-            detailed_leaf_evaluation_mask =
-                detailed_leaf_evaluation_mask & (~(1U << current_leader));
-            // Get the geometry from leader
-            const Triangle &leader_geometry =
-                shared_warp_geometry[warp_id][current_leader];
-
-            Triangle my_contribution{
-                .v0 = Vec3::zero(), .v1 = Vec3::zero(), .v2 = Vec3::zero()};
-            if (is_my_query_in_bounds) {
-              my_contribution = leader_geometry.gradContributionOfQuery(
-                  my_query, my_grad_output);
-            }
-            // sum up all contributions in warp
-            auto *my_gradient_ptr = reinterpret_cast<float *>(&my_gradient);
-            const auto *my_contribution_ptr =
-                reinterpret_cast<const float *>(&my_contribution);
-            //
-            // TODO TEST IF non cooperative summation is more efficient
-            //
-#pragma unroll 9
-            for (int i = 0; i < 9; ++i) {
-              float reduced = warp_reduce_add_xor(my_contribution_ptr[i]);
-              // Accumulate result of all warps only for current_leader
-              if ((int)lane_id == current_leader) {
-                my_gradient_ptr[i] += reduced;
+          if (is_still_active) {
+            for (uint32_t query_counter = 0; query_counter < LEAF_SIZE;
+                 ++query_counter) {
+              uint32_t query_idx = query_counter + leaf_idx * LEAF_SIZE;
+              if (query_idx >= params.query_count) {
+                break;
               }
+              Vec3 query = Vec3::load(params.sorted_queries, query_idx,
+                                      params.query_count);
+              float grad_output = params.sorted_grad_outputs[query_idx];
+              my_gradient += shared_warp_geometry[warp_id][lane_id]
+                                 .gradContributionOfQuery(query, grad_output);
             }
           }
         } else {
@@ -1053,6 +979,7 @@ __global__ void __launch_bounds__(128) compute_triangle_gradient_kernel(
     }
   } // grid while
 }
+
 
 void compute_triangle_gradients(const ComputeGradientsTriangleParams &params,
                                 int device_id, const cudaStream_t &stream) {

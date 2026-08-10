@@ -431,6 +431,7 @@ __device__ __forceinline__ auto compute_node_gradient_approximation(
 }
 
 
+
 /**
  * @brief Scale-invariant 0th + 1st + 2nd order Taylor approximation of loss
  * gradients for a Triangle primitive with respect to its vertices.

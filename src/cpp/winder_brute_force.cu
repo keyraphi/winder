@@ -96,11 +96,21 @@ auto brute_force_mesh_impl(const float *vertices,
                    compute_stream);
 
   // use regular triangle computation
-  auto result = brute_force_triangle_impl(triangles, queries, geometry_count,
+  auto triangle_result = brute_force_triangle_impl(triangles, queries, geometry_count,
                                           query_count, device_id, stream);
   // release temporary triangle array
   CUDA_CHECK(cudaFreeAsync(triangles, compute_stream));
 
+
+  float *vertex_gradients;
+  CUDA_CHECK(cudaMallocAsync(&vertex_gradients,
+                             vertex_count * 3 * sizeof(float), compute_stream));
+  CUDA_CHECK(cudaMemsetAsync(vertex_gradients, 0,
+                             vertex_count * 3 * sizeof(float), compute_stream));
+  accumulate_vertex_gradients(triangle_result.get(), triangle_indices, geometry_count, vertex_gradients, compute_stream);
+
+  CudaUniquePtr<float> result(
+      vertex_gradients, CudaDeleter{reinterpret_cast<size_t>(compute_stream)});
   return result;
 }
 
@@ -262,7 +272,9 @@ auto brute_force_mesh_gradient_impl(
 
   float *vertice_grads;
   CUDA_CHECK(cudaMallocAsync(
-      &vertice_grads, vertex_count * 3 * 3 * sizeof(float), compute_stream));
+      &vertice_grads, vertex_count * 3 * sizeof(float), compute_stream));
+  CUDA_CHECK(cudaMemsetAsync(vertice_grads, 0,
+                             vertex_count * 3 * sizeof(float), compute_stream));
   accumulate_vertice_gradients(triangle_result.get(), triangle_indices,
                                static_cast<uint32_t>(geometry_count),
                                vertice_grads, compute_stream);
