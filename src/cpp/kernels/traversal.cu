@@ -827,7 +827,7 @@ struct TriangleGradientKernelParams {
 };
 
 // Kernel signature using __grid_constant__
-__global__ void __launch_bounds__(128, 4) compute_triangle_gradient_kernel(
+__global__ void __launch_bounds__(128) compute_triangle_gradient_kernel(
     __grid_constant__ const TriangleGradientKernelParams params) {
   const uint32_t warp_id = threadIdx.x / 32;
   const uint32_t lane_id = threadIdx.x % 32;
