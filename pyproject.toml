@@ -38,9 +38,6 @@ reportUnusedImport = "none"
 src = ["src"]
 target-version = "py312"
 
-[tool.ruff.lint]
-extend-select = ["I"]  # Auto-sort imports
-
 [tool.scikit-build]
 cmake.version = ">=3.18"
 wheel.packages = ["src/winder"]

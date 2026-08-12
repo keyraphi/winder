@@ -1,7 +1,7 @@
-from typing import Literal
+from typing import Literal, override
 import torch
 import torch.nn as nn
-from . import functional as WF
+from .functional import winding_mesh, winding_triangles, winding_point_normals
 
 ModeType = Literal["fast", "brute_force"]
 
@@ -31,8 +31,9 @@ class MeshWindingField(nn.Module):
         self.beta_backward: float = beta_backward
         self.mode: ModeType = mode
 
+    @override
     def forward(self, queries: torch.Tensor) -> torch.Tensor:
-        return WF.winding_mesh(
+        return winding_mesh(
             self.vertices,
             self.indices,
             queries,
@@ -64,8 +65,9 @@ class TriangleWindingField(nn.Module):
         self.beta_backward: float = beta_backward
         self.mode: ModeType = mode
 
+    @override
     def forward(self, queries: torch.Tensor) -> torch.Tensor:
-        return WF.winding_triangles(
+        return winding_triangles(
             self.triangles,
             queries,
             beta_forward=self.beta_forward,
@@ -104,8 +106,9 @@ class PointNormalWindingField(nn.Module):
         self.epsilon: float = epsilon
         self.mode: ModeType = mode
 
+    @override
     def forward(self, queries: torch.Tensor) -> torch.Tensor:
-        return WF.winding_point_normals(
+        return winding_point_normals(
             self.points,
             self.scaled_normals,
             queries,
@@ -114,50 +117,3 @@ class PointNormalWindingField(nn.Module):
             epsilon=self.epsilon,
             mode=self.mode,
         )
-
-
-def WindingNumberField(*args, **kwargs) -> nn.Module:
-    """Factory function creating the appropriate WindingNumberField subclass based on positional signature or keyword arguments.
-
-    Signatures:
-      - WindingNumberField(vertices, indices, ...)       -> MeshWindingField
-      - WindingNumberField(triangles, ...)               -> TriangleWindingField
-      - WindingNumberField(points, scaled_normals, ...)  -> PointNormalWindingField
-    """
-    if len(args) == 2:
-        arg0, arg1 = args[0], args[1]
-        if (
-            isinstance(arg1, torch.Tensor)
-            and not torch.is_floating_point(arg1)
-            and arg1.ndim == 2
-            and arg1.shape[-1] == 3
-        ):
-            return MeshWindingField(*args, **kwargs)
-        elif (
-            isinstance(arg0, torch.Tensor)
-            and isinstance(arg1, torch.Tensor)
-            and arg0.shape == arg1.shape
-            and arg0.shape[-1] == 3
-        ):
-            return PointNormalWindingField(*args, **kwargs)
-
-    elif len(args) == 1:
-        arg0 = args[0]
-        if (
-            isinstance(arg0, torch.Tensor)
-            and arg0.ndim == 3
-            and arg0.shape[1:] == (3, 3)
-        ):
-            return TriangleWindingField(*args, **kwargs)
-
-    if "vertices" in kwargs and "indices" in kwargs:
-        return MeshWindingField(**kwargs)
-    elif "triangles" in kwargs:
-        return TriangleWindingField(**kwargs)
-    elif "points" in kwargs and "scaled_normals" in kwargs:
-        return PointNormalWindingField(**kwargs)
-
-    raise ValueError(
-        "Invalid signature for WindingNumberField. Provide either (vertices, indices), "
-        "(triangles,), or (points, scaled_normals)."
-    )

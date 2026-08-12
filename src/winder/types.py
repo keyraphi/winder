@@ -1,9 +1,16 @@
-from typing import Any, Generic, Literal, Protocol, TypeVar, TypeVarTuple, runtime_checkable
+from typing import (
+    Any,
+    Generic,
+    Protocol,
+    TypeVar,
+    TypeVarTuple,
+    runtime_checkable,
+)
 
 # Dimension TypeVars & Variadic Shape ---
-N = TypeVar("N")
-M = TypeVar("M")
-K = TypeVar("K")
+N = TypeVar("N", default=Any)
+M = TypeVar("M", default=Any)
+K = TypeVar("K", default=Any)
 
 ShapeArgs = TypeVarTuple("ShapeArgs")
 
@@ -26,19 +33,27 @@ class cuda: ...
 class cpu: ...
 
 
-# Generic Phantom Parameters ---
+# Underlying structural protocol for DLPack objects ---
+@runtime_checkable
+class _DLPackArray(Protocol):
+    """Structural DLPack protocol satisfied by torch.Tensor, jax.Array, cupy.ndarray, etc."""
+
+    def __dlpack__(
+        self,
+        *,
+        stream: Any = None,
+        max_version: tuple[int, int] | None = None,
+        dl_device: tuple[Any, int] | None = None,
+        copy: bool | None = None,
+    ) -> Any: ...
+
+    def __dlpack_device__(self) -> tuple[int, int]: ...
+
+
+# Phantom parameters for rich IDE annotations ---
 S = TypeVar("S")
 D = TypeVar("D")
 Dev = TypeVar("Dev")
 
-
-@runtime_checkable
-class Array(Protocol[S, D, Dev]):
-    """Framework-agnostic array protocol for any DLPack-compatible tensor.
-
-    Accepts torch.Tensor, jax.Array, cupy.ndarray, or any object implementing
-    the __dlpack__ specification while maintaining rich shape and dtype documentation in IDEs.
-    """
-
-    def __dlpack__(self, stream: Any = None) -> Any: ...
-    def __dlpack_device__(self) -> tuple[int, int]: ...
+# Generic Type Alias mapping phantom descriptors to the structural protocol
+type Array[S, D, Dev] = _DLPackArray

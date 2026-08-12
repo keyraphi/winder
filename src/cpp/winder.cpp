@@ -397,9 +397,9 @@ NB_MODULE(winder_module, m) {
                           uint64_t>(&brute_force_winding_numbers),
         "points"_a, "scaled_normals"_a, "queries"_a, "epsilon"_a = -1.F,
         "stream"_a = 0,
-        nb::sig("def brute_force_winding_numbers(points: winder.types.Array[winder.types.Shape[winder.types.N, winder.types.Literal[3]], winder.types.float32, "
-                "winder.types.cuda], scaled_normals: winder.types.Array[winder.types.Shape[winder.types.N, winder.types.Literal[3]], winder.types.float32, winder.types.cuda], queries: "
-                "winder.types.Array[winder.types.Shape[winder.types.M, winder.types.Literal[3]], winder.types.float32, winder.types.cuda], epsilon: float = -1, "
+        nb::sig("def brute_force_winding_numbers(points: winder.types.Array[winder.types.Shape[winder.types.N, typing.Literal[3]], winder.types.float32, "
+                "winder.types.cuda], scaled_normals: winder.types.Array[winder.types.Shape[winder.types.N, typing.Literal[3]], winder.types.float32, winder.types.cuda], queries: "
+                "winder.types.Array[winder.types.Shape[winder.types.M, typing.Literal[3]], winder.types.float32, winder.types.cuda], epsilon: float = -1, "
                 "stream: int = 0) -> "
                 "winder.types.Array[winder.types.Shape[winder.types.M], winder.types.float32, winder.types.cuda]"),
         R"doc(
@@ -439,9 +439,9 @@ NB_MODULE(winder_module, m) {
       nb::overload_cast<const Vec3_t &, const TriangleIdx_t &, const Vec3_t &,
                         const uint64_t>(&brute_force_winding_numbers),
       "vertices"_a, "triangle_indices"_a, "queries"_a, "stream"_a = 0,
-      nb::sig("def brute_force_winding_numbers(vertices: winder.types.Array[winder.types.Array[winder.types.K, winder.types.Literal[3]], winder.types.float32, "
-              "winder.types.cuda], triangle_indices: winder.types.Array[winder.types.Shape[winder.types.N, winder.types.Literal[3]], winder.types.uint32, winder.types.cuda], queries: "
-              "winder.types.Array[winder.types.Shape[winder.types.M, winder.types.Literal[3]], winder.types.float32, winder.types.cuda], "
+      nb::sig("def brute_force_winding_numbers(vertices: winder.types.Array[winder.types.Shape[winder.types.K, typing.Literal[3]], winder.types.float32, "
+              "winder.types.cuda], triangle_indices: winder.types.Array[winder.types.Shape[winder.types.N, typing.Literal[3]], winder.types.uint32, winder.types.cuda], queries: "
+              "winder.types.Array[winder.types.Shape[winder.types.M, typing.Literal[3]], winder.types.float32, winder.types.cuda], "
               "stream: int = 0) -> "
               "winder.types.Array[winder.types.Shape[winder.types.M], winder.types.float32, winder.types.cuda]"),
       R"doc(
@@ -472,8 +472,8 @@ NB_MODULE(winder_module, m) {
         nb::overload_cast<const Triangle_t &, const Vec3_t &, const uint64_t>(
             &brute_force_winding_numbers),
         "triangles"_a, "queries"_a, "stream"_a = 0,
-        nb::sig("def brute_force_winding_numbers(triangles: winder.types.Array[winder.types.Shape[winder.types.N, winder.types.Literal[3], winder.types.Literal[3]], "
-                "winder.types.float32, winder.types.cuda], queries: winder.types.Array[winder.types.Shape[winder.types.M, winder.types.Literal[3]], winder.types.float32, winder.types.cuda], stream: "
+        nb::sig("def brute_force_winding_numbers(triangles: winder.types.Array[winder.types.Shape[winder.types.N, typing.Literal[3], typing.Literal[3]], "
+                "winder.types.float32, winder.types.cuda], queries: winder.types.Array[winder.types.Shape[winder.types.M, typing.Literal[3]], winder.types.float32, winder.types.cuda], stream: "
                 "int = 0) -> winder.types.Array[winder.types.Shape[winder.types.M], winder.types.float32, winder.types.cuda]"),
         R"doc(
                 Computes the winding number at the given query locations on GPU.
@@ -506,10 +506,10 @@ NB_MODULE(winder_module, m) {
         "grad_output"_a, "points"_a, "scaled_normals"_a, "queries"_a,
         "epsilon"_a = -1, "stream"_a = 0,
         nb::sig("def brute_force_gradients(grad_output: winder.types.Array[winder.types.Shape[winder.types.N], winder.types.float32, "
-                "winder.types.cuda], points: winder.types.Array[winder.types.Shape[winder.types.N, winder.types.Literal[3]], winder.types.float32, winder.types.cuda], scaled_normals: "
-                "winder.types.Array[winder.types.Shape[winder.types.N, winder.types.Literal[3]], winder.types.float32, winder.types.cuda], queries: winder.types.Array[winder.types.Shape[winder.types.M, winder.types.Literal[3]], winder.types.float32, "
+                "winder.types.cuda], points: winder.types.Array[winder.types.Shape[winder.types.N, typing.Literal[3]], winder.types.float32, winder.types.cuda], scaled_normals: "
+                "winder.types.Array[winder.types.Shape[winder.types.N, typing.Literal[3]], winder.types.float32, winder.types.cuda], queries: winder.types.Array[winder.types.Shape[winder.types.M, typing.Literal[3]], winder.types.float32, "
                 "winder.types.cuda], epsilon: float, stream: int = 0) -> winder.types.Array[winder.types.Shape[winder.types.N, "
-                "winder.types.Literal[2], winder.types.Literal[3]], winder.types.float32, winder.types.cuda]"),
+                "typing.Literal[2], typing.Literal[3]], winder.types.float32, winder.types.cuda]"),
         R"doc(
                 Compute the partial derivatives w.r.t. the given point
                 positions and scaled normals.
@@ -565,10 +565,10 @@ NB_MODULE(winder_module, m) {
       "grad_output"_a, "vertices"_a, "triangle_indices"_a, "queries"_a,
       "stream"_a = 0,
       nb::sig("def brute_force_gradients(grad_output: winder.types.Array[winder.types.Shape[winder.types.N], winder.types.float32, "
-              "winder.types.cuda], vertices: winder.types.Array[winder.types.Shape[winder.types.K, winder.types.Literal[3]], winder.types.float32, winder.types.cuda], triangle_indices: "
-              "winder.types.Array[winder.types.Shape[winder.types.N, winder.types.Literal[3]], winder.types.uint32, winder.types.cuda], queries: winder.types.Array[winder.types.Shape[winder.types.M, winder.types.Literal[3]], winder.types.float32, "
+              "winder.types.cuda], vertices: winder.types.Array[winder.types.Shape[winder.types.K, typing.Literal[3]], winder.types.float32, winder.types.cuda], triangle_indices: "
+              "winder.types.Array[winder.types.Shape[winder.types.N, typing.Literal[3]], winder.types.uint32, winder.types.cuda], queries: winder.types.Array[winder.types.Shape[winder.types.M, typing.Literal[3]], winder.types.float32, "
               "winder.types.cuda], epsilon: float, stream: int = 0) -> winder.types.Array[winder.types.Shape[winder.types.K, "
-              "winder.types.Literal[3]], winder.types.float32, winder.types.cuda]"),
+              "typing.Literal[3]], winder.types.float32, winder.types.cuda]"),
       R"doc(
                 Compute the partial derivatives w.r.t. the given triangles vertex positions.
 
@@ -613,9 +613,9 @@ NB_MODULE(winder_module, m) {
                           const uint64_t>(&brute_force_gradients),
         "grad_output"_a, "triangles"_a, "queries"_a, "stream"_a = 0,
         nb::sig("def brute_force_gradients(grad_output: winder.types.Array[winder.types.Shape[winder.types.N], winder.types.float32, "
-                "winder.types.cuda], triangles: winder.types.Array[winder.types.Shape[winder.types.N, winder.types.Literal[3], winder.types.Literal[3]], winder.types.uint32, winder.types.cuda], queries: "
-                "winder.types.Array[winder.types.Shape[winder.types.M, winder.types.Literal[3]], winder.types.float32, winder.types.cuda], stream: int "
-                "= 0) -> winder.types.Array[winder.types.Shape[winder.types.N, winder.types.Literal[3], winder.types.Literal[3]], winder.types.float32, winder.types.cuda]"),
+                "winder.types.cuda], triangles: winder.types.Array[winder.types.Shape[winder.types.N, typing.Literal[3], typing.Literal[3]], winder.types.uint32, winder.types.cuda], queries: "
+                "winder.types.Array[winder.types.Shape[winder.types.M, typing.Literal[3]], winder.types.float32, winder.types.cuda], stream: int "
+                "= 0) -> winder.types.Array[winder.types.Shape[winder.types.N, typing.Literal[3], typing.Literal[3]], winder.types.float32, winder.types.cuda]"),
         R"doc(
                 Compute the partial derivatives w.r.t. the given triangles vertex positions.
 
@@ -655,7 +655,7 @@ NB_MODULE(winder_module, m) {
   nb::class_<WindingNumbersEngine>(m, "WindingNumberEngine")
       // --- Triangle Mesh Constructor ---
       .def(nb::init<Triangle_t>(), "triangles"_a,
-           nb::sig("def __init__(self, triangles: winder.types.Array[winder.types.Shape[winder.types.N, winder.types.Literal[3], winder.types.Literal[3]], winder.types.float32, "
+           nb::sig("def __init__(self, triangles: winder.types.Array[winder.types.Shape[winder.types.N, typing.Literal[3], typing.Literal[3]], winder.types.float32, "
                    "winder.types.cuda]) -> None"),
            R"doc(
                 Initialize the engine for fast winding number calculation using a triangle soup.
@@ -670,8 +670,8 @@ NB_MODULE(winder_module, m) {
 
       .def(nb::init<Vec3_t, TriangleIdx_t>(), "vertices"_a,
            "triangle_indices"_a,
-           nb::sig("def __init__(self, vertices: winder.types.Array[winder.types.Shape[winder.types.K, winder.types.Literal[3]], winder.types.float32, winder.types.cuda], "
-                   "triangle_indices: winder.types.Array[winder.types.Shape[winder.types.N, winder.types.Literal[3]], winder.types.uint32, winder.types.cuda]) -> None"),
+           nb::sig("def __init__(self, vertices: winder.types.Array[winder.types.Shape[winder.types.K, typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+                   "triangle_indices: winder.types.Array[winder.types.Shape[winder.types.N, typing.Literal[3]], winder.types.uint32, winder.types.cuda]) -> None"),
            R"doc(
                 Initialize the engine for fast winding number calculation using a triangle soup with N Triangles using K shared vertices.
                 
@@ -686,8 +686,8 @@ NB_MODULE(winder_module, m) {
 
       // --- Point Cloud Constructor ---
       .def(nb::init<Vec3_t, Vec3_t>(), "points"_a, "scaled_normals"_a,
-           nb::sig("def __init__(self, points: winder.types.Array[winder.types.Shape[winder.types.N, winder.types.Literal[3]], winder.types.float32, winder.types.cuda], "
-                   "scaled_normals: winder.types.Array[winder.types.Shape[winder.types.N, winder.types.Literal[3]], winder.types.float32, winder.types.cuda]) -> None"),
+           nb::sig("def __init__(self, points: winder.types.Array[winder.types.Shape[winder.types.N, typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+                   "scaled_normals: winder.types.Array[winder.types.Shape[winder.types.N, typing.Literal[3]], winder.types.float32, winder.types.cuda]) -> None"),
            R"doc(
                 Initialize the engine for fast winding number calculation using a point cloud with scaled normals.
                 
@@ -705,7 +705,7 @@ NB_MODULE(winder_module, m) {
       .def("compute", &WindingNumbersEngine::compute, "queries"_a,
            "beta"_a = -1.F, "epsilon"_a = -1.F, "stream"_a = 0,
            nb::sig(
-               "def compute(self, queries: winder.types.Array[winder.types.Shape[winder.types.M, winder.types.Literal[3]], winder.types.float32, winder.types.cuda], beta: "
+               "def compute(self, queries: winder.types.Array[winder.types.Shape[winder.types.M, typing.Literal[3]], winder.types.float32, winder.types.cuda], beta: "
                "float = -1, epsilon: float = -1, stream: int = 0) -> "
                "winder.types.Array[winder.types.Shape[winder.types.M], winder.types.float32, winder.types.cuda]"),
            R"doc(
@@ -747,7 +747,7 @@ NB_MODULE(winder_module, m) {
 
   nb::class_<GradientEngine>(m, "GradientEngine")
       .def(nb::init<Vec3_t, Scalar_t>(), "queries"_a, "grad_output"_a,
-           nb::sig("def __init__(self, queries: winder.types.Array[winder.types.Shape[winder.types.M, winder.types.Literal[3]], winder.types.float32, winder.types.cuda], "
+           nb::sig("def __init__(self, queries: winder.types.Array[winder.types.Shape[winder.types.M, typing.Literal[3]], winder.types.float32, winder.types.cuda], "
                    "grad_output: winder.types.Array[winder.types.Shape[winder.types.M], winder.types.float32, winder.types.cuda]) -> None"),
            R"doc(
                 Initialize the engine for fast gradient calculation from the given queries.
@@ -767,10 +767,10 @@ NB_MODULE(winder_module, m) {
            nb::overload_cast<const Vec3_t &, const TriangleIdx_t &, float,
                              const uint64_t>(&GradientEngine::compute),
            "vertices"_a, "triangle_indices"_a, "beta"_a = -1.F, "stream"_a = 0,
-           nb::sig("def compute(self, vertices: winder.types.Array[winder.types.Shape[winder.types.K, winder.types.Literal[3]], winder.types.float32, winder.types.cuda], "
-                   "triangle_indices: winder.types.Array[winder.types.Shape[winder.types.N, winder.types.Literal[3]], winder.types.uint32, winder.types.cuda], "
+           nb::sig("def compute(self, vertices: winder.types.Array[winder.types.Shape[winder.types.K, typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+                   "triangle_indices: winder.types.Array[winder.types.Shape[winder.types.N, typing.Literal[3]], winder.types.uint32, winder.types.cuda], "
                    "beta: float = -1, stream: int = 0) "
-                   "-> winder.types.Array[winder.types.Shape[winder.types.K, winder.types.Literal[3]], winder.types.float32, winder.types.cuda]"),
+                   "-> winder.types.Array[winder.types.Shape[winder.types.K, typing.Literal[3]], winder.types.float32, winder.types.cuda]"),
            R"doc(
                 Compute the partial derivatives w.r.t. the given triangles vertex positions.
 
@@ -809,9 +809,9 @@ NB_MODULE(winder_module, m) {
           nb::overload_cast<const Triangle_t &, float, const uint64_t>(
               &GradientEngine::compute),
           "triangles"_a, "beta"_a = -1.F, "stream"_a = 0,
-          nb::sig("def compute(self, triangles: winder.types.Array[winder.types.Shape[winder.types.N, winder.types.Literal[3], winder.types.Literal[3]], winder.types.float32, winder.types.cuda], "
+          nb::sig("def compute(self, triangles: winder.types.Array[winder.types.Shape[winder.types.N, typing.Literal[3], typing.Literal[3]], winder.types.float32, winder.types.cuda], "
                   "beta: float = -1, stream: int = 0) "
-                  "-> winder.types.Array[winder.types.Shape[winder.types.N, winder.types.Literal[3], winder.types.Literal[3]], winder.types.float32, winder.types.cuda]"),
+                  "-> winder.types.Array[winder.types.Shape[winder.types.N, typing.Literal[3], typing.Literal[3]], winder.types.float32, winder.types.cuda]"),
           R"doc(
                 Compute the partial derivatives w.r.t. the given triangles vertex positions.
 
@@ -847,11 +847,11 @@ NB_MODULE(winder_module, m) {
                              const uint64_t>(&GradientEngine::compute),
            "points"_a, "scaled_normals"_a, "beta"_a = -1.F, "epsilon"_a = -1.F,
            "stream"_a = 0,
-           nb::sig("def compute(self, points: winder.types.Array[winder.types.Shape[winder.types.N, winder.types.Literal[3]], winder.types.float32, winder.types.cuda], "
-                   "scaled_normals: winder.types.Array[winder.types.Shape[winder.types.N, winder.types.Literal[3]], winder.types.float32, winder.types.cuda], "
+           nb::sig("def compute(self, points: winder.types.Array[winder.types.Shape[winder.types.N, typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+                   "scaled_normals: winder.types.Array[winder.types.Shape[winder.types.N, typing.Literal[3]], winder.types.float32, winder.types.cuda], "
                    "beta: float = -1, epsilon: float = -1, stream: "
                    "int = 0) "
-                   "-> winder.types.Array[winder.types.Shape[winder.types.N, winder.types.Literal[2], winder.types.Literal[3]], winder.types.float32, winder.types.cuda]"),
+                   "-> winder.types.Array[winder.types.Shape[winder.types.N, typing.Literal[2], typing.Literal[3]], winder.types.float32, winder.types.cuda]"),
            R"doc(
                 Compute the partial derivatives w.r.t. the given point positions and scaled normals.
 
