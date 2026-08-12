@@ -88,13 +88,15 @@ endif()
 if(UNIX)
     set_target_properties(winder_module PROPERTIES INSTALL_RPATH "$ORIGIN")
 endif()
-install(TARGETS winder_module LIBRARY DESTINATION winder)
+install(TARGETS winder_module LIBRARY DESTINATION .)
 
 # Unit Tests
 add_executable(test_quantization tests/test_quantization.cu)
 target_link_libraries(test_quantization PRIVATE winder_kernels)
 target_compile_options(test_quantization PRIVATE ${WINDER_CUDA_FLAGS})
 
+set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
     googletest
     URL

@@ -8,9 +8,21 @@ Provides differentiable winding number calculation across three geometry formats
 
 from __future__ import annotations
 
-from typing import Literal, override
+from typing import Literal, override, Any
 import torch
-import winder
+
+try:
+    from ..winder_module import (
+        GradientEngine,
+        WindingNumberEngine,
+        brute_force_gradients,
+        brute_force_winding_numbers,
+    )
+except ImportError:
+    GradientEngine = Any  # type: ignore
+    WindingNumberEngine = Any  # type: ignore
+    brute_force_gradients = Any  # type: ignore
+    brute_force_winding_numbers = Any  # type: ignore
 
 ModeType = Literal["fast", "brute_force"]
 
@@ -35,10 +47,10 @@ class _MeshWindingAutograd(torch.autograd.Function):
         stream = torch.cuda.current_stream().cuda_stream
 
         if mode == "fast":
-            engine = winder.WindingNumberEngine(vertices, indices)
+            engine = WindingNumberEngine(vertices, indices)
             winding_numbers = engine.compute(queries, beta=beta_forward, stream=stream)
         else:
-            winding_numbers = winder.brute_force_winding_numbers(
+            winding_numbers = brute_force_winding_numbers(
                 vertices, indices, queries, stream
             )
 
@@ -52,12 +64,12 @@ class _MeshWindingAutograd(torch.autograd.Function):
         stream = torch.cuda.current_stream().cuda_stream
 
         if ctx.mode == "fast":
-            grad_engine = winder.GradientEngine(queries, grad_output)
+            grad_engine = GradientEngine(queries, grad_output)
             grad_v = grad_engine.compute(
                 vertices, indices, beta=ctx.beta_backward, stream=stream
             )
         else:
-            grad_v = winder.brute_force_gradients(
+            grad_v = brute_force_gradients(
                 grad_output, vertices, indices, queries, stream
             )
 
@@ -107,7 +119,7 @@ def winding_mesh(
     Examples
     --------
     >>> import torch
-    >>> from winder.functional import winding_mesh
+    >>> from functional import winding_mesh
     >>> verts = torch.rand((100, 3), device='cuda', requires_grad=True)
     >>> faces = torch.randint(0, 100, (200, 3), device='cuda', dtype=torch.uint32)
     >>> queries = torch.rand((1000, 3), device='cuda')
@@ -139,10 +151,10 @@ class _TriangleWindingAutograd(torch.autograd.Function):
         stream = torch.cuda.current_stream().cuda_stream
 
         if mode == "fast":
-            engine = winder.WindingNumberEngine(triangles)
+            engine = WindingNumberEngine(triangles)
             winding_number = engine.compute(queries, beta=beta_forward, stream=stream)
         else:
-            winding_number = winder.brute_force_winding_numbers(
+            winding_number = brute_force_winding_numbers(
                 triangles, queries, stream=stream
             )
 
@@ -156,12 +168,12 @@ class _TriangleWindingAutograd(torch.autograd.Function):
         stream = torch.cuda.current_stream().cuda_stream
 
         if ctx.mode == "fast":
-            grad_engine = winder.GradientEngine(queries, grad_output)
+            grad_engine = GradientEngine(queries, grad_output)
             grad_t = grad_engine.compute(
                 triangles, beta=ctx.beta_backward, stream=stream
             )
         else:
-            grad_t = winder.brute_force_gradients(
+            grad_t = brute_force_gradients(
                 grad_output, triangles, queries, stream
             )
 
@@ -223,12 +235,12 @@ class _PointNormalWindingAutograd(torch.autograd.Function):
         stream = torch.cuda.current_stream().cuda_stream
 
         if mode == "fast":
-            engine = winder.WindingNumberEngine(points, scaled_normals)
+            engine = WindingNumberEngine(points, scaled_normals)
             winding_numbers = engine.compute(
                 queries, beta=beta_forward, epsilon=epsilon, stream=stream
             )
         else:
-            winding_numbers = winder.brute_force_winding_numbers(
+            winding_numbers = brute_force_winding_numbers(
                 points, scaled_normals, queries, epsilon, stream
             )
 
@@ -242,7 +254,7 @@ class _PointNormalWindingAutograd(torch.autograd.Function):
         stream = torch.cuda.current_stream().cuda_stream
 
         if ctx.mode == "fast":
-            grad_engine = winder.GradientEngine(queries, grad_output)
+            grad_engine = GradientEngine(queries, grad_output)
             # Fast engine compute returns shape (N, 2, 3) where:
             # grads[:, 0, :] -> dL / d(scaled_normals)
             # grads[:, 1, :] -> dL / d(points)
@@ -257,7 +269,7 @@ class _PointNormalWindingAutograd(torch.autograd.Function):
             )
         else:
             grads = torch.from_dlpack(
-                winder.brute_force_gradients(
+                brute_force_gradients(
                     grad_output,
                     points,
                     scaled_normals,

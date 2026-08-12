@@ -1,11 +1,16 @@
+import sys
 from typing import (
     Any,
     Generic,
     Protocol,
-    TypeVar,
     TypeVarTuple,
     runtime_checkable,
 )
+
+if sys.version_info >= (3, 13):
+    from typing import TypeVar
+else:
+    from typing_extensions import TypeVar
 
 # Dimension TypeVars & Variadic Shape ---
 N = TypeVar("N", default=Any)

@@ -583,9 +583,9 @@ auto GradientBackend::dump() const -> std::string {
         result += "      <TR>\n";
       result += std::format(
           "        <TD>{:.4f}</TD><TD>{:.4f}</TD><TD>{:.4f}</TD></TR>\n",
-          node_coeff.second_order.data[r * 3 + 0],
-          node_coeff.second_order.data[r * 3 + 1],
-          node_coeff.second_order.data[r * 3 + 2]);
+          second_order.data[r * 3 + 0],
+          second_order.data[r * 3 + 1],
+          second_order.data[r * 3 + 2]);
     }
     result += "    </TABLE>>];\n";
 
