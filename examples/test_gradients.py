@@ -309,7 +309,6 @@ def test_mesh_gradients(
     grads = torch.from_dlpack(grad_engine.compute(vertices_torch, indices_torch, beta=-1 if beta is None else beta))
     torch.cuda.synchronize()
     print(f"Fast variant took {time() - t0} sec")
-    print("DEBUG:", grads)
 
     err = validate_gradients(grads.cpu().numpy(), gt_grads.cpu().numpy(), "Vertex")
 

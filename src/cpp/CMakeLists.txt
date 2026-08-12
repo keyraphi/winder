@@ -28,6 +28,14 @@ nanobind_add_module(winder_module
     winder.cpp
 )
 
+nanobind_add_stub(
+    winder_module_stub
+    MODULE winder_module
+    OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/../winder/winder_module.pyi
+    DEPENDS winder_module
+    PYTHON_PATH $<TARGET_FILE_DIR:winder_module> ${CMAKE_CURRENT_SOURCE_DIR}/..
+)
+
 # Link and Configure Module
 target_link_libraries(
     winder_module

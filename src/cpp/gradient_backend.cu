@@ -4,7 +4,6 @@
 #include "geometry.h"
 #include "gradient_backend.h"
 #include "kernels/binary2bvh8.cuh"
-#include "kernels/brute_force.cuh"
 #include "kernels/build_binary_tree.cuh"
 #include "kernels/bvh8_m2m.cuh"
 #include "kernels/common.cuh"

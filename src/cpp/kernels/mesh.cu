@@ -1,4 +1,3 @@
-#include "geometry.h"
 #include "kernels/common.cuh"
 #include "mesh.cuh"
 #include "vec3.h"

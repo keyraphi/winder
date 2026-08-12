@@ -27,13 +27,27 @@ dev = [
     "numpy"
 ]
 
+[tool.basedpyright]
+executionEnvironments = [
+  { root = "src" }
+]
+extraPaths = ["src"]
+reportUnusedImport = "none"
+
+[tool.ruff]
+src = ["src"]
+target-version = "py312"
+
+[tool.ruff.lint]
+extend-select = ["I"]  # Auto-sort imports
+
 [tool.scikit-build]
 cmake.version = ">=3.18"
 wheel.packages = ["src/winder"]
-cmake.build-type = "Debug"
+wheel.install-dir = "winder"
+cmake.build-type = "Release"
 install.strip = false
 cmake.args = ["-DCMAKE_CUDA_FLAGS=-lineinfo"]
-# cmake.args = ["-DCMAKE_CUDA_FLAGS=-lineinfo -O3"]
 
 [tool.cibuildwheel]
 build = "cp312-manylinux_x86_64"
