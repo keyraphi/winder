@@ -14,7 +14,6 @@
 #include <driver_types.h>
 #include <format>
 #include <memory>
-#include <ostream>
 #include <queue>
 #include <stdexcept>
 #include <string>
@@ -69,13 +68,6 @@ namespace cg = cooperative_groups;
 
 __constant__ SceneParams d_scene_params;
 
-void CudaDeleter::operator()(void *ptr) const {
-  if (ptr != nullptr) {
-    auto compute_stream = reinterpret_cast<cudaStream_t>(stream);
-    cudaFreeAsync(ptr, compute_stream);
-  }
-}
-
 template <IsGeometry Geometry>
 WindingNumbersBackend<Geometry>::~WindingNumbersBackend() {
   CUDA_CHECK(cudaStreamSynchronize(m_build_stream));
@@ -107,18 +99,16 @@ WindingNumbersBackend<Geometry>::~WindingNumbersBackend() {
   if (m_bvh8_leaf_pointers) {
     CUDA_CHECK(cudaFreeAsync(m_bvh8_leaf_pointers, m_build_stream));
   }
-  CUDA_CHECK(cudaStreamSynchronize(m_build_stream));
-
-  CUDA_CHECK(cudaStreamDestroy(m_build_stream));
 }
 
 template <IsGeometry Geometry>
 WindingNumbersBackend<Geometry>::WindingNumbersBackend(size_t size,
-                                                       int device_id)
+                                                       int device_id,
+                                                       uint64_t stream)
     : m_count{size}, m_device{device_id} {
 
   // Setup streams
-  CUDA_CHECK(cudaStreamCreate(&m_build_stream));
+  m_build_stream = reinterpret_cast<cudaStream_t>(stream);
   // Policies for thrust to run async on streams
   m_build_stream_policy = thrust::cuda::par.on(m_build_stream);
 
@@ -186,7 +176,6 @@ template <IsPrimitiveGeometry PrimitiveGeometry> struct GeometryToMorton {
   }
 };
 
-
 template <>
 void WindingNumbersBackend<Triangle>::initialize_triangle_data(
     const float *triangles) {
@@ -197,7 +186,8 @@ void WindingNumbersBackend<Triangle>::initialize_triangle_data(
   uint64_t *geometry_morton_codes;
   CUDA_CHECK(cudaMallocAsync(&geometry_morton_codes, m_count * sizeof(uint64_t),
                              m_build_stream));
-  initializeMortonCodes(triangles_tri, geometry_morton_codes, m_count, m_build_stream);
+  initializeMortonCodes(triangles_tri, geometry_morton_codes, m_count,
+                        m_build_stream);
 
   // sort by morton codes
   thrust::sequence(m_build_stream_policy, m_to_internal,
@@ -343,7 +333,8 @@ void WindingNumbersBackend<PointNormal>::initialize_point_data(
   uint64_t *geometry_morton_codes;
   CUDA_CHECK(cudaMallocAsync(&geometry_morton_codes, m_count * sizeof(uint64_t),
                              m_build_stream));
-  initializeMortonCodes(points_v3, geometry_morton_codes, m_count, m_build_stream);
+  initializeMortonCodes(points_v3, geometry_morton_codes, m_count,
+                        m_build_stream);
 
   // sort by morton codes
   thrust::sequence(m_build_stream_policy, m_to_internal,
@@ -479,13 +470,13 @@ void WindingNumbersBackend<PointNormal>::initialize_point_data(
       cudaEventRecord(m_tree_construction_finished_event, m_build_stream));
 }
 
-
 template <IsGeometry Geometry>
 auto WindingNumbersBackend<Geometry>::compute(const float *queries,
-                                              size_t query_count, float beta,
-                                              float epsilon,
+                                              size_t query_count,
+                                              float *winding_numbers,
+                                              float beta, float epsilon,
                                               size_t stream) const
-    -> CudaUniquePtr<float> {
+    -> void {
   cudaEvent_t start, finish;
   CUDA_CHECK(cudaEventCreate(&start));
   CUDA_CHECK(cudaEventCreate(&finish));
@@ -498,10 +489,6 @@ auto WindingNumbersBackend<Geometry>::compute(const float *queries,
   auto compute_stream_policy = thrust::cuda::par.on(compute_stream);
   CUDA_CHECK(cudaEventRecord(start, compute_stream));
 
-  // Allocate required buffers
-  float *winding_numbers; // result
-  CUDA_CHECK(cudaMallocAsync(&winding_numbers, query_count * sizeof(float),
-                             compute_stream));
   uint32_t *queries_to_internal;
   uint64_t *queries_morton;
   CUDA_CHECK(cudaMallocAsync(&queries_to_internal,
@@ -562,33 +549,29 @@ auto WindingNumbersBackend<Geometry>::compute(const float *queries,
   // free events
   CUDA_CHECK(cudaEventDestroy(start));
   CUDA_CHECK(cudaEventDestroy(finish));
-  CudaUniquePtr<float> result(
-      winding_numbers, CudaDeleter{reinterpret_cast<size_t>(compute_stream)});
-  return result;
 }
 
 template <>
 auto WindingNumbersBackend<PointNormal>::CreateFromPoints(const float *points,
                                                           const float *normals,
                                                           size_t point_count,
-                                                          int device_id)
+                                                          int device_id, uint64_t stream)
     -> std::unique_ptr<WindingNumbersBackend<PointNormal>> {
   ScopedCudaDevice device_scope(device_id);
 
   auto self = std::unique_ptr<WindingNumbersBackend<PointNormal>>{
-      new WindingNumbersBackend<PointNormal>(point_count, device_id)};
+      new WindingNumbersBackend<PointNormal>(point_count, device_id, stream)};
   self->initialize_point_data(points, normals);
   return self;
 }
 
 template <>
 auto WindingNumbersBackend<Triangle>::CreateFromTriangles(
-    const float *triangles, size_t triangle_count, int device_id)
+    const float *triangles, size_t triangle_count, int device_id, uint64_t stream)
     -> std::unique_ptr<WindingNumbersBackend<Triangle>> {
   ScopedCudaDevice device_scope(device_id);
-  printf("CreateFromTriangles!\n");
   auto self = std::unique_ptr<WindingNumbersBackend>{
-      new WindingNumbersBackend<Triangle>(triangle_count, device_id)};
+      new WindingNumbersBackend<Triangle>(triangle_count, device_id, stream)};
 
   self->initialize_triangle_data(triangles);
   return self;
@@ -597,11 +580,11 @@ auto WindingNumbersBackend<Triangle>::CreateFromTriangles(
 template <>
 auto WindingNumbersBackend<Triangle>::CreateFromMesh(
     const float *vertices, size_t vertex_count,
-    const uint32_t *triangle_indices, size_t triangle_count, int device_id)
+    const uint32_t *triangle_indices, size_t triangle_count, int device_id, uint64_t stream)
     -> std::unique_ptr<WindingNumbersBackend<Triangle>> {
   ScopedCudaDevice device_scope(device_id);
   auto self = std::unique_ptr<WindingNumbersBackend>{
-      new WindingNumbersBackend<Triangle>(triangle_count, device_id)};
+      new WindingNumbersBackend<Triangle>(triangle_count, device_id, stream)};
 
   // Verify that index range does not exceed vertex size
   uint32_t max_index = thrust::reduce(thrust::device, triangle_indices,

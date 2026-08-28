@@ -6,7 +6,11 @@
 #include "winder_brute_force.h"
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cuda.h>
+#include <cuda_runtime.h>
+#include <cuda_runtime_api.h>
+#include <driver_types.h>
 #include <format>
 #include <stdexcept>
 #include <thrust/execution_policy.h>
@@ -21,12 +25,10 @@
     }                                                                          \
   } while (0)
 
-auto brute_force_point_normal_impl(const float *points,
-                                   const float *scaled_normals,
-                                   const float *queries, size_t geometry_count,
-                                   const size_t query_count, float epsilon,
-                                   const int device_id, const uint64_t stream)
-    -> CudaUniquePtr<float> {
+auto brute_force_point_normal_impl(
+    const float *points, const float *scaled_normals, const float *queries,
+    size_t geometry_count, const size_t query_count, float *winding_numbers,
+    float epsilon, const int device_id, const uint64_t stream) -> void {
   ScopedCudaDevice device_scope{device_id};
   const auto *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
   const auto *points_vec3 = reinterpret_cast<const Vec3 *>(points);
@@ -41,11 +43,6 @@ auto brute_force_point_normal_impl(const float *points,
 
   CUDA_CHECK(cudaEventRecord(start, compute_stream));
 
-  // Allocate required buffers
-  float *winding_numbers; // result
-  CUDA_CHECK(cudaMallocAsync(&winding_numbers, query_count * sizeof(float),
-                             compute_stream));
-
   if (epsilon < 0.F) {
     // default from 3D Reconstruction with Fast Dipole Sums
     epsilon = 1.F / 250.F;
@@ -59,18 +56,14 @@ auto brute_force_point_normal_impl(const float *points,
   // free events
   CUDA_CHECK(cudaEventDestroy(start));
   CUDA_CHECK(cudaEventDestroy(finish));
-
-  CudaUniquePtr<float> result(
-      winding_numbers, CudaDeleter{reinterpret_cast<size_t>(compute_stream)});
-  return result;
 }
 
 auto brute_force_mesh_impl(const float *vertices,
                            const uint32_t *triangle_indices,
                            const float *queries, const size_t geometry_count,
                            const size_t vertex_count, const size_t query_count,
-                           const int device_id, const uint64_t stream)
-    -> CudaUniquePtr<float> {
+                           float *winding_numbers, const int device_id,
+                           const uint64_t stream) -> void {
   ScopedCudaDevice device_scope{device_id};
 
   cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
@@ -96,28 +89,16 @@ auto brute_force_mesh_impl(const float *vertices,
                    compute_stream);
 
   // use regular triangle computation
-  auto triangle_result = brute_force_triangle_impl(triangles, queries, geometry_count,
-                                          query_count, device_id, stream);
+  brute_force_triangle_impl(triangles, queries, geometry_count, query_count,
+                            winding_numbers, device_id, stream);
   // release temporary triangle array
   CUDA_CHECK(cudaFreeAsync(triangles, compute_stream));
-
-
-  float *vertex_gradients;
-  CUDA_CHECK(cudaMallocAsync(&vertex_gradients,
-                             vertex_count * 3 * sizeof(float), compute_stream));
-  CUDA_CHECK(cudaMemsetAsync(vertex_gradients, 0,
-                             vertex_count * 3 * sizeof(float), compute_stream));
-  accumulate_vertex_gradients(triangle_result.get(), triangle_indices, geometry_count, vertex_gradients, compute_stream);
-
-  CudaUniquePtr<float> result(
-      vertex_gradients, CudaDeleter{reinterpret_cast<size_t>(compute_stream)});
-  return result;
 }
 
 auto brute_force_triangle_impl(const float *triangles_float,
                                const float *queries, size_t geometry_count,
-                               size_t query_count, int device_id,
-                               uint64_t stream) -> CudaUniquePtr<float> {
+                               size_t query_count, float *winding_numbers,
+                               int device_id, uint64_t stream) -> void {
   ScopedCudaDevice device_scope{device_id};
   const auto *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
   const auto *triangles = reinterpret_cast<const Triangle *>(triangles_float);
@@ -131,11 +112,6 @@ auto brute_force_triangle_impl(const float *triangles_float,
 
   CUDA_CHECK(cudaEventRecord(start, compute_stream));
 
-  // Allocate required buffers
-  float *winding_numbers; // result
-  CUDA_CHECK(cudaMallocAsync(&winding_numbers, query_count * sizeof(float),
-                             compute_stream));
-
   compute_brute_force_triangle(queries_vec3, triangles, (uint32_t)query_count,
                                (uint32_t)geometry_count, winding_numbers,
                                compute_stream);
@@ -144,17 +120,13 @@ auto brute_force_triangle_impl(const float *triangles_float,
   // free events
   CUDA_CHECK(cudaEventDestroy(start));
   CUDA_CHECK(cudaEventDestroy(finish));
-
-  CudaUniquePtr<float> result(
-      winding_numbers, CudaDeleter{reinterpret_cast<size_t>(compute_stream)});
-  return result;
 }
 
 auto brute_force_point_normal_gradient_impl(
     const float *grad_output, const float *points, const float *scaled_normals,
     const float *queries, const size_t geometry_count, const size_t query_count,
-    float epsilon, const int device_id, const uint64_t stream)
-    -> CudaUniquePtr<float> {
+    float *gradients, float epsilon, const int device_id, const uint64_t stream)
+    -> void {
   ScopedCudaDevice device_scope{device_id};
 
   const Vec3 *points_vec3 = reinterpret_cast<const Vec3 *>(points);
@@ -176,11 +148,6 @@ auto brute_force_point_normal_gradient_impl(
 
   CUDA_CHECK(cudaEventRecord(start, compute_stream));
 
-  // Allocate required buffers
-  float *gradients;
-  CUDA_CHECK(cudaMallocAsync(&gradients, geometry_count * sizeof(PointNormal),
-                             compute_stream));
-
   compute_brute_force_gradients_point_normals(
       grad_output, points_vec3, scaled_normals_vec3, queries_vec3,
       (uint32_t)geometry_count, (uint32_t)query_count, epsilon, gradients,
@@ -190,20 +157,15 @@ auto brute_force_point_normal_gradient_impl(
   // free events
   CUDA_CHECK(cudaEventDestroy(start));
   CUDA_CHECK(cudaEventDestroy(finish));
-
-  CudaUniquePtr<float> result(
-      gradients, CudaDeleter{reinterpret_cast<size_t>(compute_stream)});
-  return result;
 }
 
 auto brute_force_triangle_gradient_impl(
     const float *grad_output, const float *triangles_float,
     const float *queries, const size_t geometry_count, const size_t query_count,
-    const int device_id, const uint64_t stream) -> CudaUniquePtr<float> {
+    float *gradients, const int device_id, const uint64_t stream) -> void {
 
   const Vec3 *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
-  const Triangle *triangles =
-      reinterpret_cast<const Triangle *>(triangles_float);
+  const auto *triangles = reinterpret_cast<const Triangle *>(triangles_float);
   ScopedCudaDevice device_scope{device_id};
 
   cudaEvent_t start, finish;
@@ -215,11 +177,6 @@ auto brute_force_triangle_gradient_impl(
 
   CUDA_CHECK(cudaEventRecord(start, compute_stream));
 
-  // Allocate required buffers
-  float *gradients;
-  CUDA_CHECK(cudaMallocAsync(&gradients, geometry_count * 3 * 3 * sizeof(float),
-                             compute_stream));
-
   compute_brute_force_gradients_triangles(
       grad_output, triangles, queries_vec3, (uint32_t)geometry_count,
       (uint32_t)query_count, gradients, compute_stream);
@@ -228,18 +185,14 @@ auto brute_force_triangle_gradient_impl(
   // free events
   CUDA_CHECK(cudaEventDestroy(start));
   CUDA_CHECK(cudaEventDestroy(finish));
-
-  CudaUniquePtr<float> result(
-      gradients, CudaDeleter{reinterpret_cast<size_t>(compute_stream)});
-  return result;
 }
 
 auto brute_force_mesh_gradient_impl(
     const float *grad_output, const float *vertices,
     const uint32_t *triangle_indices, const float *queries,
     const size_t geometry_count, const size_t query_count,
-    const size_t vertex_count, const int device_id, const uint64_t stream)
-    -> CudaUniquePtr<float> {
+    const size_t vertex_count, float *vertice_grads, const int device_id,
+    const uint64_t stream) -> void {
 
   cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
   auto compute_stream_policy = thrust::cuda::par.on(compute_stream);
@@ -263,25 +216,21 @@ auto brute_force_mesh_gradient_impl(
                    static_cast<uint32_t>(geometry_count), triangles,
                    compute_stream);
 
+  float *triangle_gradients;
+  CUDA_CHECK(cudaMallocAsync(
+      &triangle_gradients, geometry_count * sizeof(Triangle), compute_stream));
+
   // use regular triangle computation
-  auto triangle_result = brute_force_triangle_gradient_impl(
-      grad_output, triangles, queries, geometry_count, query_count, device_id,
-      stream);
+  brute_force_triangle_gradient_impl(grad_output, triangles, queries,
+                                     geometry_count, query_count,
+                                     triangle_gradients, device_id, stream);
   // release temporary triangle array
   CUDA_CHECK(cudaFreeAsync(triangles, compute_stream));
 
-  float *vertice_grads;
-  CUDA_CHECK(cudaMallocAsync(
-      &vertice_grads, vertex_count * 3 * sizeof(float), compute_stream));
-  CUDA_CHECK(cudaMemsetAsync(vertice_grads, 0,
-                             vertex_count * 3 * sizeof(float), compute_stream));
-  accumulate_vertice_gradients(triangle_result.get(), triangle_indices,
+  CUDA_CHECK(cudaMemsetAsync(vertice_grads, 0, vertex_count * 3 * sizeof(float),
+                             compute_stream));
+  accumulate_vertice_gradients(triangle_gradients, triangle_indices,
                                static_cast<uint32_t>(geometry_count),
                                vertice_grads, compute_stream);
-
-  CudaUniquePtr<float> result(
-      vertice_grads, CudaDeleter{reinterpret_cast<size_t>(compute_stream)});
-
-  return result;
+  CUDA_CHECK(cudaFreeAsync(triangle_gradients, compute_stream));
 }
-

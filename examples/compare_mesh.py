@@ -7,7 +7,6 @@ import imageio.v3 as iio
 import cv2
 import igl
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 import numpy as np
 import numpy.typing as NPT
 import open3d as o3d

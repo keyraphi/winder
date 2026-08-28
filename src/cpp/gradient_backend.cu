@@ -46,7 +46,8 @@
 
 #define LEAF_SIZE 32
 
-GradientBackend::GradientBackend(size_t query_count, int device_id)
+GradientBackend::GradientBackend(size_t query_count, int device_id,
+                                 uint64_t stream)
     : m_device{device_id}, m_query_count{query_count} {
   uint32_t leaf_count = (m_query_count + LEAF_SIZE - 1) / LEAF_SIZE;
 
@@ -54,8 +55,8 @@ GradientBackend::GradientBackend(size_t query_count, int device_id)
 
   CUDA_CHECK(cudaEventCreate(&m_tree_construction_finished_event));
 
+  m_build_stream = reinterpret_cast<cudaStream_t>(stream);
   // Allocate Persistent arrays
-  CUDA_CHECK(cudaStreamCreate(&m_build_stream));
   CUDA_CHECK(cudaMallocAsync(&m_to_internal, query_count * sizeof(uint32_t),
                              m_build_stream));
   CUDA_CHECK(cudaMallocAsync(&m_sorted_queries, query_count * sizeof(Vec3),
@@ -103,9 +104,6 @@ GradientBackend::~GradientBackend() {
   if (m_bvh8_leaf_pointers) {
     CUDA_CHECK(cudaFreeAsync(m_bvh8_leaf_pointers, m_build_stream));
   }
-  CUDA_CHECK(cudaStreamSynchronize(m_build_stream));
-
-  CUDA_CHECK(cudaStreamDestroy(m_build_stream));
 }
 
 // Build BVH8
@@ -255,8 +253,9 @@ void GradientBackend::init(const float *queries, const float *grad_outputs) {
 }
 
 auto GradientBackend::compute(const float *points, const float *scaled_normals,
-                              size_t geometry_count, float beta, float epsilon,
-                              uint64_t stream) -> CudaUniquePtr<float> {
+                              size_t geometry_count, float *gradients,
+                              float beta, float epsilon, uint64_t stream)
+    -> void {
   ScopedCudaDevice device_scope{m_device};
   // convert stream to cuda stream
   cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
@@ -264,11 +263,6 @@ auto GradientBackend::compute(const float *points, const float *scaled_normals,
 
   const Vec3 *points_vec3 = reinterpret_cast<const Vec3 *>(points);
   const Vec3 *normals_vec3 = reinterpret_cast<const Vec3 *>(scaled_normals);
-
-  // Allocate required buffer for result
-  float *gradients; // result
-  CUDA_CHECK(cudaMallocAsync(&gradients, geometry_count * sizeof(float) * 6,
-                             compute_stream));
 
   // Sort geometry for cache coherence
   uint64_t *geometry_morton_codes;
@@ -329,26 +323,18 @@ auto GradientBackend::compute(const float *points, const float *scaled_normals,
   // free temporary memory
   CUDA_CHECK(cudaFreeAsync(geometry_to_internal, compute_stream));
   CUDA_CHECK(cudaFreeAsync(global_counter, compute_stream));
-
-  CudaUniquePtr<float> result(
-      gradients, CudaDeleter{reinterpret_cast<size_t>(compute_stream)});
-  return result;
 }
 
 auto GradientBackend::compute(const float *triangles_float,
-                              size_t geometry_count, float beta,
-                              uint64_t stream) -> CudaUniquePtr<float> {
+                              size_t geometry_count, float *gradients,
+                              float beta, uint64_t stream)
+    -> void {
   ScopedCudaDevice device_scope{m_device};
   // convert stream to cuda stream
   cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
   auto compute_stream_policy = thrust::cuda::par.on(compute_stream);
 
   const auto *triangles = reinterpret_cast<const Triangle *>(triangles_float);
-
-  // Allocate required buffer for result
-  float *gradients; // result
-  CUDA_CHECK(cudaMallocAsync(&gradients, geometry_count * sizeof(float) * 9,
-                             compute_stream));
 
   // Sort geometry for cache coherence
   uint64_t *geometry_morton_codes;
@@ -404,17 +390,14 @@ auto GradientBackend::compute(const float *triangles_float,
   // free temporary memory
   CUDA_CHECK(cudaFreeAsync(geometry_to_internal, compute_stream));
   CUDA_CHECK(cudaFreeAsync(global_counter, compute_stream));
-
-  CudaUniquePtr<float> result(
-      gradients, CudaDeleter{reinterpret_cast<size_t>(compute_stream)});
-  return result;
 }
 
 auto GradientBackend::compute(const float *vertices,
                               const uint32_t *triangle_indices,
                               size_t vertex_count, size_t geometry_count,
+                              float* vertex_gradients,
                               float beta, uint64_t stream)
-    -> CudaUniquePtr<float> {
+    -> void {
   ScopedCudaDevice device_scope{m_device};
   // convert stream to cuda stream
   cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
@@ -428,21 +411,19 @@ auto GradientBackend::compute(const float *vertices,
                    static_cast<uint32_t>(geometry_count), triangles,
                    compute_stream);
 
-  auto triangle_result = this->compute(triangles, geometry_count, beta, stream);
+  float* triangle_gradients;
+  CUDA_CHECK(cudaMallocAsync(&triangle_gradients, geometry_count*sizeof(Triangle), compute_stream));
+
+  this->compute(triangles, geometry_count,triangle_gradients, beta, stream);
   CUDA_CHECK(cudaFreeAsync(triangles, compute_stream));
 
-  float *vertex_gradients;
-  CUDA_CHECK(cudaMallocAsync(&vertex_gradients,
-                             vertex_count * 3 * sizeof(float), compute_stream));
   CUDA_CHECK(cudaMemsetAsync(vertex_gradients, 0,
                              vertex_count * 3 * sizeof(float), compute_stream));
 
-  accumulate_vertex_gradients(triangle_result.get(), triangle_indices,
+  accumulate_vertex_gradients(triangle_gradients, triangle_indices,
                               geometry_count, vertex_gradients, compute_stream);
 
-  CudaUniquePtr<float> result(
-      vertex_gradients, CudaDeleter{reinterpret_cast<size_t>(compute_stream)});
-  return result;
+  CUDA_CHECK(cudaFreeAsync(triangle_gradients, compute_stream));
 }
 
 auto GradientBackend::dump() const -> std::string {
@@ -583,8 +564,7 @@ auto GradientBackend::dump() const -> std::string {
         result += "      <TR>\n";
       result += std::format(
           "        <TD>{:.4f}</TD><TD>{:.4f}</TD><TD>{:.4f}</TD></TR>\n",
-          second_order.data[r * 3 + 0],
-          second_order.data[r * 3 + 1],
+          second_order.data[r * 3 + 0], second_order.data[r * 3 + 1],
           second_order.data[r * 3 + 2]);
     }
     result += "    </TABLE>>];\n";

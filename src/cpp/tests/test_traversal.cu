@@ -8,6 +8,7 @@
 #include <cuda_runtime_api.h>
 #include <gtest/gtest.h>
 #include <memory>
+#include <vector>
 #include <numbers>
 #include <random>
 #include <thrust/device_vector.h>
@@ -148,36 +149,35 @@ template <typename T> void RunAccuracyTest(const WinderTestParams &params) {
 
   std::unique_ptr<WindingNumbersBackend<T>> backend;
 
-  CudaUniquePtr<float> wn_gt;
+  thrust::device_vector<float> wn_gt(params.query_count);
+  thrust::device_vector<float> wn(params.query_count);
   if constexpr (std::is_same_v<T, PointNormal>) {
     backend = WindingNumbersBackend<T>::CreateFromPoints(
         (float *)points_d.data().get(), (float *)scaled_normals_d.data().get(),
-        points_d.size(), 0);
-    wn_gt = brute_force_point_normal_impl(
+        points_d.size(), 0, 0);
+    brute_force_point_normal_impl(
         (float *)points_d.data().get(), (float *)scaled_normals_d.data().get(),
-        (float *)queries_d.data().get(), points_d.size(), query_count, epsilon,
-        0);
+        (float *)queries_d.data().get(), points_d.size(), query_count,
+        wn_gt.data().get(), epsilon, 0);
   } else {
     backend = WindingNumbersBackend<T>::CreateFromTriangles(
-        (float *)geom_d.data().get(), geom_d.size(), 0);
-    wn_gt = brute_force_triangle_impl((float *)geom_d.data().get(),
-                                     (float*) queries_d.data().get(), geom_d.size(),
-                                      queries_d.size(), 0);
+        (float *)geom_d.data().get(), geom_d.size(), 0, 0);
+    brute_force_triangle_impl((float *)geom_d.data().get(),
+                              (float *)queries_d.data().get(), geom_d.size(),
+                              queries_d.size(), wn_gt.data().get(), 0);
   }
 
   // DEBUG
   printf("Waiting until tree construction is actually done\n");
   cudaDeviceSynchronize();
 
-  cudaMemcpy(&gt_h[0], wn_gt.get(), params.query_count * sizeof(float),
-             cudaMemcpyDeviceToHost);
+  gt_h[0] = wn_gt[0];
 
-  auto wn = backend->compute((float *)queries_d.data().get(), queries_d.size(),
-                             beta, epsilon, 0);
+  backend->compute((float *)queries_d.data().get(), queries_d.size(),
+                   wn.data().get(), beta, epsilon, 0);
 
-  std::vector<float> wn_h(query_count);
-  cudaMemcpy(&wn_h[0], wn.get(), query_count * sizeof(float),
-             cudaMemcpyDeviceToHost);
+  std::vector<float> wn_h(wn.size());
+  thrust::copy(wn.begin(), wn.end(), wn_h.begin());
 
   double mse = 0;
   double max_error = 0;

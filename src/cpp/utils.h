@@ -3,18 +3,9 @@
 #include <cstdint>
 #include <cuda_runtime_api.h>
 #include <driver_types.h>
-#include <memory>
 #include "aabb.h"
 #include "geometry.h"
 
-struct CudaDeleter {
-  size_t stream = 0; // Plain integer data type, safe for pure C++
-
-  // Constructor to make initialization clean
-  explicit CudaDeleter(size_t stream_ptr = 0) : stream(stream_ptr) {}
-
-  void operator()(void *ptr) const;
-};
 
 class ScopedCudaDevice {
 private:
@@ -28,8 +19,6 @@ public:
   ScopedCudaDevice(const ScopedCudaDevice &) = delete;
   ScopedCudaDevice &operator=(const ScopedCudaDevice &) = delete;
 };
-
-template <typename T> using CudaUniquePtr = std::unique_ptr<T[], CudaDeleter>;
 
 namespace winder_cuda {
 

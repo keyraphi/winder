@@ -3,7 +3,6 @@
 #include "aabb.h"
 #include "bvh8.h"
 #include "taylor_coefficients.h"
-#include "utils.h"
 #include <cstddef>
 #include <cstdint>
 #include <driver_types.h>
@@ -11,19 +10,19 @@
 
 class GradientBackend {
 public:
-  GradientBackend(size_t query_count, int device_id);
+  GradientBackend(size_t query_count, int device_id, uint64_t stream);
   ~GradientBackend();
 
   void init(const float *queries, const float *grad_output);
 
   auto compute(const float *points, const float *scaled_normals,
-               size_t geometry_count, float beta = -1, float epsilon = -1,
-               uint64_t stream = 0) -> CudaUniquePtr<float>;
+               size_t geometry_count, float* output_grdients, float beta = -1, float epsilon = -1,
+               uint64_t stream = 0) -> void;
   auto compute(const float *vertices, const uint32_t *triangle_indices,
-               size_t vertex_count, size_t geometry_count, float beta = -1,
-               uint64_t stream = 0) -> CudaUniquePtr<float>;
-  auto compute(const float *triangles, size_t geometry_count, float beta = -1,
-               uint64_t stream = 0) -> CudaUniquePtr<float>;
+               size_t vertex_count, size_t geometry_count, float* output_grdients, float beta = -1,
+               uint64_t stream = 0) -> void;
+  auto compute(const float *triangles, size_t geometry_count, float* output_grdients, float beta = -1,
+               uint64_t stream = 0) -> void;
 
   [[nodiscard]] auto dump() const -> std::string;
 
