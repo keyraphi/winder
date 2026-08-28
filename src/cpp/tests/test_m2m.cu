@@ -40,7 +40,7 @@ TEST(M2M, AllOrdersQuantizationAware) {
   thrust::device_vector<Vec3> scaled_normals_d = scaled_normals_h;
   auto backend = WindingNumbersBackend<PointNormal>::CreateFromPoints(
       (float *)points_d.data().get(), (float *)scaled_normals_d.data().get(),
-      points_d.size(), 0);
+      points_d.size(), 0, 0);
 
   CUDA_CHECK(cudaDeviceSynchronize());
 

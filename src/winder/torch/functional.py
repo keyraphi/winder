@@ -46,15 +46,17 @@ class _MeshWindingAutograd(torch.autograd.Function):
 
         stream = torch.cuda.current_stream().cuda_stream
 
+        winding_numbers = torch.empty([queries.shape[0]], dtype=torch.float32, device=queries.device)
+
         if mode == "fast":
-            engine = WindingNumberEngine(vertices, indices)
-            winding_numbers = engine.compute(queries, beta=beta_forward, stream=stream)
+            engine = WindingNumberEngine(vertices.contiguous(), indices.contiguous(), stream=stream)
+            engine.compute(queries.contiguous(), winding_numbers, beta=beta_forward, stream=stream)
         else:
-            winding_numbers = brute_force_winding_numbers(
-                vertices, indices, queries, stream
+            brute_force_winding_numbers(
+                vertices.contiguous(), indices.contiguous(), queries.contiguous(), winding_numbers, stream
             )
 
-        return torch.from_dlpack(winding_numbers)
+        return winding_numbers
 
     @staticmethod
     def backward(
@@ -63,17 +65,18 @@ class _MeshWindingAutograd(torch.autograd.Function):
         vertices, indices, queries = ctx.saved_tensors
         stream = torch.cuda.current_stream().cuda_stream
 
+        grad_v = torch.empty([vertices.shape[0], 3], dtype=torch.float32, device=vertices.device)
         if ctx.mode == "fast":
-            grad_engine = GradientEngine(queries, grad_output)
-            grad_v = grad_engine.compute(
-                vertices, indices, beta=ctx.beta_backward, stream=stream
+            grad_engine = GradientEngine(queries.contiguous(), grad_output.contiguous(), stream=stream)
+            grad_engine.compute(
+                vertices.contiguous(), indices.contiguous(), grad_v, beta=ctx.beta_backward, stream=stream
             )
         else:
-            grad_v = brute_force_gradients(
-                grad_output, vertices, indices, queries, stream
+             brute_force_gradients(
+                grad_output.contiguous(), vertices.contiguous(), indices.contiguous(), queries.contiguous(), grad_v, stream
             )
 
-        return (torch.from_dlpack(grad_v), None, None, None, None, None)
+        return (grad_v, None, None, None, None, None)
 
 
 def winding_mesh(
@@ -150,15 +153,16 @@ class _TriangleWindingAutograd(torch.autograd.Function):
 
         stream = torch.cuda.current_stream().cuda_stream
 
+        winding_numbers = torch.empty([queries.shape[0]], dtype=torch.float32, device=queries.device)
         if mode == "fast":
-            engine = WindingNumberEngine(triangles)
-            winding_number = engine.compute(queries, beta=beta_forward, stream=stream)
+            engine = WindingNumberEngine(triangles.contiguous(), stream=stream)
+            engine.compute(queries.contiguous(), winding_numbers, beta=beta_forward, stream=stream)
         else:
-            winding_number = brute_force_winding_numbers(
-                triangles, queries, stream=stream
+            brute_force_winding_numbers(
+                triangles.contiguous(), queries.contiguous(), winding_numbers, stream=stream
             )
 
-        return torch.from_dlpack(winding_number)
+        return winding_numbers
 
     @staticmethod
     def backward(
@@ -167,17 +171,18 @@ class _TriangleWindingAutograd(torch.autograd.Function):
         triangles, queries = ctx.saved_tensors
         stream = torch.cuda.current_stream().cuda_stream
 
+        grad_t = torch.empty([triangles.shape[0], 3, 3], dtype=torch.float32, device=triangles.device)
         if ctx.mode == "fast":
-            grad_engine = GradientEngine(queries, grad_output)
-            grad_t = grad_engine.compute(
-                triangles, beta=ctx.beta_backward, stream=stream
+            grad_engine = GradientEngine(queries.contiguous(), grad_output.contiguous(), stream=stream)
+            grad_engine.compute(
+                triangles.contiguous(), grad_t, beta=ctx.beta_backward, stream=stream
             )
         else:
-            grad_t = brute_force_gradients(
-                grad_output, triangles, queries, stream
+            brute_force_gradients(
+                grad_output.contiguous(), triangles.contiguous(), queries.contiguous(), grad_t, stream
             )
 
-        return torch.from_dlpack(grad_t), None, None, None, None
+        return grad_t, None, None, None, None
 
 
 def winding_triangles(
@@ -233,18 +238,19 @@ class _PointNormalWindingAutograd(torch.autograd.Function):
         ctx.mode = mode
 
         stream = torch.cuda.current_stream().cuda_stream
+        winding_numbers = torch.empty([queries.shape[0]], dtype=torch.float32, device=queries.device)
 
         if mode == "fast":
-            engine = WindingNumberEngine(points, scaled_normals)
-            winding_numbers = engine.compute(
-                queries, beta=beta_forward, epsilon=epsilon, stream=stream
+            engine = WindingNumberEngine(points.contiguous(), scaled_normals.contiguous(), stream=stream)
+            engine.compute(
+                queries.contiguous(), winding_numbers, beta=beta_forward, epsilon=epsilon, stream=stream
             )
         else:
-            winding_numbers = brute_force_winding_numbers(
-                points, scaled_normals, queries, epsilon, stream
+            brute_force_winding_numbers(
+                points.contiguous(), scaled_normals.contiguous(), queries.contiguous(), winding_numbers, epsilon, stream
             )
 
-        return torch.from_dlpack(winding_numbers)
+        return winding_numbers
 
     @staticmethod
     def backward(
@@ -252,31 +258,30 @@ class _PointNormalWindingAutograd(torch.autograd.Function):
     ) -> tuple[torch.Tensor, torch.Tensor, None, None, None, None, None]:
         points, scaled_normals, queries = ctx.saved_tensors
         stream = torch.cuda.current_stream().cuda_stream
+        grads = torch.empty([points.shape[0], 2, 3], dtype=torch.float32, device=points.device)
 
         if ctx.mode == "fast":
-            grad_engine = GradientEngine(queries, grad_output)
+            grad_engine = GradientEngine(queries.contiguous(), grad_output.contiguous(), stream=stream)
             # Fast engine compute returns shape (N, 2, 3) where:
             # grads[:, 0, :] -> dL / d(scaled_normals)
             # grads[:, 1, :] -> dL / d(points)
-            grads = torch.from_dlpack(
-                grad_engine.compute(
-                    points,
-                    scaled_normals,
-                    beta=ctx.beta_backward,
-                    epsilon=ctx.epsilon,
-                    stream=stream,
-                )
+            grad_engine.compute(
+                points.contiguous(),
+                scaled_normals.contiguous(),
+                grads,
+                beta=ctx.beta_backward,
+                epsilon=ctx.epsilon,
+                stream=stream,
             )
         else:
-            grads = torch.from_dlpack(
-                brute_force_gradients(
-                    grad_output,
-                    points,
-                    scaled_normals,
-                    queries,
-                    ctx.epsilon,
-                    stream,
-                )
+            brute_force_gradients(
+                grad_output.contiguous(),
+                points.contiguous(),
+                scaled_normals.contiguous(),
+                queries.contiguous(),
+                grads,
+                ctx.epsilon,
+                stream,
             )
 
         grad_normals = grads[:, 0, :]

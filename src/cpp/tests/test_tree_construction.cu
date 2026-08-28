@@ -57,7 +57,7 @@ TEST(TreeConstruction, TreeStructure) {
   std::unique_ptr<WindingNumbersBackend<PointNormal>> backend =
       WindingNumbersBackend<PointNormal>::CreateFromPoints(
           (float *)d_points.data().get(), (float *)d_normals.data().get(),
-          d_points.size(), 0);
+          d_points.size(), 0, 0);
 
   // Geometry count
   EXPECT_EQ(backend->m_count, point_normals.size());
@@ -138,7 +138,7 @@ TEST(TreeConstruction, RandomTreeStructure) {
   std::unique_ptr<WindingNumbersBackend<PointNormal>> backend =
       WindingNumbersBackend<PointNormal>::CreateFromPoints(
           (float *)d_points.data().get(), (float *)d_normals.data().get(),
-          d_points.size(), 0);
+          d_points.size(), 0, 0);
 
   // Geometry count
   EXPECT_EQ(backend->m_count, point_normals.size());
