@@ -17,6 +17,7 @@ except ImportError as e:
         stacklevel=2,
     )
 
+from . import torch
 
 __all__ = [
     "WindingNumberEngine",
@@ -24,4 +25,5 @@ __all__ = [
     "brute_force_winding_numbers",
     "brute_force_gradients",
     "types",
+    "torch",
 ]
