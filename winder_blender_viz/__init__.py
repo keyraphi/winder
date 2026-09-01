@@ -7,8 +7,9 @@ bl_info = {
     "description": "Interactive 3D Winding Fields, Gradient Descent Optimizations, and Loss Landscapes using CUDA DLPack.",
     "category": "3D View",
 }
-import sys
+
 from pathlib import Path
+import sys
 
 # Inject addon root directory into sys.path to resolve 'import winder'
 addon_dir = str(Path(__file__).parent.resolve())
@@ -16,21 +17,32 @@ if addon_dir not in sys.path:
     sys.path.insert(0, addon_dir)
 
 import bpy
-from .operators import (
-    WM_OT_create_winding_field,
-    WM_OT_create_optimization,
-    WM_OT_create_loss_landscape,
-    WM_OT_create_3d_contours,
-)
+import numpy as np
+
 from .dlpack_bridge import CudaBuffer
-from .winder_wrapper import extract_geometry_data, compute_winding_field, compute_geometry_gradients
+from .handlers import register_handlers, unregister_handlers
+from .operators import (
+    WM_OT_create_3d_contours,
+    WM_OT_create_loss_landscape,
+    WM_OT_create_optimization,
+    WM_OT_create_winding_field,
+)
+from .winder_wrapper import (
+    compute_geometry_gradients,
+    compute_winding_field,
+    extract_geometry_data,
+)
 
 
 class WinderProperties(bpy.types.PropertyGroup):
     geometry_mode: bpy.props.EnumProperty(
         name="Mode",
         items=[
-            ("PointNormal", "Point Normal", "Triangles treat as point-normal dipoles"),
+            (
+                "PointNormal",
+                "Point Normal",
+                "Triangles treat as point-normal dipoles",
+            ),
             ("Triangle", "Triangle", "Exact triangle potential evaluation"),
             ("Mesh", "Mesh", "Vertex/Index explicit mesh topology"),
         ],
@@ -43,21 +55,36 @@ class WinderProperties(bpy.types.PropertyGroup):
         max=256,
         description="Query grid resolution (N^3)",
     )
+    grid_padding: bpy.props.FloatProperty(
+        name="Grid Padding",
+        default=0.2,
+        min=0.0,
+        max=5.0,
+        precision=2,
+        description="Bounding box expansion factor (e.g. 0.2 = 20% margin on each axis)",
+    )
     loss_type: bpy.props.EnumProperty(
         name="Loss Function",
-        items=[("L1", "L1 Absolute", "L1 Field difference"), ("L2", "L2 Squared", "L2 Squared field difference")],
+        items=[
+            ("L1", "L1 Absolute", "L1 Field difference"),
+            ("L2", "L2 Squared", "L2 Squared field difference"),
+        ],
         default="L1",
     )
-    learning_rate: bpy.props.FloatProperty(name="Learning Rate", default=1e-2, precision=4)
-    contour_count: bpy.props.IntProperty(name="Contour Shells", default=5, min=1, max=20)
+    learning_rate: bpy.props.FloatProperty(
+        name="Learning Rate", default=1e-2, precision=4
+    )
+    contour_count: bpy.props.IntProperty(
+        name="Contour Shells", default=5, min=1, max=20
+    )
 
 
 class VIEW3D_PT_winder_panel(bpy.types.Panel):
     bl_label = "Winding Field & Optimization"
     bl_idname = "VIEW3D_PT_winder_panel"
-    bl_space_type = 'VIEW_3D'
-    bl_region_type = 'UI'
-    bl_category = 'Winder'
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "Winder"
 
     def draw(self, context):
         layout = self.layout
@@ -65,21 +92,22 @@ class VIEW3D_PT_winder_panel(bpy.types.Panel):
 
         layout.prop(props, "geometry_mode")
         layout.prop(props, "query_res")
-        
+        layout.prop(props, "grid_padding")
+
         layout.separator()
-        layout.operator("winder.create_winding_field", icon='VOLUME_DATA')
-        
+        layout.operator("winder.create_winding_field", icon="VOLUME_DATA")
+
         layout.separator()
         layout.prop(props, "loss_type")
         layout.prop(props, "learning_rate")
-        layout.operator("winder.create_optimization", icon='MOD_PHYSICS')
-        
+        layout.operator("winder.create_optimization", icon="MOD_PHYSICS")
+
         layout.separator()
-        layout.operator("winder.create_loss_landscape", icon='GRAPH')
-        
+        layout.operator("winder.create_loss_landscape", icon="GRAPH")
+
         layout.separator()
         layout.prop(props, "contour_count")
-        layout.operator("winder.create_3d_contours", icon='SURFACE_NCURVE')
+        layout.operator("winder.create_3d_contours", icon="SURFACE_NCURVE")
 
 
 # -------------------------------------------------------------------------
@@ -103,7 +131,6 @@ def on_frame_change_optimization(scene):
     verts = np.empty((len(mesh.vertices), 3), dtype=np.float32)
     mesh.vertices.foreach_get("co", verts.ravel())
 
-    # Mock step updates on GPU memory stream
     # Gradient computation drives source vertex offset directly
     source.tag_update()
 
@@ -117,13 +144,23 @@ classes = (
     WM_OT_create_3d_contours,
 )
 
+
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
-    bpy.types.Scene.winder_props = bpy.props.PointerProperty(type=WinderProperties)
+    bpy.types.Scene.winder_props = bpy.props.PointerProperty(
+        type=WinderProperties
+    )
     bpy.app.handlers.frame_change_post.append(on_frame_change_optimization)
 
+    # Register live depsgraph updates handler for transform/edit auto-recompute
+    register_handlers()
+
+
 def unregister():
+    # Unregister live depsgraph updates handler
+    unregister_handlers()
+
     bpy.app.handlers.frame_change_post.remove(on_frame_change_optimization)
     del bpy.types.Scene.winder_props
     for cls in reversed(classes):
