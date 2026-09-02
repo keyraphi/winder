@@ -103,7 +103,9 @@ def extract_geometry_data(obj, mode="Mesh", stream=None):
         norm_buf.copy_from_numpy_async(scaled_normals, stream=stream)
 
         print("DEBUG: extract_geometry_data PointNormal: pts_buf.shape", pts_buf.shape)
-        print("DEBUG: extract_geometry_data PointNormal: norm_buf.shape", norm_buf.shape)
+        print(
+            "DEBUG: extract_geometry_data PointNormal: norm_buf.shape", norm_buf.shape
+        )
         return {
             "mode": "PointNormal",
             "points": pts_buf,
@@ -148,20 +150,43 @@ def compute_winding_field(
 
     if mode == "PointNormal":
         if use_engine:
-            print("DEBUG: compute_winding_field -> PointNormal creating engine", stream_handle)
+            print(
+                "DEBUG: compute_winding_field -> PointNormal creating engine",
+                stream_handle,
+            )
             engine = winder.WindingNumberEngine(
                 geom_data["points"], geom_data["scaled_normals"], stream=stream_handle
             )
-            print("DEBUG: compute_winding_field -> PointNormalCreating compute()", stream_handle)
+            print(
+                "DEBUG: compute_winding_field -> PointNormalCreating compute()",
+                stream_handle,
+            )
             engine.compute(
                 queries_buf, out_buf, float(beta), float(epsilon), stream_handle
             )
             host_refs.append(engine)
         else:
-            print("DEBUG: compute_winding_field -> brute_force()", "points:", geom_data["points"].shape, geom_data["points"].dtype, geom_data["points"].device_id,
-"scaled_normals:", geom_data["scaled_normals"].shape, geom_data["scaled_normals"].dtype, geom_data["scaled_normals"].device_id,
-"queries_buf:", queries_buf.shape, queries_buf.dtype, queries_buf.device_id,
-"out_buf:", out_buf.shape, out_buf.dtype, out_buf.device_id, epsilon, stream_handle)
+            print(
+                "DEBUG: compute_winding_field -> brute_force()",
+                "points:",
+                geom_data["points"].shape,
+                geom_data["points"].dtype,
+                geom_data["points"].device_id,
+                "scaled_normals:",
+                geom_data["scaled_normals"].shape,
+                geom_data["scaled_normals"].dtype,
+                geom_data["scaled_normals"].device_id,
+                "queries_buf:",
+                queries_buf.shape,
+                queries_buf.dtype,
+                queries_buf.device_id,
+                "out_buf:",
+                out_buf.shape,
+                out_buf.dtype,
+                out_buf.device_id,
+                epsilon,
+                stream_handle,
+            )
             winder.brute_force_winding_numbers(
                 geom_data["points"],
                 geom_data["scaled_normals"],
@@ -173,7 +198,9 @@ def compute_winding_field(
 
     elif mode == "Triangle":
         if use_engine:
-            engine = winder.WindingNumberEngine(geom_data["triangles"], stream=stream_handle)
+            engine = winder.WindingNumberEngine(
+                geom_data["triangles"], stream=stream_handle
+            )
             engine.compute(queries_buf, out_buf, float(beta), stream_handle)
             host_refs.append(engine)
         else:
@@ -184,7 +211,9 @@ def compute_winding_field(
     elif mode == "Mesh":
         if use_engine:
             engine = winder.WindingNumberEngine(
-                geom_data["vertices"], geom_data["triangle_indices"], stream=stream_handle
+                geom_data["vertices"],
+                geom_data["triangle_indices"],
+                stream=stream_handle,
             )
             engine.compute(queries_buf, out_buf, float(beta), stream_handle)
             host_refs.append(engine)
@@ -208,7 +237,7 @@ def compute_geometry_gradients(
     beta: float = -1.0,
     stream=None,
 ):
-    print("DEBUG: compute_geometry_gradients")
+    print("DEBUG: compute_geometry_gradients mode:", geom_data["mode"])
     mode = geom_data["mode"]
     use_engine = geom_data["count"] > 1000
     stream_handle = _get_stream_handle(stream)
@@ -216,6 +245,7 @@ def compute_geometry_gradients(
 
     if mode == "PointNormal":
         if use_engine:
+            print("DEBUG: running GradientEngine for PointNormals ")
             engine = winder.GradientEngine(queries_buf, dL_dw_buf, stream_handle)
             engine.compute(
                 geom_data["points"],
@@ -227,6 +257,7 @@ def compute_geometry_gradients(
             )
             host_refs.append(engine)
         else:
+            print("DEBUG: running Brute Force Gradients for PointNormals ")
             winder.brute_force_gradients(
                 dL_dw_buf,
                 geom_data["points"],
@@ -239,12 +270,14 @@ def compute_geometry_gradients(
 
     elif mode == "Triangle":
         if use_engine:
+            print("DEBUG: running GradientEngine for Triangles ")
             engine = winder.GradientEngine(queries_buf, dL_dw_buf, stream_handle)
             engine.compute(
                 geom_data["triangles"], out_grad_buf, float(beta), stream_handle
             )
             host_refs.append(engine)
         else:
+            print("DEBUG: running Brute Force Gradients for Triangles ")
             winder.brute_force_gradients(
                 dL_dw_buf,
                 geom_data["triangles"],
@@ -254,7 +287,20 @@ def compute_geometry_gradients(
             )
 
     elif mode == "Mesh":
+        print("DEBUG GRADIENT INPUTS")
+        print("DEBUG dL_dw_buf:", dL_dw_buf.shape, dL_dw_buf.dtype)
+        print(
+            "DEBUG: vertices:", geom_data["vertices"].shape, geom_data["vertices"].dtype
+        )
+        print(
+            "DEBUG: triangle_indices:",
+            geom_data["triangle_indices"].shape,
+            geom_data["triangle_indices"].dtype,
+        )
+        print("DEBUG: queries_buf:", queries_buf.shape, queries_buf.dtype)
+        print("DEBUG: out_grad_buf:", out_grad_buf.shape, out_grad_buf.dtype)
         if use_engine:
+            print("DEBUG: running GradientEngine for Mesh ")
             engine = winder.GradientEngine(queries_buf, dL_dw_buf, stream_handle)
             engine.compute(
                 geom_data["vertices"],
@@ -265,10 +311,12 @@ def compute_geometry_gradients(
             )
             host_refs.append(engine)
         else:
+            print("DEBUG: running Brute Force Gradients for Mesh ")
             winder.brute_force_gradients(
                 dL_dw_buf,
                 geom_data["vertices"],
                 geom_data["triangle_indices"],
+                queries_buf,
                 out_grad_buf,
                 stream_handle,
             )

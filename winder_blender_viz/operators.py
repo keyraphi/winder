@@ -171,8 +171,9 @@ def recompute_winding_field(context, obj):
         tris = np.empty((geom_data["count"], 3, 3), dtype=np.float32)
         geom_data["triangles"].copy_to_numpy_async(tris, stream=stream)
         stream.synchronize()
-        pts = tris.mean(axis=1)
-        vecs = grad_data.mean(axis=1)
+        # Flatten (N, 3, 3) -> (N * 3, 3) to place 1 quiver arrow at each vertex per triangle
+        pts = tris.reshape(-1, 3)
+        vecs = grad_data.reshape(-1, 3)
     elif mode == "Mesh":
         pts = np.empty((geom_data["num_verts"], 3), dtype=np.float32)
         geom_data["vertices"].copy_to_numpy_async(pts, stream=stream)
@@ -288,11 +289,15 @@ class WM_OT_create_3d_contours(bpy.types.Operator):
         contour_obj = bpy.data.objects.new(f"IsoContours_{vol_obj.name}", contour_mesh)
         context.collection.objects.link(contour_obj)
 
-        gn_tree = build_marching_cubes_contour_nodes(num_shells=props.contour_count)
+        gn_tree, vol_id, cut_id = build_marching_cubes_contour_nodes(
+            num_shells=props.contour_count
+        )
         mod = contour_obj.modifiers.new(name="GNContours", type="NODES")
         mod.node_group = gn_tree
-        mod["Socket_1"] = vol_obj
-        mod["Socket_2"] = cut_empty
+
+        # Assign object references directly to the modifier input sockets
+        mod[vol_id] = vol_obj
+        mod[cut_id] = cut_empty
 
         self.report(
             {"INFO"}, f"Created 3D Iso-Contours with Cut Plane for {vol_obj.name}"

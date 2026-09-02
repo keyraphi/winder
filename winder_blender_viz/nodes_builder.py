@@ -46,13 +46,14 @@ def get_or_create_volume_material(mat_name="Winder_Volume_Material"):
         color_ramp.color_ramp.elements[0].color = (0.9, 0.02, 0.02, 1.0)
         color_ramp.color_ramp.elements[0].position = 0.0
 
+        # Position 1.0: Green (Positive Winding)
+        color_ramp.color_ramp.elements[1].color = (0.02, 0.9, 0.02, 1.0)
+        color_ramp.color_ramp.elements[1].position = 1.0
+
         # Position 0.5: Dark Center (Zero Winding)
         elem_zero = color_ramp.color_ramp.elements.new(0.5)
         elem_zero.color = (0.02, 0.02, 0.02, 1.0)
 
-        # Position 1.0: Green (Positive Winding)
-        color_ramp.color_ramp.elements[1].color = (0.02, 0.9, 0.02, 1.0)
-        color_ramp.color_ramp.elements[1].position = 1.0
 
         links.new(map_range.outputs["Result"], color_ramp.inputs["Fac"])
         links.new(color_ramp.outputs["Color"], princ_vol.inputs["Color"])
@@ -193,10 +194,11 @@ def build_marching_cubes_contour_nodes(node_group_name="GN_3DContours", num_shel
 
     ng = bpy.data.node_groups.new(name=node_group_name, type="GeometryNodeTree")
 
-    ng.interface.new_socket(
-        name="Volume", in_out="INPUT", socket_type="NodeSocketGeometry"
+    # Change Volume socket to NodeSocketObject so it accepts an Object reference
+    vol_socket = ng.interface.new_socket(
+        name="Volume Object", in_out="INPUT", socket_type="NodeSocketObject"
     )
-    ng.interface.new_socket(
+    cut_socket = ng.interface.new_socket(
         name="Cut Empty", in_out="INPUT", socket_type="NodeSocketObject"
     )
     ng.interface.new_socket(
@@ -211,28 +213,34 @@ def build_marching_cubes_contour_nodes(node_group_name="GN_3DContours", num_shel
 
     join_geo = nodes.new("GeometryNodeJoinGeometry")
 
+    # Fetch Volume Object Info & Geometry stream
+    vol_info = nodes.new("GeometryNodeObjectInfo")
+    links.new(in_node.outputs[vol_socket.name], vol_info.inputs["Object"])
+
     # Generate ISO Shells using Volume to Mesh
     for i in range(num_shells):
         v2m = nodes.new("GeometryNodeVolumeToMesh")
         v2m.inputs["Threshold"].default_value = 0.1 + (i * 0.15)
         v2m.inputs["Adaptivity"].default_value = 0.1
-        links.new(in_node.outputs["Volume"], v2m.inputs["Volume"])
+        links.new(vol_info.outputs["Geometry"], v2m.inputs["Volume"])
         links.new(v2m.outputs["Mesh"], join_geo.inputs["Geometry"])
 
-    # Plane Slicing based on Empty's XY plane
+    # Fetch Cut Empty Object Info
     obj_info = nodes.new("GeometryNodeObjectInfo")
-    links.new(in_node.outputs["Cut Empty"], obj_info.inputs["Object"])
+    links.new(in_node.outputs[cut_socket.name], obj_info.inputs["Object"])
 
-    transform_pos = nodes.new("GeometryNodeVectorTransform")
-    transform_pos.transform_type = "HANDLED"
-    transform_pos.convert_from = "WORLD"
-    transform_pos.convert_to = "LOCAL"
-
+    # Transform World Position -> Local Space of Cut Empty
     pos = nodes.new("GeometryNodeInputPosition")
-    links.new(pos.outputs["Position"], transform_pos.inputs["Vector"])
+
+    invert_mat = nodes.new("FunctionNodeInvertMatrix")
+    links.new(obj_info.outputs["Transform"], invert_mat.inputs[0])
+
+    transform_pos = nodes.new("FunctionNodeTransformPoint")
+    links.new(pos.outputs["Position"], transform_pos.inputs[0])
+    links.new(invert_mat.outputs[0], transform_pos.inputs[1])
 
     separate_xyz = nodes.new("ShaderNodeSeparateXYZ")
-    links.new(transform_pos.outputs["Vector"], separate_xyz.inputs["Vector"])
+    links.new(transform_pos.outputs[0], separate_xyz.inputs["Vector"])
 
     # Delete geometry where local Y > 0
     compare_y = nodes.new("FunctionNodeCompare")
@@ -245,6 +253,5 @@ def build_marching_cubes_contour_nodes(node_group_name="GN_3DContours", num_shel
     links.new(join_geo.outputs["Geometry"], delete_geo.inputs["Geometry"])
     links.new(compare_y.outputs["Result"], delete_geo.inputs["Selection"])
 
-    # NodeGroupOutput uses inputs, not outputs
     links.new(delete_geo.outputs["Geometry"], out_node.inputs["Geometry"])
-    return ng
+    return ng, vol_socket.identifier, cut_socket.identifier

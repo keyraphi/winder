@@ -32,6 +32,8 @@ using Scalar_t = nb::ndarray<nb::array_api, float, nb::shape<-1>, nb::c_contig,
                              nb::device::cuda>;
 using GradResult_t = nb::ndarray<nb::array_api, float, nb::shape<-1, -1, 3>,
                                  nb::c_contig, nb::device::cuda>;
+using VertexGradResult_t = nb::ndarray<nb::array_api, float, nb::shape<-1, 3>,
+                                 nb::c_contig, nb::device::cuda>;
 namespace winder_cuda {
 
 auto scalar_with_default(const std::optional<Scalar_t> &maybe_pc_wn,
@@ -159,7 +161,7 @@ auto brute_force_gradients(const Scalar_t &grad_output, const Vec3_t &points,
 auto brute_force_gradients(const Scalar_t &grad_output, const Vec3_t &vertices,
                            const TriangleIdx_t &triangle_indices,
                            const Vec3_t &queries,
-                           GradResult_t &output_gradients,
+                           VertexGradResult_t &output_gradients,
                            const uint64_t stream = 0) -> void {
   if (vertices.device_id() != grad_output.device_id()) {
     throw std::runtime_error(
@@ -269,7 +271,7 @@ public:
 
   // Mesh
   auto compute(const Vec3_t &vertices, const TriangleIdx_t &triangle_indices,
-               GradResult_t &output_gradients, float beta = -1.F,
+               VertexGradResult_t &output_gradients, float beta = -1.F,
                const uint64_t stream = 0) -> void {
 
     if (vertices.device_id() != triangle_indices.device_id()) {
@@ -604,12 +606,12 @@ NB_MODULE(winder_module, m) {
   m.def(
       "brute_force_gradients",
       nb::overload_cast<const Scalar_t &, const Vec3_t &, const TriangleIdx_t &,
-                        const Vec3_t &, GradResult_t &, const uint64_t>(
+                        const Vec3_t &, VertexGradResult_t &, const uint64_t>(
           &brute_force_gradients),
       "grad_output"_a, "vertices"_a, "triangle_indices"_a, "queries"_a,
       "out_gradients"_a, "stream"_a = 0,
       nb::sig("def brute_force_gradients(grad_output: "
-              "winder.types.Array[winder.types.Shape[winder.types.N], "
+              "winder.types.Array[winder.types.Shape[winder.types.M], "
               "winder.types.float32, "
               "winder.types.cuda], vertices: "
               "winder.types.Array[winder.types.Shape[winder.types.K, "
@@ -619,7 +621,7 @@ NB_MODULE(winder_module, m) {
               "typing.Literal[3]], winder.types.uint32, winder.types.cuda], "
               "queries: winder.types.Array[winder.types.Shape[winder.types.M, "
               "typing.Literal[3]], winder.types.float32, "
-              "winder.types.cuda], epsilon: float, "
+              "winder.types.cuda], "
               "out_gradients: "
               "winder.types.Array[winder.types.Shape[winder.types.K, "
               "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
@@ -878,7 +880,7 @@ NB_MODULE(winder_module, m) {
       // --- Gradients ---
       .def("compute",
            nb::overload_cast<const Vec3_t &, const TriangleIdx_t &,
-                             GradResult_t &, float, const uint64_t>(
+                             VertexGradResult_t &, float, const uint64_t>(
                &GradientEngine::compute),
            "vertices"_a, "triangle_indices"_a, "out_gradients"_a,
            "beta"_a = -1.F, "stream"_a = 0,

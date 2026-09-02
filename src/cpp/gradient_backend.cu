@@ -79,31 +79,49 @@ GradientBackend::GradientBackend(size_t query_count, int device_id,
 }
 
 GradientBackend::~GradientBackend() {
-  CUDA_CHECK(cudaStreamSynchronize(m_build_stream));
+  int device = -1;
+  if (cudaGetDevice(&device) != cudaSuccess) {
+    // Context is already destroyed or invalid
+    return;
+  }
 
-  CUDA_CHECK(cudaEventDestroy(m_tree_construction_finished_event));
+  cudaStreamSynchronize(m_build_stream);
+
+  if (m_tree_construction_finished_event) {
+    cudaEventDestroy(m_tree_construction_finished_event);
+    m_tree_construction_finished_event = nullptr;
+  }
 
   if (m_to_internal) {
-    CUDA_CHECK(cudaFreeAsync(m_to_internal, m_build_stream));
+    cudaFreeAsync(m_to_internal, m_build_stream);
+    m_to_internal = nullptr;
   }
   if (m_sorted_queries) {
-    CUDA_CHECK(cudaFreeAsync(m_sorted_queries, m_build_stream));
+    cudaFreeAsync(m_sorted_queries, m_build_stream);
+    m_sorted_queries = nullptr;
   }
   if (m_binary_aabbs) {
-    CUDA_CHECK(cudaFreeAsync(m_binary_aabbs, m_build_stream));
+    cudaFreeAsync(m_binary_aabbs, m_build_stream);
+    m_binary_aabbs = nullptr;
   }
   if (m_bvh8_node_count) {
-    CUDA_CHECK(cudaFreeAsync(m_bvh8_node_count, m_build_stream));
+    cudaFreeAsync(m_bvh8_node_count, m_build_stream);
+    m_bvh8_node_count = nullptr;
   }
   if (m_bvh8_nodes) {
-    CUDA_CHECK(cudaFreeAsync(m_bvh8_nodes, m_build_stream));
+    cudaFreeAsync(m_bvh8_nodes, m_build_stream);
+    m_bvh8_nodes = nullptr;
   }
   if (m_taylor_coefficients) {
-    CUDA_CHECK(cudaFreeAsync(m_taylor_coefficients, m_build_stream));
+    cudaFreeAsync(m_taylor_coefficients, m_build_stream);
+    m_taylor_coefficients = nullptr;
   }
   if (m_bvh8_leaf_pointers) {
-    CUDA_CHECK(cudaFreeAsync(m_bvh8_leaf_pointers, m_build_stream));
+    cudaFreeAsync(m_bvh8_leaf_pointers, m_build_stream);
+    m_bvh8_leaf_pointers = nullptr;
   }
+
+  cudaStreamSynchronize(m_build_stream);
 }
 
 // Build BVH8
@@ -327,8 +345,7 @@ auto GradientBackend::compute(const float *points, const float *scaled_normals,
 
 auto GradientBackend::compute(const float *triangles_float,
                               size_t geometry_count, float *gradients,
-                              float beta, uint64_t stream)
-    -> void {
+                              float beta, uint64_t stream) -> void {
   ScopedCudaDevice device_scope{m_device};
   // convert stream to cuda stream
   cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
@@ -395,9 +412,8 @@ auto GradientBackend::compute(const float *triangles_float,
 auto GradientBackend::compute(const float *vertices,
                               const uint32_t *triangle_indices,
                               size_t vertex_count, size_t geometry_count,
-                              float* vertex_gradients,
-                              float beta, uint64_t stream)
-    -> void {
+                              float *vertex_gradients, float beta,
+                              uint64_t stream) -> void {
   ScopedCudaDevice device_scope{m_device};
   // convert stream to cuda stream
   cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
@@ -411,10 +427,11 @@ auto GradientBackend::compute(const float *vertices,
                    static_cast<uint32_t>(geometry_count), triangles,
                    compute_stream);
 
-  float* triangle_gradients;
-  CUDA_CHECK(cudaMallocAsync(&triangle_gradients, geometry_count*sizeof(Triangle), compute_stream));
+  float *triangle_gradients;
+  CUDA_CHECK(cudaMallocAsync(
+      &triangle_gradients, geometry_count * sizeof(Triangle), compute_stream));
 
-  this->compute(triangles, geometry_count,triangle_gradients, beta, stream);
+  this->compute(triangles, geometry_count, triangle_gradients, beta, stream);
   CUDA_CHECK(cudaFreeAsync(triangles, compute_stream));
 
   CUDA_CHECK(cudaMemsetAsync(vertex_gradients, 0,

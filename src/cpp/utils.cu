@@ -10,6 +10,8 @@
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
 #include <driver_types.h>
+#include <stdexcept>
+#include <string>
 #include <thrust/device_ptr.h>
 #include <thrust/fill.h>
 #include <thrust/iterator/transform_iterator.h>
@@ -27,10 +29,26 @@
   } while (0)
 
 ScopedCudaDevice::ScopedCudaDevice(int new_device) {
-  cudaGetDevice(&original_device_);
-  cudaSetDevice(new_device);
+  cudaGetLastError();
+  if (cudaGetDevice(&original_device_) != cudaSuccess) {
+    cudaGetLastError();
+    original_device_ = 0;
+  }
+  if (new_device >= 0) {
+    cudaError_t err = cudaSetDevice(new_device);
+    if (err != cudaSuccess) {
+      cudaGetLastError();
+      throw std::runtime_error("Invalid CUDA device_id: " +
+                               std::to_string(new_device));
+    }
+  }
 }
-ScopedCudaDevice::~ScopedCudaDevice() { cudaSetDevice(original_device_); }
+ScopedCudaDevice::~ScopedCudaDevice() {
+  if (original_device_ >= 0) {
+    cudaSetDevice(original_device_);
+    cudaGetLastError();
+  }
+}
 
 namespace winder_cuda {
 // Helper to get CUDA device from nanobind ndarray
@@ -155,6 +173,7 @@ auto initializeMortonCodes(const PrimitiveGeometry *geometry,
   uint32_t grid = (count + threads - 1) / threads;
   geometry_to_morton_kernel<<<grid, threads, 0, stream>>>(
       geometry, count, scale, min_p.x, min_p.y, min_p.z, geometry_morton_codes);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 template void initializeMortonCodes<Vec3>(const Vec3 *geometry,

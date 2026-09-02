@@ -70,34 +70,53 @@ __constant__ SceneParams d_scene_params;
 
 template <IsGeometry Geometry>
 WindingNumbersBackend<Geometry>::~WindingNumbersBackend() {
+  int device = -1;
+  if (cudaGetDevice(&device) != cudaSuccess) {
+    // Context is already destroyed or invalid
+    return;
+  }
   CUDA_CHECK(cudaStreamSynchronize(m_build_stream));
 
-  CUDA_CHECK(cudaEventDestroy(m_start_tree_construction_event));
-  CUDA_CHECK(cudaEventDestroy(m_tree_construction_finished_event));
+  if (m_start_tree_construction_event) {
+    CUDA_CHECK(cudaEventDestroy(m_start_tree_construction_event));
+    m_start_tree_construction_event = nullptr;
+  }
+  if (m_tree_construction_finished_event) {
+    CUDA_CHECK(cudaEventDestroy(m_tree_construction_finished_event));
+    m_tree_construction_finished_event = nullptr;
+  }
 
   if (m_to_internal) {
     CUDA_CHECK(cudaFreeAsync(m_to_internal, m_build_stream));
+    m_to_internal = nullptr;
   }
   if (m_sorted_geometry) {
     CUDA_CHECK(cudaFreeAsync(m_sorted_geometry, m_build_stream));
+    m_sorted_geometry = nullptr;
   }
   if (m_binary_aabbs) {
     CUDA_CHECK(cudaFreeAsync(m_binary_aabbs, m_build_stream));
+    m_binary_aabbs = nullptr;
   }
   if (m_bvh8_node_count) {
     CUDA_CHECK(cudaFreeAsync(m_bvh8_node_count, m_build_stream));
+    m_bvh8_node_count = nullptr;
   }
   if (m_bvh8_nodes) {
     CUDA_CHECK(cudaFreeAsync(m_bvh8_nodes, m_build_stream));
+    m_bvh8_nodes = nullptr;
   }
   if (m_tailor_coefficients) {
     CUDA_CHECK(cudaFreeAsync(m_tailor_coefficients, m_build_stream));
+    m_tailor_coefficients = nullptr;
   }
   if (m_leaf_coefficients) {
     CUDA_CHECK(cudaFreeAsync(m_leaf_coefficients, m_build_stream));
+    m_leaf_coefficients = nullptr;
   }
   if (m_bvh8_leaf_pointers) {
     CUDA_CHECK(cudaFreeAsync(m_bvh8_leaf_pointers, m_build_stream));
+    m_bvh8_leaf_pointers = nullptr;
   }
 }
 
@@ -475,8 +494,7 @@ auto WindingNumbersBackend<Geometry>::compute(const float *queries,
                                               size_t query_count,
                                               float *winding_numbers,
                                               float beta, float epsilon,
-                                              size_t stream) const
-    -> void {
+                                              size_t stream) const -> void {
   cudaEvent_t start, finish;
   CUDA_CHECK(cudaEventCreate(&start));
   CUDA_CHECK(cudaEventCreate(&finish));
@@ -555,7 +573,8 @@ template <>
 auto WindingNumbersBackend<PointNormal>::CreateFromPoints(const float *points,
                                                           const float *normals,
                                                           size_t point_count,
-                                                          int device_id, uint64_t stream)
+                                                          int device_id,
+                                                          uint64_t stream)
     -> std::unique_ptr<WindingNumbersBackend<PointNormal>> {
   ScopedCudaDevice device_scope(device_id);
 
@@ -567,8 +586,8 @@ auto WindingNumbersBackend<PointNormal>::CreateFromPoints(const float *points,
 
 template <>
 auto WindingNumbersBackend<Triangle>::CreateFromTriangles(
-    const float *triangles, size_t triangle_count, int device_id, uint64_t stream)
-    -> std::unique_ptr<WindingNumbersBackend<Triangle>> {
+    const float *triangles, size_t triangle_count, int device_id,
+    uint64_t stream) -> std::unique_ptr<WindingNumbersBackend<Triangle>> {
   ScopedCudaDevice device_scope(device_id);
   auto self = std::unique_ptr<WindingNumbersBackend>{
       new WindingNumbersBackend<Triangle>(triangle_count, device_id, stream)};
@@ -580,8 +599,8 @@ auto WindingNumbersBackend<Triangle>::CreateFromTriangles(
 template <>
 auto WindingNumbersBackend<Triangle>::CreateFromMesh(
     const float *vertices, size_t vertex_count,
-    const uint32_t *triangle_indices, size_t triangle_count, int device_id, uint64_t stream)
-    -> std::unique_ptr<WindingNumbersBackend<Triangle>> {
+    const uint32_t *triangle_indices, size_t triangle_count, int device_id,
+    uint64_t stream) -> std::unique_ptr<WindingNumbersBackend<Triangle>> {
   ScopedCudaDevice device_scope(device_id);
   auto self = std::unique_ptr<WindingNumbersBackend>{
       new WindingNumbersBackend<Triangle>(triangle_count, device_id, stream)};
