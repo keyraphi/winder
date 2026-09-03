@@ -75,7 +75,10 @@ WindingNumbersBackend<Geometry>::~WindingNumbersBackend() {
     // Context is already destroyed or invalid
     return;
   }
+  ScopedCudaDevice device_scope(m_device);
+
   CUDA_CHECK(cudaStreamSynchronize(m_build_stream));
+  cudaGetLastError();
 
   if (m_start_tree_construction_event) {
     CUDA_CHECK(cudaEventDestroy(m_start_tree_construction_event));

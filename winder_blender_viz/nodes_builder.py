@@ -1,8 +1,5 @@
 import bpy
 
-import bpy
-
-
 def get_or_create_volume_material(mat_name="Winder_Volume_Material"):
     """Volume shader reading 'density' (|w|) for opacity and 'winding' (signed w) for color."""
     mat = bpy.data.materials.get(mat_name)
@@ -23,7 +20,7 @@ def get_or_create_volume_material(mat_name="Winder_Volume_Material"):
 
         dens_scale = nodes.new("ShaderNodeMath")
         dens_scale.operation = "MULTIPLY"
-        dens_scale.inputs[1].default_value = 2.0
+        dens_scale.inputs[1].default_value = 5.0
         links.new(attr_density.outputs["Fac"], dens_scale.inputs[0])
         links.new(dens_scale.outputs["Value"], princ_vol.inputs["Density"])
 
@@ -186,21 +183,145 @@ def build_quiver_geometry_nodes(node_group_name="GN_QuiverPlot", default_scale=0
     return ng
 
 
-def build_marching_cubes_contour_nodes(node_group_name="GN_3DContours", num_shells=5):
-    """Generates Marching Cubes Iso-Surfaces sliced by an Empty XY Cut Plane."""
+def set_color_ramp_stops(color_ramp_node, stops):
+    """Safely updates a ShaderNodeValToRGB node with a list of (position, RGBA) tuples."""
+    ramp = color_ramp_node.color_ramp
+    stops = sorted(stops, key=lambda s: s[0])
+
+    # Ensure the exact number of elements exist
+    while len(ramp.elements) < len(stops):
+        ramp.elements.new(0.5)
+    while len(ramp.elements) > len(stops):
+        ramp.elements.remove(ramp.elements[-1])
+
+    # Assign positions and colors in ascending order
+    for elem, (pos, color) in zip(ramp.elements, stops):
+        elem.position = pos
+        elem.color = color
+
+
+def get_or_create_contour_material(
+    vol_obj_name, min_val, max_val, is_winding_field=True
+):
+    """Creates or updates the contour shader material with dynamic range mapping and custom color ramps."""
+    mat_name = f"Mat_IsoContours_{vol_obj_name}"
+    mat = bpy.data.materials.get(mat_name)
+
+    if not mat:
+        mat = bpy.data.materials.new(name=mat_name)
+        mat.use_nodes = True
+
+    node_tree = mat.node_tree
+    nodes = node_tree.nodes
+    links = node_tree.links
+
+    nodes.clear()
+
+    # 1. Attribute Node
+    attr_node = nodes.new("ShaderNodeAttribute")
+    attr_node.attribute_name = "winding"
+    attr_node.location = (-600, 0)
+
+    # 2. Map Range Node
+    map_range = nodes.new("ShaderNodeMapRange")
+    map_range.clamp = True
+    map_range.location = (-400, 0)
+
+    if is_winding_field:
+        # Center 0.5 in the middle of the range [0.5 - D, 0.5 + D]
+        max_dev = max(abs(0.5 - min_val), abs(max_val - 0.5))
+        if max_dev < 1e-6:
+            max_dev = 0.5
+        from_min = 0.5 - max_dev
+        from_max = 0.5 + max_dev
+    else:
+        # Unconstrained range mapping [min_val, max_val] -> [0.0, 1.0]
+        from_min = min_val
+        from_max = max_val
+        if abs(from_max - from_min) < 1e-6:
+            from_max = from_min + 1.0
+
+    map_range.inputs["From Min"].default_value = float(from_min)
+    map_range.inputs["From Max"].default_value = float(from_max)
+    map_range.inputs["To Min"].default_value = 0.0
+    map_range.inputs["To Max"].default_value = 1.0
+
+    # 3. Color Ramp Node
+    color_ramp = nodes.new("ShaderNodeValToRGB")
+    color_ramp.location = (-150, 0)
+
+    if is_winding_field:
+        # Winding Field Mode:
+        # Outside (<0.5): Deep Red -> Orange
+        # Center (=0.5): Sharp Black Peak
+        # Inside (>0.5): Orange -> Bright Green
+        stops = [
+            (0.00, (0.50, 0.00, 0.00, 1.0)),  # Deep Red (Far Outside)
+            (0.48, (1.00, 0.40, 0.00, 1.0)),  # Orange (Near Outside)
+            (0.50, (0.00, 0.00, 0.00, 1.0)),  # Sharp Black Peak @ 0.5 Boundary
+            (0.52, (1.00, 0.40, 0.00, 1.0)),  # Orange (Near Inside)
+            (1.00, (0.00, 0.90, 0.20, 1.0)),  # Bright Green (Far Inside)
+        ]
+    else:
+        # General Scalar Mode:
+        # Standard Viridis scientific colormap (Dark Purple -> Teal -> Bright Yellow)
+        stops = [
+            (0.00, (0.267, 0.004, 0.329, 1.0)),  # Dark Purple
+            (0.25, (0.228, 0.322, 0.545, 1.0)),  # Blue
+            (0.50, (0.127, 0.567, 0.550, 1.0)),  # Teal
+            (0.75, (0.369, 0.788, 0.383, 1.0)),  # Green
+            (1.00, (0.993, 0.906, 0.144, 1.0)),  # Yellow
+        ]
+
+    set_color_ramp_stops(color_ramp, stops)
+
+    # 4. Principled BSDF
+    bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+    bsdf.location = (150, 0)
+
+    if "Emission Strength" in bsdf.inputs:
+        bsdf.inputs["Emission Strength"].default_value = 1.0
+
+    # 5. Output Node
+    out_node = nodes.new("ShaderNodeOutputMaterial")
+    out_node.location = (450, 0)
+
+    # ---- Connections ----
+    links.new(attr_node.outputs["Fac"], map_range.inputs["Value"])
+    links.new(map_range.outputs["Result"], color_ramp.inputs["Fac"])
+
+    # Base Color
+    links.new(color_ramp.outputs["Color"], bsdf.inputs["Base Color"])
+
+    # Emission Color
+    emission_socket = bsdf.inputs.get("Emission Color") or bsdf.inputs.get(
+        "Emission"
+    )
+    if emission_socket:
+        links.new(color_ramp.outputs["Color"], emission_socket)
+
+    links.new(bsdf.outputs["BSDF"], out_node.inputs["Surface"])
+
+    return mat
+
+def build_marching_cubes_contour_nodes(
+    vol_obj,
+    cut_empty,
+    thresholds,
+    is_winding_field=True,
+    node_group_prefix="GN_3DContours",
+    grid_name="winding",
+):
+    """Generates Marching Cubes Iso-Surfaces using explicit quantile threshold values."""
+    node_group_name = f"{node_group_prefix}_{vol_obj.name}"
+
     ng = bpy.data.node_groups.get(node_group_name)
-    if ng:
-        bpy.data.node_groups.remove(ng)
+    if not ng:
+        ng = bpy.data.node_groups.new(name=node_group_name, type="GeometryNodeTree")
+    else:
+        ng.nodes.clear()
+        ng.interface.clear()
 
-    ng = bpy.data.node_groups.new(name=node_group_name, type="GeometryNodeTree")
-
-    # Change Volume socket to NodeSocketObject so it accepts an Object reference
-    vol_socket = ng.interface.new_socket(
-        name="Volume Object", in_out="INPUT", socket_type="NodeSocketObject"
-    )
-    cut_socket = ng.interface.new_socket(
-        name="Cut Empty", in_out="INPUT", socket_type="NodeSocketObject"
-    )
     ng.interface.new_socket(
         name="Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry"
     )
@@ -210,28 +331,54 @@ def build_marching_cubes_contour_nodes(node_group_name="GN_3DContours", num_shel
 
     in_node = nodes.new("NodeGroupInput")
     out_node = nodes.new("NodeGroupOutput")
-
     join_geo = nodes.new("GeometryNodeJoinGeometry")
 
-    # Fetch Volume Object Info & Geometry stream
     vol_info = nodes.new("GeometryNodeObjectInfo")
-    links.new(in_node.outputs[vol_socket.name], vol_info.inputs["Object"])
+    vol_info.inputs["Object"].default_value = vol_obj
 
-    # Generate ISO Shells using Volume to Mesh
-    for i in range(num_shells):
+    pos = nodes.new("GeometryNodeInputPosition")
+
+    # Generate ISO Shells for each quantile threshold
+    for thresh_val in thresholds:
         v2m = nodes.new("GeometryNodeVolumeToMesh")
-        v2m.inputs["Threshold"].default_value = 0.1 + (i * 0.15)
-        v2m.inputs["Adaptivity"].default_value = 0.1
+        if hasattr(v2m, "grid_name"):
+            v2m.grid_name = grid_name
+        elif "Grid Name" in v2m.inputs:
+            v2m.inputs["Grid Name"].default_value = grid_name
+
+        v2m.inputs["Threshold"].default_value = float(thresh_val)
+        v2m.inputs["Adaptivity"].default_value = 0.0  # no adaptivity for clean cuts
         links.new(vol_info.outputs["Geometry"], v2m.inputs["Volume"])
-        links.new(v2m.outputs["Mesh"], join_geo.inputs["Geometry"])
+
+        # Store threshold as named attribute for shader consumption
+        store_attr = nodes.new("GeometryNodeStoreNamedAttribute")
+        store_attr.domain = "POINT"
+        store_attr.data_type = "FLOAT"
+        store_attr.inputs["Name"].default_value = grid_name
+        store_attr.inputs["Value"].default_value = float(thresh_val)
+
+        links.new(v2m.outputs["Mesh"], store_attr.inputs["Geometry"])
+        links.new(store_attr.outputs["Geometry"], join_geo.inputs["Geometry"])
+
+    # Create & Assign Dynamic Material
+    min_val = min(thresholds)
+    max_val = max(thresholds)
+    mat = get_or_create_contour_material(
+        vol_obj_name=vol_obj.name,
+        min_val=min_val,
+        max_val=max_val,
+        is_winding_field=is_winding_field,
+    )
+
+    set_mat = nodes.new("GeometryNodeSetMaterial")
+    set_mat.inputs["Material"].default_value = mat
+    links.new(join_geo.outputs["Geometry"], set_mat.inputs["Geometry"])
 
     # Fetch Cut Empty Object Info
     obj_info = nodes.new("GeometryNodeObjectInfo")
-    links.new(in_node.outputs[cut_socket.name], obj_info.inputs["Object"])
+    obj_info.inputs["Object"].default_value = cut_empty
 
     # Transform World Position -> Local Space of Cut Empty
-    pos = nodes.new("GeometryNodeInputPosition")
-
     invert_mat = nodes.new("FunctionNodeInvertMatrix")
     links.new(obj_info.outputs["Transform"], invert_mat.inputs[0])
 
@@ -250,8 +397,15 @@ def build_marching_cubes_contour_nodes(node_group_name="GN_3DContours", num_shel
     links.new(separate_xyz.outputs["Y"], compare_y.inputs[0])
 
     delete_geo = nodes.new("GeometryNodeDeleteGeometry")
-    links.new(join_geo.outputs["Geometry"], delete_geo.inputs["Geometry"])
+    links.new(set_mat.outputs["Geometry"], delete_geo.inputs["Geometry"])
     links.new(compare_y.outputs["Result"], delete_geo.inputs["Selection"])
 
-    links.new(delete_geo.outputs["Geometry"], out_node.inputs["Geometry"])
-    return ng, vol_socket.identifier, cut_socket.identifier
+    # Smooth Shading Pass
+    set_smooth = nodes.new("GeometryNodeSetShadeSmooth")
+    set_smooth.inputs["Shade Smooth"].default_value = True
+    links.new(delete_geo.outputs["Geometry"], set_smooth.inputs["Geometry"])
+
+    links.new(set_smooth.outputs["Geometry"], out_node.inputs["Geometry"])
+    return ng
+
+

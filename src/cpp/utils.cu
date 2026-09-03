@@ -32,7 +32,7 @@ ScopedCudaDevice::ScopedCudaDevice(int new_device) {
   cudaGetLastError();
   if (cudaGetDevice(&original_device_) != cudaSuccess) {
     cudaGetLastError();
-    original_device_ = 0;
+    original_device_ = -1;
   }
   if (new_device >= 0) {
     cudaError_t err = cudaSetDevice(new_device);

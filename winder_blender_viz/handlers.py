@@ -112,7 +112,6 @@ def winder_depsgraph_update_handler(scene, depsgraph):
                 _deferred_recompute_callback, first_interval=_DEBOUNCE_DELAY
             )
 
-
 def register_handlers():
     if winder_depsgraph_update_handler not in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.append(winder_depsgraph_update_handler)

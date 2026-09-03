@@ -62,13 +62,22 @@ def _resolve_stream_ptr(stream):
         return stream
     raise TypeError(f"Unsupported stream object type: {type(stream)}")
 
-# ----------------------------------------------------------------------
-# CudaStream
-# ----------------------------------------------------------------------
+
 class CudaStream:
-    """Encapsulates a CUDA stream handle."""
-    def __init__(self):
+    """Encapsulates a CUDA stream handle bound to its creation device."""
+
+    def __init__(self, device_id: int | None = None):
         self.ptr = ctypes.c_void_p()
+
+        # Optionally switch device if requested
+        if device_id is not None:
+            _cudart.cudaSetDevice(device_id)
+
+        # Query and store the device that owns this stream
+        dev = ctypes.c_int()
+        res = _cudart.cudaGetDevice(ctypes.byref(dev))
+        self.device_id = dev.value if res == 0 else 0
+
         res = _cudart.cudaStreamCreate(ctypes.byref(self.ptr))
         if res != 0:
             raise RuntimeError(f"cudaStreamCreate failed with code {res}")
@@ -77,8 +86,33 @@ class CudaStream:
     def handle(self) -> int:
         return self.ptr.value or 0
 
+    def _set_active_device(self) -> int:
+        """Sets thread device to stream's device and returns the previous device."""
+        prev = ctypes.c_int()
+        if _cudart.cudaGetDevice(ctypes.byref(prev)) != 0:
+            prev.value = -1
+
+        if prev.value != self.device_id:
+            _cudart.cudaSetDevice(self.device_id)
+        return prev.value
+
+    def _restore_device(self, prev_device: int):
+        if prev_device >= 0 and prev_device != self.device_id:
+            _cudart.cudaSetDevice(prev_device)
+
     def synchronize(self):
-        _cudart.cudaStreamSynchronize(self.ptr)
+        if self.ptr:
+            prev = self._set_active_device()
+            _cudart.cudaStreamSynchronize(self.ptr)
+            self._restore_device(prev)
+
+    def destroy(self):
+        """Explicitly destroy the stream handle."""
+        if hasattr(self, "ptr") and self.ptr:
+            prev = self._set_active_device()
+            _cudart.cudaStreamDestroy(self.ptr)
+            self._restore_device(prev)
+            self.ptr = None
 
     def __enter__(self):
         return self
@@ -87,8 +121,14 @@ class CudaStream:
         self.synchronize()
 
     def __del__(self):
-        if hasattr(self, "ptr") and self.ptr:
-            _cudart.cudaStreamDestroy(self.ptr)
+        # Guard against Python shutdown where _cudart module globals are cleaned up
+        if _cudart is not None and hasattr(self, "ptr") and self.ptr:
+            try:
+                prev = self._set_active_device()
+                _cudart.cudaStreamDestroy(self.ptr)
+                self._restore_device(prev)
+            except Exception:
+                pass
             self.ptr = None
 
 # ----------------------------------------------------------------------

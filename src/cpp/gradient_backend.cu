@@ -84,8 +84,10 @@ GradientBackend::~GradientBackend() {
     // Context is already destroyed or invalid
     return;
   }
+  ScopedCudaDevice device_scope(m_device);
 
   cudaStreamSynchronize(m_build_stream);
+  cudaGetLastError();
 
   if (m_tree_construction_finished_event) {
     cudaEventDestroy(m_tree_construction_finished_event);

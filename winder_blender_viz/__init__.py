@@ -26,6 +26,8 @@ from .operators import (
     WM_OT_create_loss_landscape,
     WM_OT_create_optimization,
     WM_OT_create_winding_field,
+    update_contour_shells,
+    update_all_winding_fields,
 )
 from .winder_wrapper import (
     compute_geometry_gradients,
@@ -47,13 +49,15 @@ class WinderProperties(bpy.types.PropertyGroup):
             ("Mesh", "Mesh", "Vertex/Index explicit mesh topology"),
         ],
         default="PointNormal",
+        update=update_all_winding_fields,
     )
     query_res: bpy.props.IntProperty(
         name="Grid Resolution",
         default=64,
         min=16,
-        max=256,
+        max=1024,
         description="Query grid resolution (N^3)",
+        update=update_all_winding_fields,
     )
     grid_padding: bpy.props.FloatProperty(
         name="Grid Padding",
@@ -62,6 +66,13 @@ class WinderProperties(bpy.types.PropertyGroup):
         max=5.0,
         precision=2,
         description="Bounding box expansion factor (e.g. 0.2 = 20% margin on each axis)",
+        update=update_all_winding_fields,
+    )
+    is_quiver_creation_active: bpy.props.BoolProperty(
+        name="Show Gradient Directions",
+        description="Create a quiver visualization for every geometry primitive",
+        default=True,
+        update=update_all_winding_fields,
     )
     loss_type: bpy.props.EnumProperty(
         name="Loss Function",
@@ -75,7 +86,17 @@ class WinderProperties(bpy.types.PropertyGroup):
         name="Learning Rate", default=1e-2, precision=4
     )
     contour_count: bpy.props.IntProperty(
-        name="Contour Shells", default=5, min=1, max=20
+        name="Contour Shells",
+        default=5,
+        min=1,
+        max=20,
+        update=update_contour_shells,
+    )
+    is_winding_field: bpy.props.BoolProperty(
+        name="Winding Field Mode",
+        description="Center color ramp at 0.5 (surface boundary)",
+        default=True,
+        update=update_contour_shells,
     )
 
 
@@ -93,6 +114,7 @@ class VIEW3D_PT_winder_panel(bpy.types.Panel):
         layout.prop(props, "geometry_mode")
         layout.prop(props, "query_res")
         layout.prop(props, "grid_padding")
+        layout.prop(props, "is_quiver_creation_active")
 
         layout.separator()
         layout.operator("winder.create_winding_field", icon="VOLUME_DATA")
@@ -107,6 +129,7 @@ class VIEW3D_PT_winder_panel(bpy.types.Panel):
 
         layout.separator()
         layout.prop(props, "contour_count")
+        layout.prop(props, "is_winding_field")
         layout.operator("winder.create_3d_contours", icon="SURFACE_NCURVE")
 
 
@@ -148,9 +171,7 @@ classes = (
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
-    bpy.types.Scene.winder_props = bpy.props.PointerProperty(
-        type=WinderProperties
-    )
+    bpy.types.Scene.winder_props = bpy.props.PointerProperty(type=WinderProperties)
     bpy.app.handlers.frame_change_post.append(on_frame_change_optimization)
 
     # Register live depsgraph updates handler for transform/edit auto-recompute
