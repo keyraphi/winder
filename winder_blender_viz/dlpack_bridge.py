@@ -63,53 +63,84 @@ def _resolve_stream_ptr(stream):
     raise TypeError(f"Unsupported stream object type: {type(stream)}")
 
 
+import ctypes
+
+
 class CudaStream:
-    """Encapsulates a CUDA stream handle bound to its creation device."""
+    """Encapsulates a CUDA stream handle and manages the lifetime of dependent GPU resources."""
 
     def __init__(self, device_id: int | None = None):
         self.ptr = ctypes.c_void_p()
+        self._keep_alive = []
 
-        # Optionally switch device if requested
-        if device_id is not None:
+        if device_id is not None and _cudart is not None:
             _cudart.cudaSetDevice(device_id)
 
-        # Query and store the device that owns this stream
         dev = ctypes.c_int()
-        res = _cudart.cudaGetDevice(ctypes.byref(dev))
+        res = _cudart.cudaGetDevice(ctypes.byref(dev)) if _cudart else 1
         self.device_id = dev.value if res == 0 else 0
 
-        res = _cudart.cudaStreamCreate(ctypes.byref(self.ptr))
-        if res != 0:
-            raise RuntimeError(f"cudaStreamCreate failed with code {res}")
+        if _cudart:
+            res = _cudart.cudaStreamCreate(ctypes.byref(self.ptr))
+            if res != 0:
+                raise RuntimeError(f"cudaStreamCreate failed with code {res}")
 
     @property
     def handle(self) -> int:
-        return self.ptr.value or 0
+        return (
+            self.ptr.value
+            if (hasattr(self, "ptr") and self.ptr and self.ptr.value)
+            else 0
+        )
+
+    def keep_alive(self, *objs):
+        """Registers objects (engines, buffers, refs) to keep alive until stream exit."""
+        for obj in objs:
+            if isinstance(obj, (list, tuple)):
+                self._keep_alive.extend(obj)
+            elif obj is not None:
+                self._keep_alive.append(obj)
 
     def _set_active_device(self) -> int:
-        """Sets thread device to stream's device and returns the previous device."""
         prev = ctypes.c_int()
-        if _cudart.cudaGetDevice(ctypes.byref(prev)) != 0:
+        if _cudart is not None and _cudart.cudaGetDevice(ctypes.byref(prev)) != 0:
             prev.value = -1
 
-        if prev.value != self.device_id:
+        if (
+            prev.value >= 0
+            and prev.value != self.device_id
+            and _cudart is not None
+        ):
             _cudart.cudaSetDevice(self.device_id)
         return prev.value
 
     def _restore_device(self, prev_device: int):
-        if prev_device >= 0 and prev_device != self.device_id:
+        if (
+            _cudart is not None
+            and prev_device >= 0
+            and prev_device != self.device_id
+        ):
             _cudart.cudaSetDevice(prev_device)
 
     def synchronize(self):
-        if self.ptr:
+        if (
+            _cudart is not None
+            and getattr(self, "ptr", None) is not None
+            and self.ptr.value
+        ):
             prev = self._set_active_device()
             _cudart.cudaStreamSynchronize(self.ptr)
             self._restore_device(prev)
 
     def destroy(self):
-        """Explicitly destroy the stream handle."""
-        if hasattr(self, "ptr") and self.ptr:
+        """Explicitly destroys the CUDA stream handle."""
+        if (
+            _cudart is not None
+            and getattr(self, "ptr", None) is not None
+            and self.ptr.value
+        ):
             prev = self._set_active_device()
+            print("DEBUG: CudaStream.destroy: destroying stream")
             _cudart.cudaStreamDestroy(self.ptr)
             self._restore_device(prev)
             self.ptr = None
@@ -118,13 +149,24 @@ class CudaStream:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        print("DEBUG: CudaStream.__exit__: synchronizing stream")
         self.synchronize()
 
+        print("DEBUG: CudaStream.__exit__: releasing keep_alive")
+        self._keep_alive.clear()
+
+        print("DEBUG: CudaStream.__exit__: destroying stream")
+        self.destroy()
+
     def __del__(self):
-        # Guard against Python shutdown where _cudart module globals are cleaned up
-        if _cudart is not None and hasattr(self, "ptr") and self.ptr:
+        if (
+            _cudart is not None
+            and getattr(self, "ptr", None) is not None
+            and self.ptr.value
+        ):
             try:
                 prev = self._set_active_device()
+                print("DEBUG: CudaStream.__del__: destroying stream")
                 _cudart.cudaStreamDestroy(self.ptr)
                 self._restore_device(prev)
             except Exception:
