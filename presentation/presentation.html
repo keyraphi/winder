@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Winding Numbers Presentation</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@4.5.0/dist/reveal.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@4.5.0/dist/theme/white.css">
+
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js"></script>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            ut: {
+              red: '#a51e37',
+              gold: '#b4a069',
+              dark: '#32414b',
+              blue: '#0069aa',
+              green: '#7da54b'
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    /* =========================================================
+       UNIVERSITY OF TÜBINGEN CORPORATE DESIGN PALETTE
+       ========================================================= */
+    :root {
+      --ut-red: #a51e37;
+      --ut-gold: #b4a069;
+      --ut-dark: #32414b;
+      --ut-blue-dark: #415a8c;
+      --ut-blue-mid: #0069aa;
+      --ut-blue-light: #50aac8;
+      --ut-green-dark: #326e1e;
+      --ut-green-mid: #7da54b;
+      --ut-green-light: #82b9a0;
+      --ut-taupe: #b4a096;
+      --ut-mauve: #af6e96;
+      --ut-orange: #c8503c;
+      --ut-brown: #916946;
+      --ut-yellow: #d29600;
+      --ut-gold-light: #d7b469;
+    }
+
+    /* Helper Classes for Markup */
+    .ut-red { color: var(--ut-red) !important; }
+    .ut-gold { color: var(--ut-gold) !important; }
+    .ut-dark { color: var(--ut-dark) !important; }
+    .ut-blue { color: var(--ut-blue-mid) !important; }
+    .ut-green { color: var(--ut-green-mid) !important; }
+
+    /* Base Slide Styles */
+    .reveal { font-family: 'Fira Sans', sans-serif; color: var(--ut-dark); }
+    .reveal h1 { color: var(--ut-dark); text-transform: none; }
+    .reveal h2 { color: var(--ut-dark); text-transform: none; border-bottom: 2px solid var(--ut-red); }
+
+    /* Global Persistent Header (Top-Right Logo) */
+    .reveal .global-header {
+      position: absolute;
+      top: 20px;
+      right: 25px;
+      z-index: 10;
+      pointer-events: none;
+    }
+
+    .reveal .global-header img {
+      height: 45px;
+      background: transparent;
+      border: none;
+      box-shadow: none;
+    }
+
+    /* Global Persistent Footer */
+    .reveal .global-footer {
+      position: absolute;
+      bottom: 15px;
+      left: 25px;
+      right: 25px;
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.45em;
+      color: #777;
+      border-top: 1px solid #e0e0e0;
+      padding-top: 5px;
+      z-index: 10;
+      pointer-events: none;
+    }
+    /* Align slide content to the top with a subtle padding */
+    .reveal .slides > section,
+    .reveal .slides > section > section {
+      padding-top: 40px !important;
+      box-sizing: border-box;
+    }
+
+    /* Ensure headings start flush near the top */
+    .reveal h1, 
+    .reveal h2, 
+    .reveal h3 {
+      margin-top: 0 !important;
+      margin-bottom: 0.8em !important;
+    }
+
+    .small {
+      font-size: 0.7em !important;
+    }
+
+    canvas { background: #fff; }
+    #windingCanvas { border: 1px solid #ccc; }
+  </style>
+</head>
+<body>
+  <div class="reveal">
+
+    <div class="global-header">
+      <img src="images/UniversitaetTuebingen_WortBildMarke.png" alt="University Logo">
+    </div>
+
+    <div class="global-footer">
+      <span>Raphael Braun</span>
+      <span>Winder: Fast Winding Numbers on GPU</span>
+      <span>September 4, 2026</span>
+    </div>
+
+    <div class="slides">
+
+      <section>
+        <div class="flex items-center justify-between gap-12 text-left">
+          <div class="flex-1">
+            <h1 class="text-7xl font-bold mb-2 text-ut-dark">Winder</h1>
+            <h2 class="text-3xl font-semibold text-ut-dark border-b-2 border-ut-red pb-2">Differentiable Fast Winding Numbers on GPU</h2>
+            <p class="text-ut-gold mt-6">Intermediate Presentation</p>
+          </div>
+
+          <div class="flex-1 flex justify-center">
+            <video 
+              data-autoplay 
+              loop 
+              muted 
+              playsinline 
+              class="w-full m-8  aspect-square object-cover rounded-xl shadow-2xl"
+            >
+              <source src="videos/showcase_video.mp4" type="video/mp4">
+              Your browser does not support the video tag.
+            </video>
+          </div>
+        </div>
+      </section>
+
+      <section id="what-is-winding-number">
+        <h2>What are "Winding Numbers"?</h2>
+        <div>
+          <div class="flex items-center justify-between gap-8">
+            <div class="w-2/3 text-left" style="margin-right:12rem">
+              <p>Winding Number at position $\bm{x}$: $w(\bm{x})$</p>
+              <p class="text-ut-red" style="margin-left:8rem;">"Fraction of signed angle subtended at $\bm{x}$."</p>
+              <p class="text-ut-red" style="margin-left:8rem;">"How many times does a curve wind counterclockwise around $\bm{x}$."</p>
+              <div style="margin-top: 4rem;">
+                <label for="angleSlider" class="block font-medium mb-1 text-ut-dark">Curve $C$:</label>
+                <input type="range" id="angleSlider" min="10" max="360" value="180" step="2" class="w-full accent-ut-red">
+              </div>
+            </div>
+
+            <div class="w-1/3 flex items-center justify-center gap-3">
+              <canvas id="colorbarCanvas" width="80" height="550"></canvas>
+              <canvas id="windingCanvas" width="550" height="550"></canvas>
+            </div>
+          </div>
+
+          <div class="text-left fragment" style="margin-top:1rem">
+            <p>Line integral along $C$, accumulating differential signed angles.</p>
+            <p class="mt-6">
+              $$w(\bm{x}) = \frac{1}{2\pi} \int_{\mathcal{C}} \frac{(\bm{y}-\bm{x})^\perp \cdot d\bm{y}}{\|\bm{y}-\bm{x}\|^2}$$
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Combined Slide 2: Properties of Winding Numbers -->
+      <section id="properties-slide">
+        <h2>Properties of Winding Numbers</h2>
+        <div class="flex items-center justify-between gap-6">
+          
+          <!-- Left Column: Properties List with Fragments -->
+          <div class="w-1/2 text-left">
+            <ul class="space-y-4">
+              <li id="frag-prop-0" class="p-2 rounded border border-transparent transition-all">
+                <strong>Harmonic Field:</strong> Field is <i>harmonic</i> $\nabla^{2}w(\mathbf{x})=0$ everywhere outside the curve boundary.
+              </li>
+            <div id="resetContainer" class="mt-6 p-2">
+              <button id="resetLinesBtn" class="px-4 py-2 bg-ut-red text-white rounded font-medium shadow hover:bg-opacity-90 transition">
+                Reset Interactive Canvas
+              </button>
+            </div>
+              <li id="frag-prop-1" class="fragment p-2 rounded border border-transparent transition-all" data-fragment-index="1">
+                <strong>Superposition:</strong> Winding numbers of individual facets sum linearly to the full curve:
+                <div class="small font-mono mt-1 text-gray-600">$w_\Omega(\mathbf{p}) = \sum_i w_{\gamma_i}(\mathbf{p})$</div>
+              </li>
+              <li id="frag-prop-2" class="fragment p-2 rounded border border-transparent transition-all" data-fragment-index="2">
+                <strong>Open Boundaries & Holes:</strong> Smooth harmonic decay and continuous transition across boundary gaps.
+              </li>
+              <li id="frag-prop-3" class="fragment p-2 rounded border border-transparent transition-all" data-fragment-index="3">
+                <strong>Duplicate / Inverted Facets:</strong> Opposite segment orientations cancel out cleanly ($1 - 1 = 0$).
+              </li>
+            </ul>
+
+          </div>
+
+          <!-- Right Column: Swappable Interactive Panels -->
+          <div class="w-1/2 flex items-center justify-center min-h-[520px]">
+            
+            <!-- Panel 0: Harmonic Field (Free Interactive Drawing) -->
+            <div id="panel-prop-0" class="prop-panel flex items-center justify-center gap-3">
+              <canvas id="propColorbarCanvas0" width="70" height="420"></canvas>
+              <div class="flex flex-col items-center gap-2">
+                <canvas id="propCanvas0" width="420" height="420" class="border border-gray-300 rounded shadow-sm cursor-crosshair"></canvas>
+                <span class="small text-gray-500">Click & drag on canvas to draw directed segments</span>
+              </div>
+            </div>
+
+            <!-- Panel 1: Superposition (Compact Figure 9 Layout) -->
+            <div id="panel-prop-1" class="prop-panel hidden flex flex-col items-center justify-center gap-4">
+              <!-- Mini Segment Decomposition Row -->
+              <div class="flex items-center justify-center gap-2 bg-gray-50 p-3 rounded border border-gray-200">
+                <div class="flex flex-col items-center">
+                  <canvas id="supMini0" width="100" height="100" class="border bg-white rounded"></canvas>
+                  <span class="small font-semibold mt-1">$w_1$</span>
+                </div>
+                <span class="font-bold text-ut-dark">+</span>
+                <div class="flex flex-col items-center">
+                  <canvas id="supMini1" width="100" height="100" class="border bg-white rounded"></canvas>
+                  <span class="small font-semibold mt-1">$w_2$</span>
+                </div>
+                <span class="font-bold text-ut-dark">+</span>
+                <div class="flex flex-col items-center">
+                  <canvas id="supMini2" width="100" height="100" class="border bg-white rounded"></canvas>
+                  <span class="small font-semibold mt-1">$w_3$</span>
+                </div>
+                <span class="font-bold text-ut-dark">+</span>
+                <div class="flex flex-col items-center">
+                  <canvas id="supMini3" width="100" height="100" class="border bg-white rounded"></canvas>
+                  <span class="small font-semibold mt-1">$w_4$</span>
+                </div>
+              </div>
+
+              <div class="font-bold text-ut-dark text-center">=</div>
+
+              <!-- Combined Result Field & Live Inspector -->
+              <div class="flex items-start gap-3">
+                  <canvas id="supColorbarCanvas" width="70" height="420"></canvas>
+                <div class="flex flex-col items-center">
+                  <canvas id="supMainCanvas" width="420" height="420" class="border border-gray-300 rounded shadow-sm cursor-crosshair"></canvas>
+                  <div id="supInspectorBox" class="mt-2 p-2 bg-gray-100 rounded border border-gray-300 small font-mono text-left w-full">
+                    Hover canvas to inspect point values
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Panel 2: Open Boundaries -->
+            <div id="panel-prop-2" class="prop-panel hidden flex items-center justify-center gap-3">
+              <canvas id="propColorbarCanvas2" width="70" height="420"></canvas>
+              <div class="flex flex-col items-center gap-2">
+                <canvas id="propCanvas2" width="420" height="420" class="border border-gray-300 rounded shadow-sm"></canvas>
+                <span class="small text-gray-500">Open 3-sided box showing harmonic field spilling across gap</span>
+              </div>
+            </div>
+
+            <!-- Panel 3: Inverted / Duplicate Facet Cancellation -->
+            <div id="panel-prop-3" class="prop-panel hidden flex items-center justify-center gap-3">
+              <canvas id="propColorbarCanvas3" width="70" height="420"></canvas>
+              <div class="flex flex-col items-center gap-2">
+                <canvas id="propCanvas3" width="420" height="420" class="border border-gray-300 rounded shadow-sm"></canvas>
+                <span class="small text-gray-500">Coincident opposite segments (+1 and -1) cancel to 0 everywhere</span>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/reveal.js@4.5.0/dist/reveal.js"></script>
+  <script>
+  const UT_COLORS = {
+    primary: {
+      red: [165, 30, 55],
+      gold: [180, 160, 105],
+      dark: [50, 65, 75]
+    },
+    secondary: {
+      blueDark: [65, 90, 140],
+      blueMid: [0, 105, 170],
+      blueLight: [80, 170, 200],
+      greenDark: [50, 110, 30],
+      greenMid: [125, 165, 75],
+      greenLight: [130, 185, 160],
+      taupe: [180, 160, 150],
+      mauve: [175, 110, 150],
+      orange: [200, 80, 60],
+      brown: [145, 105, 70],
+      yellow: [210, 150, 0],
+      goldLight: [215, 180, 105]
+    }
+  };
+
+  Reveal.initialize({
+    width: 1920,
+    height: 1080,
+    margin: 0.05,
+    minScale: 0.2,
+    maxScale: 2.0,
+    controls: true,
+    progress: true,
+    center: false,
+    hash: true
+  });
+
+  document.addEventListener("DOMContentLoaded", () => {
+    renderMathInElement(document.body, {
+      delimiters: [
+        { left: '$$', right: '$$', display: true },
+        { left: '$', right: '$', display: false }
+      ],
+      throwOnError: false
+    });
+  });
+
+  /**
+   * Represents a directed 2D line segment in world coordinates.
+   */
+  class LineSegment {
+    constructor(x1, y1, x2, y2, show_direction = false, style = { color: '#000000', width: 3 }) {
+      this.x1 = x1;
+      this.y1 = y1;
+      this.x2 = x2;
+      this.y2 = y2;
+      this.show_direction = show_direction;
+      this.style = style;
+    }
+
+    /**
+     * Computes exact winding number contribution at point (x, y).
+     */
+    computeWindingNumber(x, y) {
+      const v1x = this.x1 - x;
+      const v1y = this.y1 - y;
+      const v2x = this.x2 - x;
+      const v2y = this.y2 - y;
+
+      const cross = v1x * v2y - v1y * v2x;
+      const dot = v1x * v2x + v1y * v2y;
+
+      return Math.atan2(cross, dot) / (2 * Math.PI);
+    }
+
+    /**
+     * Draws segment and arrow tip onto canvas context.
+     */
+    draw(ctx, toPixelX, toPixelY) {
+      const px1 = toPixelX(this.x1);
+      const py1 = toPixelY(this.y1);
+      const px2 = toPixelX(this.x2);
+      const py2 = toPixelY(this.y2);
+
+      ctx.beginPath();
+      ctx.moveTo(px1, py1);
+      ctx.lineTo(px2, py2);
+      ctx.lineWidth = this.style.width || 3;
+      ctx.strokeStyle = this.style.color || '#000000';
+      ctx.stroke();
+
+      if (this.show_direction) {
+        const angle = Math.atan2(py2 - py1, px2 - px1);
+        const headLen = 14;
+
+        ctx.beginPath();
+        ctx.moveTo(px2, py2);
+        ctx.lineTo(
+          px2 - headLen * Math.cos(angle - Math.PI / 6),
+          py2 - headLen * Math.sin(angle - Math.PI / 6)
+        );
+        ctx.lineTo(
+          px2 - headLen * Math.cos(angle + Math.PI / 6),
+          py2 - headLen * Math.sin(angle + Math.PI / 6)
+        );
+        ctx.closePath();
+        ctx.fillStyle = this.style.color || '#000000';
+        ctx.fill();
+      }
+    }
+  }
+
+  /**
+   * Generic Jet Colormap supporting dynamic value ranges.
+   */
+  function getJetColorMap(val, minVal = -0.5, maxVal = 1.0) {
+    let t = (val - minVal) / (maxVal - minVal);
+    t = Math.max(0, Math.min(1, t));
+
+    const r = Math.max(0, Math.min(1, 1.5 - Math.abs(t * 4 - 3)));
+    const g = Math.max(0, Math.min(1, 1.5 - Math.abs(t * 4 - 2)));
+    const b = Math.max(0, Math.min(1, 1.5 - Math.abs(t * 4 - 1)));
+
+    return [
+      Math.round(r * 255),
+      Math.round(g * 255),
+      Math.round(b * 255)
+    ];
+  }
+
+  /**
+   * Draws a colorbar widget with custom ticks and bounds.
+   */
+  function drawColorbar(canvasId, minVal, maxVal, ticks) {
+    const cb = document.getElementById(canvasId);
+    const cctx = cb.getContext('2d');
+    const w = cb.width, h = cb.height;
+    const barX = 10, barW = 18;
+    const padTop = 15, padBot = 15;
+    const barH = h - padTop - padBot;
+
+    const imgData = cctx.createImageData(barW, barH);
+    for (let py = 0; py < barH; py++) {
+      const norm = py / (barH - 1);
+      const val = maxVal - norm * (maxVal - minVal);
+      const [r, g, b] = getJetColorMap(val, minVal, maxVal);
+
+      for (let px = 0; px < barW; px++) {
+        const index = (py * barW + px) * 4;
+        imgData.data[index]     = r;
+        imgData.data[index + 1] = g;
+        imgData.data[index + 2] = b;
+        imgData.data[index + 3] = 255;
+      }
+    }
+    cctx.putImageData(imgData, barX, padTop);
+
+    cctx.strokeStyle = '#32414b';
+    cctx.lineWidth = 1;
+    cctx.strokeRect(barX, padTop, barW, barH);
+
+    cctx.fillStyle = '#32414b';
+    cctx.font = '24px "Fira Sans", sans-serif';
+    cctx.textAlign = 'left';
+    cctx.textBaseline = 'middle';
+
+    ticks.forEach(t => {
+      const norm = (maxVal - t.val) / (maxVal - minVal);
+      const y = padTop + norm * (barH - 1);
+      cctx.beginPath();
+      cctx.moveTo(barX + barW, y);
+      cctx.lineTo(barX + barW + 5, y);
+      cctx.strokeStyle = '#32414b';
+      cctx.stroke();
+      cctx.fillText(t.label, barX + barW + 8, y);
+    });
+  }
+
+  /**
+   * Evaluates and renders a collection of line segments onto a target canvas.
+   */
+  function renderField(canvas, segments, minVal = -0.5, maxVal = 1.0) {
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    const imgData = ctx.createImageData(w, h);
+
+    const toPixelX = (x) => w / 2 + x * (w / 3);
+    const toPixelY = (y) => h / 2 - y * (h / 3);
+
+    for (let py = 0; py < h; py++) {
+      for (let px = 0; px < w; px++) {
+        const x = (px - w / 2) / (w / 3);
+        const y = (h / 2 - py) / (h / 3);
+
+        let windingVal = 0;
+        for (let i = 0; i < segments.length; i++) {
+          windingVal += segments[i].computeWindingNumber(x, y);
+        }
+
+        const [r, g, b] = getJetColorMap(windingVal, minVal, maxVal);
+        const index = (py * w + px) * 4;
+        imgData.data[index]     = r;
+        imgData.data[index + 1] = g;
+        imgData.data[index + 2] = b;
+        imgData.data[index + 3] = 255;
+      }
+    }
+    ctx.putImageData(imgData, 0, 0);
+
+    for (let i = 0; i < segments.length; i++) {
+      segments[i].draw(ctx, toPixelX, toPixelY);
+    }
+  }
+
+  // --- Slide 1: Winding Number Arc Demo ---
+  (function initArcSlide() {
+    const canvas = document.getElementById('windingCanvas');
+    const slider = document.getElementById('angleSlider');
+
+    function update() {
+      const maxAngleDeg = parseFloat(slider.value);
+      const radius = 1.0;
+      const totalCircleSegments = 30;
+      const numSegments = Math.max(1, Math.round((maxAngleDeg / 360) * totalCircleSegments));
+      const totalRad = (maxAngleDeg * Math.PI) / 180;
+      const dTheta = totalRad / numSegments;
+
+      const segments = [];
+      for (let i = 0; i < numSegments; i++) {
+        const t1 = i * dTheta, t2 = (i + 1) * dTheta;
+        const isLast = (i === numSegments - 1);
+        segments.push(new LineSegment(
+          radius * Math.cos(t1), radius * Math.sin(t1),
+          radius * Math.cos(t2), radius * Math.sin(t2),
+          isLast, { color: '#000000', width: 3 }
+        ));
+      }
+      renderField(canvas, segments, -0.5, 1.0);
+    }
+
+    slider.addEventListener('input', update);
+    Reveal.on('slidechanged', e => {
+      if (e.currentSlide.id === 'what-is-winding-number') {
+        drawColorbar('colorbarCanvas', -0.5, 1.0, [
+          { val: 1.0, label: '1' }, { val: 0.5, label: '½' },
+          { val: 0.0, label: '0' }, { val: -0.5, label: '-½' }
+        ]);
+        update();
+      }
+    });
+
+    drawColorbar('colorbarCanvas', -0.5, 1.0, [
+      { val: 1.0, label: '1' }, { val: 0.5, label: '½' },
+      { val: 0.0, label: '0' }, { val: -0.5, label: '-½' }
+    ]);
+    update();
+  })();
+
+  // --- Combined Properties & Superposition Slide Controller ---
+  (function initPropertiesSlide() {
+    // --- Panel 0: Interactive Free Drawing ---
+    const canvas0 = document.getElementById('propCanvas0');
+    const resetBtn = document.getElementById('resetLinesBtn');
+
+    let userSegments = [];
+    let activeDragSegment = null;
+    let isDragging = false;
+    let startPos = { x: 0, y: 0 };
+    let renderRequested = false;
+
+    function getWorldCoords(e, canvasTarget) {
+      const rect = canvasTarget.getBoundingClientRect();
+      const px = (e.clientX - rect.left) * (canvasTarget.width / rect.width);
+      const py = (e.clientY - rect.top) * (canvasTarget.height / rect.height);
+      const x = (px - canvasTarget.width / 2) / (canvasTarget.width / 3);
+      const y = (canvasTarget.height / 2 - py) / (canvasTarget.height / 3);
+      return { x, y };
+    }
+
+    function redrawPanel0() {
+      const allSegments = [...userSegments];
+      if (activeDragSegment) allSegments.push(activeDragSegment);
+      renderField(canvas0, allSegments, -0.5, 2.0);
+      renderRequested = false;
+    }
+
+    function requestRedraw0() {
+      if (!renderRequested) {
+        renderRequested = true;
+        requestAnimationFrame(redrawPanel0);
+      }
+    }
+
+    canvas0.addEventListener('mousedown', (e) => {
+      isDragging = true;
+      startPos = getWorldCoords(e, canvas0);
+      activeDragSegment = new LineSegment(
+        startPos.x, startPos.y, startPos.x, startPos.y,
+        true, { color: '#333333', width: 4 }
+      );
+      requestRedraw0();
+    });
+
+    canvas0.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      const cur = getWorldCoords(e, canvas0);
+      activeDragSegment.x2 = cur.x;
+      activeDragSegment.y2 = cur.y;
+      requestRedraw0();
+    });
+
+    const finishDrag = (e) => {
+      if (!isDragging) return;
+      isDragging = false;
+      const cur = getWorldCoords(e, canvas0);
+      if (Math.hypot(cur.x - startPos.x, cur.y - startPos.y) > 0.02) {
+        userSegments.push(new LineSegment(
+          startPos.x, startPos.y, cur.x, cur.y,
+          true, { color: '#000000', width: 4 }
+        ));
+      }
+      activeDragSegment = null;
+      requestRedraw0();
+    };
+
+    canvas0.addEventListener('mouseup', finishDrag);
+    canvas0.addEventListener('mouseleave', finishDrag);
+    resetBtn.addEventListener('click', () => {
+      userSegments = [];
+      activeDragSegment = null;
+      requestRedraw0();
+    });
+
+    // --- Panel 1: Superposition Setup (Figure 9) ---
+    const supSquareSegs = [
+      new LineSegment(-0.7, -0.7,  0.7, -0.7, true, { color: '#000000', width: 3 }), // Bottom
+      new LineSegment( 0.7, -0.7,  0.7,  0.7, true, { color: '#000000', width: 3 }), // Right
+      new LineSegment( 0.7,  0.7, -0.7,  0.7, true, { color: '#000000', width: 3 }), // Top
+      new LineSegment(-0.7,  0.7, -0.7, -0.7, true, { color: '#000000', width: 3 })  // Left
+    ];
+
+    function setupPanel1() {
+      // Render individual segment mini previews
+      supSquareSegs.forEach((seg, idx) => {
+        const miniCanvas = document.getElementById(`supMini${idx}`);
+        if (miniCanvas) {
+          renderField(miniCanvas, [seg], -0.5, 1.0);
+        }
+      });
+
+      // Render combined main canvas
+      const mainCanvas = document.getElementById('supMainCanvas');
+      renderField(mainCanvas, supSquareSegs, -0.5, 1.0);
+
+      // Inspector readout
+      const inspectorBox = document.getElementById('supInspectorBox');
+      mainCanvas.addEventListener('mousemove', (e) => {
+        const pos = getWorldCoords(e, mainCanvas);
+        let sum = 0;
+        const terms = supSquareSegs.map((s, i) => {
+          const val = s.computeWindingNumber(pos.x, pos.y);
+          sum += val;
+          return `w_${i+1}:${val >= 0 ? '+' : ''}${val.toFixed(2)}`;
+        });
+
+        inspectorBox.innerHTML = `
+          <strong>Point (${pos.x.toFixed(2)}, ${pos.y.toFixed(2)})</strong><br>
+          Sum: <span class="text-ut-red font-bold">${sum.toFixed(3)}</span><br>
+          <span class="small text-gray-500">(${terms.join(', ')})</span>
+        `;
+      });
+    }
+
+    // --- Panel 2: Open Boundaries Setup ---
+    function setupPanel2() {
+      const openBoxSegs = [
+        new LineSegment(-0.7, -0.7,  0.7, -0.7, true, { color: '#000000', width: 4 }),
+        new LineSegment( 0.7, -0.7,  0.7,  0.7, true, { color: '#000000', width: 4 }),
+        new LineSegment(-0.7,  0.7, -0.7, -0.7, true, { color: '#000000', width: 4 })
+        // Top segment omitted -> open gap
+      ];
+      renderField(document.getElementById('propCanvas2'), openBoxSegs, -0.5, 1.0);
+    }
+
+    // --- Panel 3: Cancellation Setup ---
+    function setupPanel3() {
+      const cancelingSegs = [
+        new LineSegment(-0.6, 0.0, 0.6,  0.0, true, { color: '#000000', width: 4 }),
+        new LineSegment( 0.6, 0.0, -0.6, 0.0, true, { color: '#888888', width: 3 })
+      ];
+      renderField(document.getElementById('propCanvas3'), cancelingSegs, -0.5, 1.0);
+    }
+
+    // --- Fragment & Panel Switcher ---
+    function showPanel(index) {
+      document.querySelectorAll('.prop-panel').forEach((panel, i) => {
+        if (i === index) {
+          panel.classList.remove('hidden');
+        } else {
+          panel.classList.add('hidden');
+        }
+      });
+
+      // Highlight left list items
+      for (let i = 0; i <= 3; i++) {
+        const item = document.getElementById(`frag-prop-${i}`);
+        if (item) {
+          if (i === index) {
+            item.classList.add('bg-gray-100', 'border-ut-red');
+          } else {
+            item.classList.remove('bg-gray-100', 'border-ut-red');
+          }
+        }
+      }
+
+      // Toggle reset button visibility (only needed for panel 0)
+      const resetBtnContainer = document.getElementById('resetContainer');
+      if (resetBtnContainer) {
+        resetBtnContainer.style.display = (index === 0) ? 'block' : 'none';
+      }
+    }
+
+    function renderActivePanel(index) {
+      showPanel(index);
+      if (index === 0) {
+        drawColorbar('propColorbarCanvas0', -0.5, 2.0, [
+          { val: 2.0, label: '2' }, { val: 1.0, label: '1' },
+          { val: 0.0, label: '0' }, { val: -0.5, label: '-½' }
+        ]);
+        redrawPanel0();
+      } else if (index === 1) {
+        drawColorbar('supColorbarCanvas', -0.5, 1.0, [
+          { val: 1.0, label: '1' }, { val: 0.5, label: '½' },
+          { val: 0.0, label: '0' }, { val: -0.5, label: '-½' }
+        ]);
+        setupPanel1();
+      } else if (index === 2) {
+        drawColorbar('propColorbarCanvas2', -0.5, 1.0, [
+          { val: 1.0, label: '1' }, { val: 0.5, label: '½' },
+          { val: 0.0, label: '0' }, { val: -0.5, label: '-½' }
+        ]);
+        setupPanel2();
+      } else if (index === 3) {
+        drawColorbar('propColorbarCanvas3', -0.5, 1.0, [
+          { val: 1.0, label: '1' }, { val: 0.5, label: '½' },
+          { val: 0.0, label: '0' }, { val: -0.5, label: '-½' }
+        ]);
+        setupPanel3();
+      }
+    }
+
+    // --- Reveal Event Hooks ---
+    function getCurrentFragmentIndex(slide) {
+      const activeFragments = slide.querySelectorAll('.fragment.visible');
+      return activeFragments.length; // 0 when none visible, 1 for frag 1, etc.
+    }
+
+    Reveal.on('slidechanged', e => {
+      if (e.currentSlide.id === 'properties-slide') {
+        const idx = getCurrentFragmentIndex(e.currentSlide);
+        renderActivePanel(idx);
+      }
+    });
+
+    Reveal.on('fragmentshown', e => {
+      if (Reveal.getCurrentSlide().id === 'properties-slide') {
+        const idx = getCurrentFragmentIndex(Reveal.getCurrentSlide());
+        renderActivePanel(idx);
+      }
+    });
+
+    Reveal.on('fragmenthidden', e => {
+      if (Reveal.getCurrentSlide().id === 'properties-slide') {
+        const idx = getCurrentFragmentIndex(Reveal.getCurrentSlide());
+        renderActivePanel(idx);
+      }
+    });
+
+    // Initial load setup
+    renderActivePanel(0);
+  })();
+</script>
+</body>
+</html>
