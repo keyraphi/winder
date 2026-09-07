@@ -415,7 +415,7 @@
             <!-- Video 1 (Base) -->
             <div>
               <!-- <video data-autoplay loop muted playsinline class="w-full h-auto aspect-square" src="videos/generalized_winding_numbers_3d.mp4"></video> -->
-              <video data-autoplay loop muted playsinline class="w-full aspect-square object-cover" src="videos/showcase_video.mp4"></video>
+              <video data-autoplay loop muted playsinline class="w-full aspect-square object-cover" src="videos/generalized_winding_numbers_3d.mp4"></video>
             </div>
 
             <!-- Video 2 (Revealed with Fragment 1) -->
@@ -641,6 +641,120 @@
         <!-- Standardized Citation Footer -->
         <footer class="slide-footer">
           <span class="cite-author">Barill et al. (2018)</span> — Fast Winding Numbers for Soups and Clouds. <em>ACM Transactions on Graphics (TOG)</em>.
+        </footer>
+      </section>
+
+      <!-- Slide 1: Related Work - Forward Evaluation & Reconstruction -->
+      <section id="related-work-slide-1">
+        <h2>Related Work</h2>
+
+        <div class="grid grid-cols-3 gap-6 items-start text-left mt-6">
+
+          <!-- 1. Xu et al. (2023) -->
+          <div class="fade-in-then-semi-out bg-white p-4 rounded-lg border border-gray-200 shadow-sm" data-fragment-index="1">
+            <div class="bg-gray-50 rounded mb-3 flex items-center justify-center p-2 border border-gray-200" style="height:20rem">
+              <img src="images/related_GloballyConsistentNormalOrientation.png" alt="Globally Consistent Normal Orientation" class="max-h-full max-w-full object-contain">
+            </div>
+            <h4>Normal Orientation</h4>
+            <p class="small text-ut-gold font-medium">Xu et al. (2023)</p>
+            <p class="small text-gray-600 mt-2">
+              Leverages the sharp step-function property of winding fields to globally orient noisy point cloud normals without surface meshing.
+            </p>
+          </div>
+
+          <!-- 2. Chen et al. (2024) -->
+          <div class="fragment fade-in-then-semi-out bg-white p-4 rounded-lg border border-gray-200 shadow-sm" data-fragment-index="2">
+            <div class="bg-gray-50 rounded mb-3 flex items-center justify-center p-2 border border-gray-200" style="height:20rem">
+              <img src="images/related_3dReconstructionWithFastDipoleSums.png" alt="Fast Dipole Sums" class="max-h-full max-w-full object-contain">
+            </div>
+            <h4>Fast Dipole Sums</h4>
+            <p class="small text-ut-gold font-medium">Chen et al. (2024)</p>
+            <p class="small text-gray-600 mt-2">
+              Formulates regularized dipole sums and Barnes-Hut summation schemes to accelerate implicit geometry evaluation from unorganized points.
+            </p>
+          </div>
+
+          <!-- 3. Martens & Bessmeltsev (2025) -->
+          <div class="fragment fade-in-then-semi-out bg-white p-4 rounded-lg border border-gray-200 shadow-sm" data-fragment-index="3">
+            <div class="bg-gray-50 rounded mb-3 flex items-center justify-center p-2 border border-gray-200" style="height:20rem">
+              <img src="images/related_OneShotMethodForComputingGeneralizedWindingNumbers.png" alt="One-Shot GWN" class="max-h-full max-w-full object-contain">
+            </div>
+            <h4>One-Shot GWN</h4>
+            <p class="small text-ut-gold font-medium">Martens & Bessmeltsev (2025)</p>
+            <p class="small text-gray-600 mt-2">
+              Bypasses octree traversals for static queries by computing generalized winding numbers via GPU-friendly screen-space projections.
+            </p>
+          </div>
+
+        </div>
+
+        <footer class="slide-footer mt-6">
+          <div class="space-y-1">
+            <p><span class="cite-author">Xu et al. (2023)</span> — Globally Consistent Normal Orientation for Point Clouds by Regularizing the Winding-Number Field. <em>ACM Transactions on Graphics (TOG)</em>.</p>
+            <p><span class="cite-author">Chen et al. (2024)</span> — 3D Reconstruction with Fast Dipole Sums. <em>ACM Transactions on Graphics (TOG)</em>.</p>
+            <p><span class="cite-author">Martens & Bessmeltsev (2025)</span> — One-Shot Method for Computing Generalized Winding Numbers. <em>Computer Graphics Forum (CGF)</em>.</p>
+          </div>
+        </footer>
+      </section>
+
+
+      <!-- Slide 2: Related Work - Differentiability & Robustness -->
+      <section id="related-work-slide-2">
+        <h2>Related Work</h2>
+
+        <div class="grid grid-cols-3 gap-6 items-start text-left mt-6">
+
+          <!-- 4. Xiao et al. (2025) -->
+          <div class="fade-in-then-semi-out bg-white p-4 rounded-lg border border-gray-200 shadow-sm " data-fragment-index="1">
+            <div class="bg-gray-50 rounded mb-3 flex items-center justify-center p-2 border border-gray-200" style="height:20rem">
+              <img src="images/related_WindingClearnessForDifferentiablePointCloudOptimization.png" alt="Winding Clearness" class="max-h-full max-w-full object-contain">
+            </div>
+            <h4>Winding Clearness</h4>
+            <p class="small text-ut-gold font-medium">Xiao et al. (2025)</p>
+            <p class="small text-gray-600 mt-2">
+              Introduces differentiable winding clearness loss to optimize point coordinates directly via backpropagation without neural networks.
+            </p>
+          </div>
+
+          <!-- 5. Martens et al. (2026) -->
+          <div class="fragment fade-in-then-semi-out bg-white p-4 rounded-lg border border-gray-200 shadow-sm" data-fragment-index="2">
+            <div class="bg-gray-50 rounded mb-3 flex items-center justify-center p-2 border border-gray-200" style="height:20rem">
+              <img src="images/related_TheAntipodalMethod.png" alt="The Antipodal Method" class="max-h-full max-w-full object-contain">
+            </div>
+            <h4>Antipodal Method</h4>
+            <p class="small text-ut-gold font-medium">Martens et al. (2026)</p>
+            <p class="small text-gray-600 mt-2">
+              Stabilizes winding evaluation on open, non-watertight, and thin geometries by integrating over balanced antipodal ray pairs.
+            </p>
+          </div>
+
+          <!-- 6. Djuren et al. (2026) -->
+          <div class="fragment fade-in-then-semi-out bg-white p-4 rounded-lg border border-gray-200 shadow-sm" data-fragment-index="3">
+            <div class="bg-gray-50 rounded mb-3 flex items-center justify-center p-2 border border-gray-200" style="height:20rem">
+              <img src="images/related_DifferenitableVoxelizationOfSurfaceRepresentations.png" alt="Differentiable Voxelization" class="max-h-full max-w-full object-contain">
+            </div>
+            <h4>Diff. Voxelization</h4>
+            <p class="small font-medium text-ut-gold">Djuren et al. (2026)</p>
+            <p class="small text-gray-600 mt-2">
+              Derives differentiable voxelization schemes based on smoothed winding numbers for gradient-based 3D shape optimization.
+            </p>
+          </div>
+
+        </div>
+
+        <!-- Trajectory Hook / Bridge to Winder -->
+        <div class="relative fragment fade-in mt-6 p-4 rounded-lg  border-4 border-red-800 text-center z-50" style="background-color: var(--ut-gold-light);" data-fragment-index="4">
+          <p class="font-bold text-ut-red">
+            The Gap: Existing differentiable methods lack custom, fully parallel GPU backpropagation kernels designed for real-time 3D optimization.
+          </p>
+        </div>
+
+        <footer class="slide-footer mt-4">
+          <div class="space-y-1">
+            <p><span class="cite-author">Xiao et al. (2025)</span> — Winding clearness for differentiable point cloud optimization. <em>Computer-Aided Design</em>.</p>
+            <p><span class="cite-author">Martens et al. (2026)</span> — The Antipodal Method: Fast, Accurate, and Robust 3D Generalized Winding Numbers. <em>ACM Transactions on Graphics (TOG)</em>.</p>
+            <p><span class="cite-author">Djuren et al. (2026)</span> — Differentiable Voxelization of Surface Representations. <em>ACM SIGGRAPH 2026 Conference Papers</em>.</p>
+          </div>
         </footer>
       </section>
 
