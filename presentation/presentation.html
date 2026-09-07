@@ -62,6 +62,8 @@
     .reveal { font-family: 'Fira Sans', sans-serif; color: var(--ut-dark); }
     .reveal h1 { color: var(--ut-dark); text-transform: none; }
     .reveal h2 { color: var(--ut-dark); text-transform: none; border-bottom: 2px solid var(--ut-red); }
+    .reveal h3 { color: var(--ut-dark); text-transform: none; font-size: 1.1em; }
+    .reveal h4 { color: var(--ut-dark); text-transform: none; font-size: 1.0em; }
 
     /* Global Persistent Header (Top-Right Logo) */
     .reveal .global-header {
@@ -94,6 +96,25 @@
       z-index: 10;
       pointer-events: none;
     }
+    .reveal .slides > section {
+      height: 100% !important;
+      box-sizing: border-box;
+    }
+
+    /* Fixed bottom slide citation */
+    .reveal .slide-footer {
+      position: absolute !important;
+      bottom: 28px; /* Adjust this value so it sits perfectly above your global footer */
+      left: 0;
+      width: 100%;
+      text-align: left;
+      font-family: sans-serif;
+      font-size: 0.55em;
+      color: #6b7280;
+      line-height: 1.2;
+      pointer-events: none;
+      z-index: 10;
+    }
     /* Align slide content to the top with a subtle padding */
     .reveal .slides > section,
     .reveal .slides > section > section {
@@ -102,15 +123,24 @@
     }
 
     /* Ensure headings start flush near the top */
-    .reveal h1, 
-    .reveal h2, 
+    .reveal h1,
+    .reveal h2,
     .reveal h3 {
       margin-top: 0 !important;
       margin-bottom: 0.8em !important;
     }
+    .reveal table th,
+    .reveal table td {
+      border-bottom: none !important;
+    }
 
     .small {
       font-size: 0.7em !important;
+    }
+    /* Restore KaTeX fraction lines against Tailwind resets */
+    .katex .frac-line {
+      border-bottom-width: 1px !important;
+      border-bottom-style: solid !important;
     }
 
     canvas { background: #fff; }
@@ -127,11 +157,12 @@
     <div class="global-footer">
       <span>Raphael Braun</span>
       <span>Winder: Fast Winding Numbers on GPU</span>
-      <span>September 4, 2026</span>
+      <span id="footer-date"></span>
     </div>
 
     <div class="slides">
 
+      <!--Title Page-->
       <section>
         <div class="flex items-center justify-between gap-12 text-left">
           <div class="flex-1">
@@ -141,11 +172,11 @@
           </div>
 
           <div class="flex-1 flex justify-center">
-            <video 
-              data-autoplay 
-              loop 
-              muted 
-              playsinline 
+            <video
+              data-autoplay
+              loop
+              muted
+              playsinline
               class="w-full m-8  aspect-square object-cover rounded-xl shadow-2xl"
             >
               <source src="videos/showcase_video.mp4" type="video/mp4">
@@ -155,40 +186,90 @@
         </div>
       </section>
 
-      <section id="what-is-winding-number">
-        <h2>What are "Winding Numbers"?</h2>
-        <div>
-          <div class="flex items-center justify-between gap-8">
-            <div class="w-2/3 text-left" style="margin-right:12rem">
-              <p>Winding Number at position $\bm{x}$: $w(\bm{x})$</p>
-              <p class="text-ut-red" style="margin-left:8rem;">"Fraction of signed angle subtended at $\bm{x}$."</p>
-              <p class="text-ut-red" style="margin-left:8rem;">"How many times does a curve wind counterclockwise around $\bm{x}$."</p>
-              <div style="margin-top: 4rem;">
-                <label for="angleSlider" class="block font-medium mb-1 text-ut-dark">Curve $C$:</label>
-                <input type="range" id="angleSlider" min="10" max="360" value="180" step="2" class="w-full accent-ut-red">
-              </div>
-            </div>
+      <!-- Slide 1: Introduction to Winding Numbers -->
+      <section id="intro-winding-slide">
+        <h2>What is a "Winding Number"</h2>
 
-            <div class="w-1/3 flex items-center justify-center gap-3">
-              <canvas id="colorbarCanvas" width="80" height="550"></canvas>
-              <canvas id="windingCanvas" width="550" height="550"></canvas>
-            </div>
+        <div class="flex items-center justify-between gap-8 mt-4">
+          <!-- Left Column: Text (50%) -->
+          <div class="w-1/2 text-left space-y-4">
+            <p class="font-semibold text-ut-dark">
+              Intuitive Definition
+            </p>
+            <ul class="space-y-3">
+              <li>
+                Number of Times a <strong>closed curve</strong> travels <strong>counterclockwise</strong> around a given point.
+              </li>
+              <li>
+                Depends on orientation. <strong>Negative</strong> for <strong>clockwise</strong> turns.
+              </li>
+              <li>
+                <strong>Robust Topological Invariant:</strong> Produces an exact integer ($w \in \mathbb{Z}$) for any closed loop, regardless of local self-intersections or backtracking.
+              </li>
+            </ul>
           </div>
 
-          <div class="text-left fragment" style="margin-top:1rem">
-            <p>Line integral along $C$, accumulating differential signed angles.</p>
-            <p class="mt-6">
-              $$w(\bm{x}) = \frac{1}{2\pi} \int_{\mathcal{C}} \frac{(\bm{y}-\bm{x})^\perp \cdot d\bm{y}}{\|\bm{y}-\bm{x}\|^2}$$
-            </p>
+          <!-- Right Column: Animated Canvas with Title & Live Float Readout (50%) -->
+          <div class="w-1/2 flex flex-col items-center justify-center">
+            <!-- Title Label -->
+            <div class="mb-3 px-4 py-1.5 bg-gray-100 rounded-lg border border-gray-300 font-semibold text-ut-dark small">
+              Point $\mathbf{x}$ with Winding Index $\text{wind}(\mathbf{x}) = 2$
+            </div>
+
+            <div class="relative bg-white p-2 rounded-lg border border-gray-300 shadow-sm">
+              <canvas id="introWindingCanvas" width="500" height="480" class="block"></canvas>
+            </div>
+
+            <!-- Live Float Winding Readout Underneath Canvas -->
+            <div class="mt-3 px-5 py-2 bg-gray-100 rounded-lg border border-gray-300 text-center min-w-[220px]">
+              <div class="small font-semibold text-ut-red tracking-wider small">Accumulated Winding </div>
+              <div id="introFloatReadout" class="text-2xl font-bold font-mono text-ut-dark">0.00</div>
+            </div>
           </div>
         </div>
+      </section>
+
+
+      <!--Generalized Winding Numbers in 2D-->
+      <section id="what-is-winding-number">
+        <h2>The Generalized Winding Numbers</h2>
+        <div>
+          <div class="flex items-top justify-between gap-8">
+            <ul class="space-y-3" style="margin-right: 12rem">
+              <li>
+                Generalized Winding Number at position $\bm{x}$: $w(\bm{x})$
+                Fraction of signed angle subtended at $\bm{x}$.
+                <div style="margin-top: 2rem;">
+                  <label for="angleSlider" class="block font-medium mb-1 text-ut-dark small">Curve $C$:</label>
+                  <input type="range" id="angleSlider" min="10" max="360" value="180" step="2" class="w-full accent-ut-red">
+                </div>
+              </li>
+              <li class="fragment" data-fragment-index="1">
+                <p>Line integral along $C$, accumulating differential signed angles.</p>
+                <p class="mt-6">
+                  $$w(\bm{x}) = \frac{1}{2\pi} \int_{\mathcal{C}} \frac{(\bm{y}-\bm{x})^\perp \cdot d\bm{y}}{\|\bm{y}-\bm{x}\|^2}$$
+                </p>
+              </li>
+            </ul>
+
+            <div class="w-1/3">
+              <div class="w-full flex items-center justify-center gap-3">
+                <canvas id="colorbarCanvas" width="80" height="450"></canvas>
+                <canvas id="windingCanvas" width="450" height="450"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+        <footer class="slide-footer">
+          <span class="cite-author">Jacobson et al. (2013)</span> — Robust inside-outside segmentation using generalized winding numbers. <em>ACM TOG</em>.
+        </footer>
       </section>
 
       <!-- Combined Slide 2: Properties of Winding Numbers -->
       <section id="properties-slide">
         <h2>Properties of Winding Numbers</h2>
         <div class="flex items-center justify-between gap-6">
-          
+
           <!-- Left Column: Properties List with Fragments -->
           <div class="w-1/2 text-left">
             <ul class="space-y-4">
@@ -202,7 +283,7 @@
             </div>
               <li id="frag-prop-1" class="fragment p-2 rounded border border-transparent transition-all" data-fragment-index="1">
                 <strong>Superposition:</strong> Winding numbers of individual facets sum linearly to the full curve:
-                <div class="small font-mono mt-1 text-gray-600">$w_\Omega(\mathbf{p}) = \sum_i w_{\gamma_i}(\mathbf{p})$</div>
+                <div class="small font-mono mt-1 text-gray-600">$w(\mathbf{p}) = \sum_i w_{_i}(\mathbf{p})$</div>
               </li>
               <li id="frag-prop-2" class="fragment p-2 rounded border border-transparent transition-all" data-fragment-index="2">
                 <strong>Open Boundaries & Holes:</strong> Smooth harmonic decay and continuous transition across boundary gaps.
@@ -216,7 +297,7 @@
 
           <!-- Right Column: Swappable Interactive Panels -->
           <div class="w-1/2 flex items-center justify-center min-h-[520px]">
-            
+
             <!-- Panel 0: Harmonic Field (Free Interactive Drawing) -->
             <div id="panel-prop-0" class="prop-panel flex items-center justify-center gap-3">
               <canvas id="propColorbarCanvas0" width="70" height="420"></canvas>
@@ -270,21 +351,297 @@
               <canvas id="propColorbarCanvas2" width="70" height="420"></canvas>
               <div class="flex flex-col items-center gap-2">
                 <canvas id="propCanvas2" width="420" height="420" class="border border-gray-300 rounded shadow-sm"></canvas>
-                <span class="small text-gray-500">Open 3-sided box showing harmonic field spilling across gap</span>
+                <span class="small text-gray-500 w-2/3 text">Harmonic field spilling across gap</span>
               </div>
             </div>
 
             <!-- Panel 3: Inverted / Duplicate Facet Cancellation -->
-            <div id="panel-prop-3" class="prop-panel hidden flex items-center justify-center gap-3">
-              <canvas id="propColorbarCanvas3" width="70" height="420"></canvas>
-              <div class="flex flex-col items-center gap-2">
-                <canvas id="propCanvas3" width="420" height="420" class="border border-gray-300 rounded shadow-sm"></canvas>
-                <span class="small text-gray-500">Coincident opposite segments (+1 and -1) cancel to 0 everywhere</span>
+            <div id="panel-prop-3" class="prop-panel hidden flex items-start justify-center gap-3">
+                 <canvas id="propColorbarCanvas3" class="flex" width="70" height="420"></canvas>
+                <div class="flex flex-col items-start gap-2">
+                  <canvas id="propCanvas3" width="420" height="420" class="border border-gray-300 rounded shadow-sm"></canvas>
+                  <span class="small text-gray-500 w-1/2">Coincident opposite segments (+1 and -1) cancel to 0 everywhere</span>
+                </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Slide: Generalized Winding Numbers in 3D -->
+      <section id="generalized-winding-3d-slide">
+        <h2>Generalized Winding Numbers in 3D</h2>
+
+        <div class="flex items-start justify-between gap-6 mt-6">
+          <!-- Left Column: Equations & Formulations (2/3 width) -->
+          <div class="w-4/5 text-left space-y-5">
+
+            <!-- 1. Continuous Formulation -->
+            <div class="space-y-1">
+              <p class="font-semibold text-ut-dark">
+                Continuous formulation in 3D
+              </p>
+              <div class="small bg-gray-50 p-3 rounded-lg border border-gray-200">
+                $$\mathcal{W}(\mathbf{x}) = \frac{1}{4\pi} \iint_{\mathcal{M}} \frac{(\mathbf{p} - \mathbf{x}) \cdot n(\mathbf{p})}{\|\mathbf{p} - \mathbf{x}\|^3} \, dA(\mathbf{p})$$
+              </div>
+            </div>
+
+            <!-- 2. Discrete Point Normals (Fragment 1) -->
+            <div class="space-y-1 fragment" data-fragment-index="1">
+              <p class="font-semibold text-ut-dark">
+                Discrete formulation
+              </p>
+              <div class="small bg-gray-50 p-3 rounded-lg border border-gray-200">
+                Dipole (PointNormal)
+                <!-- $$\mathcal{W} = \frac{1}{4\pi} \sum_i \frac{(p_i -x)}{2}$$ -->
+                $$\mathcal{W}_{\text{points}}(\mathbf{x}) = \frac{1}{4\pi} \sum_{i} \frac{(\mathbf{p_i} - \mathbf{x}) \cdot n_i }{ \|\mathbf{p_i} - \mathbf{x}\|^3} a_i$$
+              </div>
+            </div>
+
+            <!-- 3. Discrete Triangles (Fragment 2) -->
+            <div class="space-y-1 fragment" data-fragment-index="2">
+              <p class="font-semibold text-ut-dark">
+                Discrete formulation Triangles
+              </p>
+              <div class="small bg-gray-50 p-3 rounded-lg border border-gray-200">
+                $$\mathcal{W}_{\text{mesh}}(\mathbf{x}) = \frac{1}{4\pi} \sum_{t \in \mathcal{T}} \Omega_t(\mathbf{x})$$
               </div>
             </div>
 
           </div>
+
+          <!-- Right Column: Videos Stack (1/3 width) -->
+          <div class="w-1/5 flex flex-col gap-4">
+
+            <!-- Video 1 (Base) -->
+            <div>
+              <!-- <video data-autoplay loop muted playsinline class="w-full h-auto aspect-square" src="videos/generalized_winding_numbers_3d.mp4"></video> -->
+              <video data-autoplay loop muted playsinline class="w-full aspect-square object-cover" src="videos/showcase_video.mp4"></video>
+            </div>
+
+            <!-- Video 2 (Revealed with Fragment 1) -->
+            <div class="overflow-hidden  fragment" data-fragment-index="1">
+              <video data-autoplay loop muted playsinline class="w-full  object-cover" src="videos/single_dipole.mp4"></video>
+            </div>
+
+            <!-- Video 3 (Revealed with Fragment 2) -->
+            <div class="overflow-hidden  fragment" data-fragment-index="2">
+              <video data-autoplay loop muted playsinline class="w-full object-cover" src="videos/single_triangle.mp4"></video>
+            </div>
+
+          </div>
         </div>
+      </section>
+
+      <!-- Slide: Complexity in 3D -->
+      <section id="complexity-3d-slide">
+        <h2>Complexity in 3D</h2>
+
+        <!-- Top Equation Box -->
+        <div class="small bg-gray-50 p-3 rounded-lg border border-gray-200 mb-4 inline-block px-8">
+          $$\begin{align*}
+          \mathcal{W}_{\text{mesh}}(\mathbf{x}) &= \frac{1}{4\pi} \sum_{t \in \mathcal{T}} \Omega_t(\mathbf{x}) &
+          \Omega_t(\mathbf{x}) &= 2 \arctan\left(\frac{a \cdot (b \times c)}{\|a\|\|b\|\|c\| + (a \cdot b)\|c\| + (b \cdot
+          c)\|a\| + (c \cdot a)\|b\|}\right)
+          \end{align*}
+          $$
+        </div>
+
+        <!-- Bullet Summary -->
+        <div class="text-left small mb-4  mx-auto flex justify-between bg-white px-4 py-2 rounded border border-gray-100 shadow-sm">
+          <span><strong>Mesh Complexity:</strong> $N$ triangles</span>
+          <span><strong>Query Grid:</strong> $M$ positions $\mathbf{x}$</span>
+          <span class="text-ut-red font-semibold"><strong>Direct Evaluation:</strong> $\mathcal{O}(NM)$</span>
+        </div>
+
+        <!-- Main Content Grid: Table (Left) + Image Preview (Right) -->
+        <div class="flex items-start justify-between gap-6 mt-2">
+
+          <!-- Academic Paper-Style Table (Zero Borders) -->
+          <div class="w-5/6">
+            <table class="w-full text-left small font-sans border-none [&_th]:border-none [&_td]:border-none [&_tr]:border-none">
+              <thead>
+                <tr class="font-semibold text-gray-800 uppercase tracking-wider">
+                  <th class="py-2 px-2 text-left">Mesh</th>
+                  <th class="py-2 px-2 text-right">Triangles: $N$</th>
+                  <th class="py-2 px-2 text-right">Grid Resolution: $M$</th>
+                  <th class="py-2 px-2 text-right">Evaluations: $N \times M$</th>
+                  <th class="py-2 px-2 text-right">Brute Force</th>
+                </tr>
+              </thead>
+              <tbody class="font-mono">
+
+                <!-- Group 1: Benchy (Fragment 1) -->
+                <tr class="fragment" data-fragment-index="1">
+                  <td class="py-1.5 px-2 font-sans font-medium text-left" rowspan="3">benchy</td>
+                  <td class="py-1.5 px-2 text-right" rowspan="3">225,154</td>
+                  <td class="py-1.5 px-2 text-right">$256^3$</td>
+                  <td class="py-1.5 px-2 text-right">$3.78 \times 10^{12}$</td>
+                  <td class="py-1.5 px-2 text-right">$52,4 sec$</td>
+                </tr>
+                <tr class="fragment" data-fragment-index="1">
+                  <td class="py-1.5 px-2 text-right">$512^3$</td>
+                  <td class="py-1.5 px-2 text-right">$3.02 \times 10^{13}$</td>
+                  <td class="py-1.5 px-2 text-right">-</td>
+                </tr>
+                <tr class="fragment" data-fragment-index="1">
+                  <td class="py-1.5 px-2 text-right">$1024^3$</td>
+                  <td class="py-1.5 px-2 text-right">$2.42 \times 10^{14}$</td>
+                  <td class="py-1.5 px-2 text-right">-</td>
+                </tr>
+
+                <!-- Group 2: Jaws Attack Benchy (Fragment 2) -->
+                <tr class="fragment" data-fragment-index="2">
+                  <td class="py-1.5 px-2 font-sans font-medium text-left" rowspan="3">jaws_attack</td>
+                  <td class="py-1.5 px-2 text-right" rowspan="3">538,660</td>
+                  <td class="py-1.5 px-2 text-right">$256^3$</td>
+                  <td class="py-1.5 px-2 text-right">$9.04 \times 10^{12}$</td>
+                  <td class="py-1.5 px-2 text-right">130 sec</td>
+                </tr>
+                <tr class="fragment" data-fragment-index="2">
+                  <td class="py-1.5 px-2 text-right">$512^3$</td>
+                  <td class="py-1.5 px-2 text-right">$7.23 \times 10^{13}$</td>
+                  <td class="py-1.5 px-2 text-right">-</td>
+                </tr>
+                <tr class="fragment" data-fragment-index="2">
+                  <td class="py-1.5 px-2 text-right">$1024^3$</td>
+                  <td class="py-1.5 px-2 text-right">$5.78 \times 10^{14}$</td>
+                  <td class="py-1.5 px-2 text-right">-</td>
+                </tr>
+
+                <!-- Group 3: Snakeman (Fragment 3) -->
+                <tr class="fragment" data-fragment-index="3">
+                  <td class="py-1.5 px-2 font-sans font-medium text-left" rowspan="3">snakeman</td>
+                  <td class="py-1.5 px-2 text-right" rowspan="3">5,000,608</td>
+                  <td class="py-1.5 px-2 text-right">$256^3$</td>
+                  <td class="py-1.5 px-2 text-right">$8.39 \times 10^{13}$</td>
+                  <td class="py-1.5 px-2 text-right">1213 sec</td>
+                </tr>
+                <tr class="fragment" data-fragment-index="3">
+                  <td class="py-1.5 px-2 text-right">$512^3$</td>
+                  <td class="py-1.5 px-2 text-right">$6.71 \times 10^{14}$</td>
+                  <td class="py-1.5 px-2 text-right">-</td>
+                </tr>
+                <tr class="fragment" data-fragment-index="3">
+                  <td class="py-1.5 px-2 text-right">$1024^3$</td>
+                  <td class="py-1.5 px-2 text-right">$5.37 \times 10^{15}$</td>
+                  <td class="py-1.5 px-2 text-right">-</td>
+                </tr>
+
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Right Side: Synchronized Image Preview Stack -->
+          <div class="w-1/6 relative flex items-center justify-center rounded-lg  overflow-hidden" style="height:13em">
+
+            <!-- Image 1: Benchy -->
+            <img src="images/benchy.png"
+                 alt="Benchy Mesh"
+                 class="absolute inset-0 w-full h-full object-contain p-2 bg-white transition-opacity duration-300 fragment fade-in-then-out"
+                 data-fragment-index="1" />
+
+            <!-- Image 2: Jaws Attack -->
+            <img src="images/jaw_attack.png"
+                 alt="Jaw Attack Mesh"
+                 class="absolute inset-0 w-full h-full object-contain p-2 bg-white transition-opacity duration-300 fragment fade-in-then-out"
+                 data-fragment-index="2" />
+
+            <!-- Image 3: Snakeman -->
+            <img src="images/snakeman.png"
+                 alt="Snakeman Mesh"
+                 class="absolute inset-0 w-full h-full object-contain p-2 bg-white transition-opacity duration-300 fragment"
+                 data-fragment-index="3" />
+
+          </div>
+
+        </div>
+      </section>
+
+      <!-- Slide: Fast Winding Numbers (Barill et al. 2018) -->
+      <section id="fast-winding-numbers-slide">
+        <h2>Fast Winding Numbers</h2>
+
+        <div class="flex items-start justify-between gap-6 mt-2">
+          <!-- Left Column: Explanation & Steps (Fragment Controlled) -->
+          <div class="w-8/12 text-left small space-y-3">
+            
+            <!-- Stage 0: Raw Geometry -->
+            <div id="fwn-step-0" class="p-3 bg-white rounded-lg border-2 border-ut-red shadow-sm transition-all duration-300">
+              <h4 class="font-bold text-gray-800 mb-1">1. Exact Input Geometry</h4>
+              <p class="small text-gray-600">
+                Complex, mesh with $N$ segments. Direct evaluation requires $\mathcal{O}(NM)$ operations for $M$ query points.
+              </p>
+            </div>
+
+            <!-- Stage 1: Quadtree Construction -->
+            <div id="fwn-step-1" class="fragment p-3 bg-white rounded-lg border border-gray-200 shadow-sm transition-all duration-300" data-fragment-index="1">
+              <h4 class="font-bold text-gray-800 mb-1">2. Hierarchical Spatial Acceleration Structure</h4>
+              <p class="small text-gray-600">
+                Build some kind of BVH. 
+              </p>
+            </div>
+
+            <!-- Stage 2: Precomputed  Coefficients -->
+            <div id="fwn-step-2" class="fragment p-3 bg-white rounded-lg border border-gray-200 shadow-sm transition-all duration-300" data-fragment-index="2">
+              <h4 class="font-bold text-gray-800 mb-1">3. Tailor Series Precomputation</h4>
+              <p class="small text-gray-600 mb-2">
+              Each node $K$ stores <span class="text-ut-red">geometry dependent taylor coefficients</span> centered at centroid <span style="color: var(--ut-blue-mid);">$\tilde{p}$</span>:
+              </p>
+              <div class="text-[0.45em] bg-gray-50 p-2 rounded border border-gray-200 overflow-x-auto">
+                $$\begin{align*}
+                \tilde{w}(q) \approx & \textcolor{a51e37}{\left( \sum_{i \in K} a_i \hat{n}_i \right)} \cdot \nabla G(q, \textcolor{0069aa}{\tilde{p}}) + 
+                \textcolor{a51e37}{\left( \sum_{i \in K} a_i (p_i - \textcolor{0069aa}{\tilde{p}}) \otimes \hat{n}_i \right)} \cdot \nabla^2 G(q, \textcolor{0069aa}{\tilde{p}}) +
+                \textcolor{a51e37}{\frac{1}{2} \left( \sum_{i \in K} a_i (p_i - \textcolor{0069aa}{\tilde{p}})^{\otimes 2} \otimes \hat{n}_i \right)} \cdot \nabla^3 G(q, \textcolor{0069aa}{\tilde{p}})
+                \end{align*}$$
+              </div>
+            </div>
+
+            <!-- Stage 3: Fast Tree Traversal & Pruning -->
+            <div id="fwn-step-3" class="fragment p-3 bg-white rounded-lg border border-gray-200 shadow-sm transition-all duration-300" data-fragment-index="3">
+              <h4 class="font-bold text-gray-800 mb-1">4. Traversal & Far-Field Pruning</h4>
+              <p class="small text-gray-600">
+                For query point $q$, evaluate Acceptance Criterion of node: 
+                $\|q-\tilde{r}\|_2 < \beta\cdot\tilde{r}$.
+                <br>
+                <span class="inline-block w-3 h-3 rounded-full align-middle ml-2 mr-1" style="background-color: var(--ut-red);"></span>
+                <strong class="text-ut-red">Near-field (keep going)</strong>
+                <span class="inline-block w-3 h-3 rounded-full align-middle mr-1" style="background-color: var(--ut-green-mid);"></span>
+                <strong class="text-ut-green">Far-field (Approximate)</strong>
+                <span class="inline-block w-3 h-3 rounded-full align-middle ml-2 mr-1" style="background-color: var(--ut-blue-light);"></span>
+                <strong class="text-ut-blue">Not visited at all</strong>
+              </p>
+            </div>
+
+            <!-- Stage 4: Evaluated Field -->
+            <div id="fwn-step-4" class="fragment p-3 bg-white rounded-lg border border-gray-200 shadow-sm transition-all duration-300" data-fragment-index="4">
+              <h4 class="font-bold text-gray-800 mb-1">5. $\mathcal{O}(M \log N)$ Continuous Field</h4>
+              <p class="small text-gray-600">
+                Fast, highly accurate, smooth winding field with open/closed surface robustness.
+              </p>
+            </div>
+
+          </div>
+
+          <!-- Right Column: Dual Interactive Visualizations -->
+          <div class="w-5/12 flex flex-col items-center gap-3">
+            
+            <!-- Top Canvas: Spatial Quadtree & Geometry -->
+            <div class="relative w-full bg-white rounded-lg border border-gray-200 shadow-sm p-2 flex justify-center items-center">
+              <canvas id="fwnSpatialCanvas" width="520" height="420" class="rounded border border-gray-100 cursor-crosshair"></canvas>
+            </div>
+
+            <!-- Bottom Canvas: Synchronized Quadtree Structure Graph -->
+            <div class="w-full bg-white rounded-lg border border-gray-200 shadow-sm p-2 flex justify-center items-center">
+              <canvas id="fwnTreeCanvas" width="750" height="256" class="rounded border border-gray-100"></canvas>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Standardized Citation Footer -->
+        <footer class="slide-footer">
+          <span class="cite-author">Barill et al. (2018)</span> — Fast Winding Numbers for Soups and Clouds. <em>ACM Transactions on Graphics (TOG)</em>.
+        </footer>
       </section>
 
     </div>
@@ -292,6 +649,16 @@
 
   <script src="https://cdn.jsdelivr.net/npm/reveal.js@4.5.0/dist/reveal.js"></script>
   <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      const dateEl = document.getElementById("footer-date");
+      if (dateEl) {
+        dateEl.textContent = new Date().toLocaleDateString("en-US", {
+          month: "long",
+          day: "numeric",
+          year: "numeric"
+        });
+      }
+    });
   const UT_COLORS = {
     primary: {
       red: [165, 30, 55],
@@ -503,7 +870,293 @@
     }
   }
 
-  // --- Slide 1: Winding Number Arc Demo ---
+  // --- Slide 1: Animated Introduction to Winding Numbers ---
+  (function initIntroWindingSlide() {
+    const canvas = document.getElementById('introWindingCanvas');
+    const floatReadout = document.getElementById('introFloatReadout');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+
+    let animationFrameId = null;
+    let isPlaying = false;
+    let progress = 0; // Ranges from 0 to 1
+    const duration = 10000; // 10-second draw duration
+    const holdTime = 1500;   // 1.5-second pause at 100% completion before looping
+    let lastTimestamp = null;
+    let pauseElapsed = 0;
+
+    // Waypoints defining the exact Wikipedia curve topology relative to origin (0,0)
+    const WAYPOINTS = [
+      { x: -65, y: 0 },     // Inner loop (left)
+      { x: 0,   y: -65 },   // Inner loop (top)
+      { x: 75,  y: 0 },     // Inner loop (right)
+      { x: 0,   y: 135 },   // Outer loop (bottom)
+      { x: -140, y: 0 },    // Outer loop (left)
+      { x: 0,   y: -140 },  // Outer loop (top)
+      { x: 110, y: 0 },     // Start at black dot (right of observer)
+      { x: 125, y: -70 },   // Ascending up-right
+      { x: 140, y: -190 },  // Going up into tall right loop
+      { x: 110, y: -255 },  // Top apex of right loop
+      { x: 75,  y: -210 },  // Loop top-left turn
+      { x: 95,  y: -70 },   // Crossing down
+      { x: 165, y: 90 },    // Descending to bottom-right of loop
+      { x: 150, y: 175 },   // Bottom apex of right loop
+      { x: 85,  y: 125 },   // Sweeping left into inner wrap around x
+      { x: 0,   y: 65 },    // Inner loop (bottom)
+    ];
+
+    function catmullRom(p0, p1, p2, p3, t) {
+      const v0 = (p2 - p0) * 0.5;
+      const v1 = (p3 - p1) * 0.5;
+      const t2 = t * t;
+      const t3 = t2 * t;
+      return (2 * p1 - 2 * p2 + v0 + v1) * t3 +
+             (-3 * p1 + 3 * p2 - 2 * v0 - v1) * t2 +
+             v0 * t + p1;
+    }
+
+    function getRawCurvePoint(t) {
+      const M = WAYPOINTS.length;
+      // Handle t = 1.0 cleanly by wrapping to 0
+      const normT = (t >= 1.0) ? 0 : t;
+      const scaledT = normT * M;
+      const i = Math.floor(scaledT);
+      const localT = scaledT - i;
+
+      // Wrap indices modulo M for smooth C1 periodic continuity
+      const p0 = WAYPOINTS[(i - 1 + M) % M];
+      const p1 = WAYPOINTS[i % M];
+      const p2 = WAYPOINTS[(i + 1) % M];
+      const p3 = WAYPOINTS[(i + 2) % M];
+
+      return {
+        x: catmullRom(p0.x, p1.x, p2.x, p3.x, localT),
+        y: catmullRom(p0.y, p1.y, p2.y, p3.y, localT)
+      };
+    }
+
+    // Pre-sample trajectory and calculate continuous unwrapped angles
+    const PATH_SAMPLES = 1000;
+    const pathData = [];
+    let cumulativeAngle = 0;
+
+    for (let i = 0; i <= PATH_SAMPLES; i++) {
+      const t = i / PATH_SAMPLES;
+      const pt = getRawCurvePoint(t);
+
+      if (i > 0) {
+        const prev = pathData[i - 1];
+        const dTheta = Math.atan2(
+          prev.x * pt.y - prev.y * pt.x,
+          prev.x * pt.x + prev.y * pt.y
+        );
+        cumulativeAngle += dTheta;
+      }
+
+      pathData.push({
+        t: t,
+        x: pt.x,
+        y: pt.y,
+        angle: cumulativeAngle
+      });
+    }
+
+    function getInterpolatedPoint(t) {
+      const indexFloat = t * PATH_SAMPLES;
+      const idx = Math.min(Math.floor(indexFloat), PATH_SAMPLES - 1);
+      const frac = indexFloat - idx;
+
+      const p1 = pathData[idx];
+      const p2 = pathData[Math.min(idx + 1, PATH_SAMPLES)];
+
+      return {
+        x: p1.x + (p2.x - p1.x) * frac,
+        y: p1.y + (p2.y - p1.y) * frac,
+        angle: p1.angle + (p2.angle - p1.angle) * frac
+      };
+    }
+
+    function drawFrame() {
+      const w = canvas.width;
+      const h = canvas.height;
+      const centerX = w / 2 - 25;
+      const centerY = h / 2 + 25;
+
+      ctx.clearRect(0, 0, w, h);
+
+      // 1. Central observer point x
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, 7, 0, 2 * Math.PI);
+      ctx.fillStyle = '#A51E37';
+      ctx.fill();
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.fillStyle = '#32414B';
+      ctx.font = 'bold 16px sans-serif';
+      ctx.fillText('x', centerX - 18, centerY - 12);
+
+      // 2. Full curve preview (dashed line)
+      ctx.beginPath();
+      for (let i = 0; i <= PATH_SAMPLES; i++) {
+        const pt = pathData[i];
+        const px = centerX + pt.x;
+        const py = centerY + pt.y;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.strokeStyle = 'rgba(165, 30, 55, 0.3)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 5]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      if (progress <= 0) {
+        if (floatReadout) floatReadout.innerText = '0.00';
+        return;
+      }
+
+      const currentSampleCount = Math.floor(progress * PATH_SAMPLES);
+      const headPoint = getInterpolatedPoint(progress);
+
+      // 3. Blue continuous angle-tracking spiral at origin
+      ctx.beginPath();
+      const spiralStartR = 16;
+      const spiralSpacing = 5.5;
+      const currentAngle = headPoint.angle;
+
+      const step = 0.04;
+      if (currentAngle > 0) {
+        for (let a = 0; a <= currentAngle; a += step) {
+          const rSpiral = spiralStartR + (a / (2 * Math.PI)) * spiralSpacing;
+          const sx = centerX + rSpiral * Math.cos(a);
+          const sy = centerY + rSpiral * Math.sin(a);
+          if (a === 0) ctx.moveTo(sx, sy);
+          else ctx.lineTo(sx, sy);
+        }
+      }
+      ctx.strokeStyle = '#00A0E0';
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+
+      // 4. Active animated curve trajectory
+      ctx.beginPath();
+      for (let i = 0; i <= currentSampleCount; i++) {
+        const pt = pathData[i];
+        const px = centerX + pt.x;
+        const py = centerY + pt.y;
+
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.strokeStyle = '#A51E37';
+      ctx.lineWidth = 3.5;
+      ctx.stroke();
+
+      // 5. Directional arrows
+      for (let i = 40; i <= currentSampleCount; i += 70) {
+        const p1 = pathData[i - 1];
+        const p2 = pathData[i];
+
+        const px1 = centerX + p1.x, py1 = centerY + p1.y;
+        const px2 = centerX + p2.x, py2 = centerY + p2.y;
+        const dirAngle = Math.atan2(py2 - py1, px2 - px1);
+
+        ctx.save();
+        ctx.translate(px2, py2);
+        ctx.rotate(dirAngle);
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(-10, -5);
+        ctx.lineTo(-10, 5);
+        ctx.closePath();
+        ctx.fillStyle = '#A51E37';
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // 6. Line-of-sight ray
+      const headX = centerX + headPoint.x;
+      const headY = centerY + headPoint.y;
+
+      ctx.beginPath();
+      ctx.moveTo(centerX, centerY);
+      ctx.lineTo(headX, headY);
+      ctx.strokeStyle = '#32414B';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // 7. Curve tip marker
+      ctx.beginPath();
+      ctx.arc(headX, headY, 5.5, 0, 2 * Math.PI);
+      ctx.fillStyle = '#32414B';
+      ctx.fill();
+
+      // 8. Update Live Floating-Point Readout
+      if (floatReadout) {
+        const floatVal = headPoint.angle / (2 * Math.PI);
+        floatReadout.innerText = floatVal.toFixed(2);
+      }
+    }
+
+    function animate(timestamp) {
+      if (!lastTimestamp) lastTimestamp = timestamp;
+      const delta = timestamp - lastTimestamp;
+      lastTimestamp = timestamp;
+
+      if (isPlaying) {
+        if (progress < 1.0) {
+          progress += delta / duration;
+          if (progress >= 1.0) {
+            progress = 1.0;
+            pauseElapsed = 0;
+          }
+        } else {
+          pauseElapsed += delta;
+          if (pauseElapsed >= holdTime) {
+            progress = 0;
+            pauseElapsed = 0;
+          }
+        }
+        drawFrame();
+        animationFrameId = requestAnimationFrame(animate);
+      }
+    }
+
+    function startLoop() {
+      if (!isPlaying) {
+        isPlaying = true;
+        lastTimestamp = null;
+        animationFrameId = requestAnimationFrame(animate);
+      }
+    }
+
+    function stopLoop() {
+      isPlaying = false;
+      if (animationFrameId) cancelAnimationFrame(animationFrameId);
+    }
+
+    Reveal.on('slidechanged', e => {
+      if (e.currentSlide.id === 'intro-winding-slide') {
+        progress = 0;
+        startLoop();
+      } else {
+        stopLoop();
+      }
+    });
+
+    if (Reveal.getCurrentSlide() && Reveal.getCurrentSlide().id === 'intro-winding-slide') {
+      startLoop();
+    } else {
+      drawFrame();
+    }
+  })();
+
+
+  // --- Slide 2: Winding Number Arc Demo ---
   (function initArcSlide() {
     const canvas = document.getElementById('windingCanvas');
     const slider = document.getElementById('angleSlider');
@@ -547,7 +1200,8 @@
     update();
   })();
 
-  // --- Combined Properties & Superposition Slide Controller ---
+
+  // --- Slide 3 Combined Properties & Superposition Slide Controller ---
   (function initPropertiesSlide() {
     // --- Panel 0: Interactive Free Drawing ---
     const canvas0 = document.getElementById('propCanvas0');
@@ -769,6 +1423,407 @@
 
     // Initial load setup
     renderActivePanel(0);
+  })();
+
+
+  (function initFastWindingNumbersSlide() {
+    const spatialCanvas = document.getElementById('fwnSpatialCanvas');
+    const treeCanvas = document.getElementById('fwnTreeCanvas');
+    if (!spatialCanvas || !treeCanvas) return;
+
+    const sCtx = spatialCanvas.getContext('2d');
+    const tCtx = treeCanvas.getContext('2d');
+
+    // --- 1. Duck Geometry Definition (Outer Boundary + Interior Holes + Gaps) ---
+    const DUCK_VERTICES = [
+      { x: -0.06148, y: 0.71311 },
+      { x: -0.12295, y: 0.51639 },
+      { x: -0.30738, y: 0.27049 },
+      { x: -0.61475, y: 0.14754 },
+      { x: -0.92213, y: 0.12295 },
+      { x: -0.79918, y: -0.18443 },
+      { x: -0.55328, y: -0.46721 },
+      { x: -0.12295, y: -0.55328 },
+      { x: 0.36885, y: -0.49180 },
+      { x: 0.55328, y: -0.12295 },
+      { x: 0.46721, y: 0.24590 },
+      { x: 0.34426, y: 0.46721 },
+      { x: 0.51639, y: 0.51639 },
+      { x: 0.73770, y: 0.63934 },
+      { x: 0.43033, y: 0.67623 },
+      { x: 0.27049, y: 0.76230 },
+      { x: 0.12295, y: 0.79918 }
+    ];
+
+    // Clockwise orientation -> subtracts from winding number (W = 1 - 1 = 0 inside hole)
+    const EYE_HOLE_VERTICES = [
+      { x: 0.32, y: 0.66 },
+      { x: 0.38, y: 0.63 },
+      { x: 0.36, y: 0.57 },
+      { x: 0.30, y: 0.60 }
+    ];
+
+    const WING_HOLE_VERTICES = [
+      { x: -0.10, y: 0.15 },
+      { x:  0.15, y: -0.05 },
+      { x: -0.05, y: -0.25 },
+      { x: -0.35, y: -0.10 }
+    ];
+
+    function createLoopSegments(vertices, styleOptions = {}) {
+      const segments = [];
+      for (let i = 0; i < vertices.length; i++) {
+        const p1 = vertices[i];
+        const p2 = vertices[(i + 1) % vertices.length];
+        segments.push(new LineSegment(p1.x, p1.y, p2.x, p2.y, false, styleOptions));
+      }
+      return segments;
+    }
+
+    const duckSegments = [
+      ...createLoopSegments(DUCK_VERTICES, { color: '#32414B', width: 2.5 }),
+      ...createLoopSegments(EYE_HOLE_VERTICES, { color: '#32414B', width: 2.0 }),
+      ...createLoopSegments(WING_HOLE_VERTICES, { color: '#32414B', width: 2.0 })
+    ];
+
+    function subdivideSegment(seg) {
+      const mx = (seg.x1 + seg.x2) / 2;
+      const my = (seg.y1 + seg.y2) / 2;
+      const opts = { color: seg.color || '#32414b', width: seg.width || 2.5 };
+      return [
+        new LineSegment(seg.x1, seg.y1, mx, my, false, opts),
+        new LineSegment(mx, my, seg.x2, seg.y2, false, opts)
+      ];
+    }
+
+    let denseDuckSegments = [];
+    duckSegments.forEach(seg => {
+      // Subdivide larger segments to maintain higher geometric resolution
+      const len = Math.hypot(seg.x2 - seg.x1, seg.y2 - seg.y1);
+      if (len > 0.15) {
+        const sub1 = subdivideSegment(seg);
+        sub1.forEach(s => denseDuckSegments.push(...subdivideSegment(s)));
+      } else {
+        denseDuckSegments.push(seg);
+      }
+    });
+
+    // Introduce random gaps (~8% segment dropout) for open/non-watertight geometry
+    const GAP_PROBABILITY = 0.08;
+    denseDuckSegments = denseDuckSegments.filter(() => Math.random() > GAP_PROBABILITY);
+
+    // --- 2. Quadtree Data Structure with Taylor Expansion Properties ---
+    class QuadNode {
+      constructor(x, y, size, depth = 0) {
+        this.x = x;           // Node box center X
+        this.y = y;           // Node box center Y
+        this.size = size;     // Node box side length
+        this.depth = depth;
+        this.children = [];
+        this.segments = [];
+        this.centerOfMass = { x: x, y: y }; // \tilde{p}
+        this.rtilde = 0;                     // \tilde{r} (max distance from \tilde{p} to geometry)
+        this.status = 'normal';
+      }
+
+      isLeaf() {
+        return this.children.length === 0;
+      }
+
+      // Precomputes Center of Mass \tilde{p} and Radius \tilde{r} from contained segments
+      computeProperties() {
+        if (this.segments.length === 0) {
+          this.centerOfMass = { x: this.x, y: this.y };
+          this.rtilde = 0;
+          return;
+        }
+
+        let totalLen = 0;
+        let sumX = 0;
+        let sumY = 0;
+
+        this.segments.forEach(seg => {
+          const len = Math.hypot(seg.x2 - seg.x1, seg.y2 - seg.y1);
+          const mx = (seg.x1 + seg.x2) / 2;
+          const my = (seg.y1 + seg.y2) / 2;
+
+          totalLen += len;
+          sumX += mx * len;
+          sumY += my * len;
+        });
+
+        this.centerOfMass = { x: sumX / totalLen, y: sumY / totalLen };
+
+        // \tilde{r} = max distance from \tilde{p} to any endpoint of contained segments
+        let maxR = 0;
+        this.segments.forEach(seg => {
+          const d1 = Math.hypot(seg.x1 - this.centerOfMass.x, seg.y1 - this.centerOfMass.y);
+          const d2 = Math.hypot(seg.x2 - this.centerOfMass.x, seg.y2 - this.centerOfMass.y);
+          maxR = Math.max(maxR, d1, d2);
+        });
+        this.rtilde = maxR;
+      }
+
+      subdivide(maxDepth = 4, maxSegs = 3) {
+        this.computeProperties();
+
+        if (this.depth >= maxDepth || this.segments.length <= maxSegs) return;
+
+        const half = this.size / 4;
+        const quarter = this.size / 2;
+
+        const candidates = [
+          new QuadNode(this.x - half, this.y + half, quarter, this.depth + 1), // NW
+          new QuadNode(this.x + half, this.y + half, quarter, this.depth + 1), // NE
+          new QuadNode(this.x - half, this.y - half, quarter, this.depth + 1), // SW
+          new QuadNode(this.x + half, this.y - half, quarter, this.depth + 1)  // SE
+        ];
+
+        candidates.forEach(child => {
+          child.segments = this.segments.filter(seg => child.intersectsSegment(seg));
+        });
+
+        // Filter out completely empty nodes
+        this.children = candidates.filter(child => child.segments.length > 0);
+
+        // Recurse on non-empty child nodes
+        this.children.forEach(child => child.subdivide(maxDepth, maxSegs));
+      }
+
+      intersectsSegment(seg) {
+        const minX = this.x - this.size / 2, maxX = this.x + this.size / 2;
+        const minY = this.y - this.size / 2, maxY = this.y + this.size / 2;
+        return !(seg.x1 < minX && seg.x2 < minX || seg.x1 > maxX && seg.x2 > maxX ||
+                 seg.y1 < minY && seg.y2 < minY || seg.y1 > maxY && seg.y2 > maxY);
+      }
+    }
+
+    // Construct tree & compute \tilde{p} and \tilde{r} for all non-empty nodes
+    const quadtreeRoot = new QuadNode(0.0, 0.0, 2.2, 0);
+    quadtreeRoot.segments = denseDuckSegments;
+    quadtreeRoot.subdivide(4, 3);
+
+    // --- 3. Coordinate Helpers & Traversal ---
+    const toSpatX = (x) => spatialCanvas.width / 2 + x * (spatialCanvas.width / 3);
+    const toSpatY = (y) => spatialCanvas.height / 2 - y * (spatialCanvas.height / 3);
+
+    let queryPoint = { x: 0.65, y: -0.45 };
+    let activeStage = 0;
+
+    function renderSpatialCanvas() {
+      const w = spatialCanvas.width, h = spatialCanvas.height;
+      sCtx.clearRect(0, 0, w, h);
+
+      if (activeStage === 4) {
+        renderField(spatialCanvas, denseDuckSegments, -0.5, 1.0);
+      }
+
+      if (activeStage >= 1 && activeStage <= 3) {
+        drawQuadNode(quadtreeRoot);
+      }
+
+      denseDuckSegments.forEach(seg => seg.draw(sCtx, toSpatX, toSpatY));
+
+      if (activeStage >= 2 && activeStage <= 3 ) {
+        drawMultipoleBadges(quadtreeRoot);
+      }
+
+      if (activeStage === 3) {
+        const qx = toSpatX(queryPoint.x), qy = toSpatY(queryPoint.y);
+        sCtx.beginPath();
+        sCtx.arc(qx, qy, 7, 0, 2 * Math.PI);
+        sCtx.fillStyle = '#a51e37';
+        sCtx.fill();
+        sCtx.strokeStyle = '#FFFFFF';
+        sCtx.lineWidth = 2;
+        sCtx.stroke();
+
+        sCtx.fillStyle = '#111827';
+        sCtx.font = 'bold 14px sans-serif';
+        sCtx.fillText('q', qx + 10, qy - 10);
+
+        resetNodeStatus(quadtreeRoot);
+        evaluateTraversal(quadtreeRoot, queryPoint, 1.8); // \beta = 1.8
+      } 
+    }
+
+    function drawQuadNode(node) {
+      const px = toSpatX(node.x - node.size / 2);
+      const py = toSpatY(node.y + node.size / 2);
+      const pw = node.size * (spatialCanvas.width / 3);
+      const ph = node.size * (spatialCanvas.height / 3);
+
+      sCtx.strokeStyle = node.status === 'pruned' ? 'rgba(125, 165, 75, 0.85)' :
+                         node.status === 'traversed' ? 'rgba(165, 30, 55, 0.7)' :
+                         'rgba(210, 150, 0, 0.5)';
+      sCtx.lineWidth = node.status !== 'normal' ? 2 : 1;
+      sCtx.strokeRect(px, py, pw, ph);
+
+      if (node.status === 'pruned') {
+        sCtx.fillStyle = 'rgba(125, 165, 75, 0.12)';
+        sCtx.fillRect(px, py, pw, ph);
+      }
+
+      node.children.forEach(child => drawQuadNode(child));
+    }
+
+    function drawMultipoleBadges(node) {
+      if (node.isLeaf() || node.depth >= 2) {
+        const cx = toSpatX(node.centerOfMass.x);
+        const cy = toSpatY(node.centerOfMass.y);
+        const rPx = node.rtilde * (spatialCanvas.width / 3);
+
+        // Draw \tilde{r} bounding radius circle
+        sCtx.beginPath();
+        sCtx.arc(cx, cy, Math.max(rPx, 2), 0, 2 * Math.PI);
+        sCtx.strokeStyle = 'rgba(80, 170, 200, 0.45)';
+        sCtx.lineWidth = 1;
+        sCtx.setLineDash([2, 2]);
+        sCtx.stroke();
+        sCtx.setLineDash([]);
+
+        // Draw Center of Mass \tilde{p}
+        sCtx.beginPath();
+        sCtx.arc(cx, cy, 3.5, 0, 2 * Math.PI);
+        sCtx.fillStyle = '#50aac8';
+        sCtx.fill();
+      }
+      node.children.forEach(child => drawMultipoleBadges(child));
+    }
+
+    function resetNodeStatus(node) {
+      node.status = 'normal';
+      node.children.forEach(resetNodeStatus);
+    }
+
+    // Evaluates Taylor Expansion Far-Field criterion: ||q - \tilde{p}||_2 > \beta \cdot \tilde{r}
+    function evaluateTraversal(node, q, beta = 1.8) {
+      const distToCoM = Math.hypot(q.x - node.centerOfMass.x, q.y - node.centerOfMass.y);
+      const isFarField = distToCoM > beta * node.rtilde;
+
+      if (isFarField && node.depth > 0) {
+        node.status = 'pruned';
+        
+        // Ray connecting q directly to node Center of Mass \tilde{p}
+        sCtx.beginPath();
+        sCtx.moveTo(toSpatX(q.x), toSpatY(q.y));
+        sCtx.lineTo(toSpatX(node.centerOfMass.x), toSpatY(node.centerOfMass.y));
+        sCtx.strokeStyle = 'rgba(34, 197, 94, 0.8)';
+        sCtx.setLineDash([3, 3]);
+        sCtx.lineWidth = 1.2;
+        sCtx.stroke();
+        sCtx.setLineDash([]);
+      } else {
+        node.status = 'traversed';
+        if (!node.isLeaf()) {
+          node.children.forEach(child => evaluateTraversal(child, q, beta));
+        }
+      }
+    }
+
+    // --- 4. Render Expanded Tree Graph Canvas ---
+    function renderTreeCanvas() {
+      const w = treeCanvas.width, h = treeCanvas.height;
+      tCtx.clearRect(0, 0, w, h);
+
+      if (activeStage === 0) {
+        tCtx.fillStyle = '#9CA3AF';
+        tCtx.font = '13px sans-serif';
+        tCtx.textAlign = 'center';
+        tCtx.fillText('Quadtree graph inactive (Stage 1+)', w / 2, h / 2);
+        return;
+      }
+
+      drawTreeNode(quadtreeRoot, w / 2, 25, w / 2.6);
+    }
+
+    function drawTreeNode(node, x, y, xSpread) {
+      const nextY = y + 50;
+      const numChildren = node.children.length;
+
+      node.children.forEach((child, i) => {
+        const step = numChildren > 1 ? (xSpread * 2) / (numChildren - 1) : 0;
+        const childX = numChildren > 1 ? (x - xSpread) + i * step : x;
+        
+        tCtx.beginPath();
+        tCtx.moveTo(x, y);
+        tCtx.lineTo(childX, nextY);
+        tCtx.strokeStyle = child.status === 'pruned' ? '#7da54b' :
+                           child.status === 'traversed' ? '#a51e37' : '#d7b469';
+        tCtx.lineWidth = child.status !== 'normal' ? 1.8 : 1;
+        tCtx.stroke();
+
+        drawTreeNode(child, childX, nextY, xSpread * 0.25);
+      });
+
+      tCtx.beginPath();
+      tCtx.arc(x, y, 4.5, 0, 2 * Math.PI);
+      tCtx.fillStyle = node.status === 'pruned' ? '#7da54b' :
+                       node.status === 'traversed' ? '#a51e37' : '#50aac8';
+      tCtx.fill();
+      tCtx.strokeStyle = '#FFFFFF';
+      tCtx.lineWidth = 1;
+      tCtx.stroke();
+    }
+
+    // --- 5. Interactive Event Handlers ---
+    spatialCanvas.addEventListener('mousemove', (e) => {
+      if (activeStage !== 3) return;
+      const rect = spatialCanvas.getBoundingClientRect();
+      const px = (e.clientX - rect.left) * (spatialCanvas.width / rect.width);
+      const py = (e.clientY - rect.top) * (spatialCanvas.height / rect.height);
+
+      queryPoint.x = (px - spatialCanvas.width / 2) / (spatialCanvas.width / 3);
+      queryPoint.y = (spatialCanvas.height / 2 - py) / (spatialCanvas.height / 3);
+
+      renderSpatialCanvas();
+      renderTreeCanvas();
+    });
+
+    function updateActiveStage(stage) {
+      activeStage = stage;
+
+      for (let i = 0; i <= 4; i++) {
+        const stepEl = document.getElementById(`fwn-step-${i}`);
+        if (stepEl) {
+          if (i === stage) {
+            stepEl.classList.add('border-ut-red', 'bg-red-50/30');
+            stepEl.classList.remove('border-gray-200');
+          } else {
+            stepEl.classList.remove('border-ut-red', 'bg-red-50/30');
+            stepEl.classList.add('border-gray-200');
+          }
+        }
+      }
+
+      renderSpatialCanvas();
+      renderTreeCanvas();
+    }
+
+    function getFragmentStage(slide) {
+      const visibleFrags = slide.querySelectorAll('.fragment.visible');
+      return visibleFrags.length;
+    }
+
+    Reveal.on('slidechanged', e => {
+      if (e.currentSlide.id === 'fast-winding-numbers-slide') {
+        updateActiveStage(getFragmentStage(e.currentSlide));
+      }
+    });
+
+    Reveal.on('fragmentshown', () => {
+      if (Reveal.getCurrentSlide().id === 'fast-winding-numbers-slide') {
+        updateActiveStage(getFragmentStage(Reveal.getCurrentSlide()));
+      }
+    });
+
+    Reveal.on('fragmenthidden', () => {
+      if (Reveal.getCurrentSlide().id === 'fast-winding-numbers-slide') {
+        updateActiveStage(getFragmentStage(Reveal.getCurrentSlide()));
+      }
+    });
+
+    updateActiveStage(0);
   })();
 </script>
 </body>
