@@ -58,7 +58,7 @@
                         <span class="text-amber-400 text-base leading-none mt-0.5 select-none">⚠️</span>
                         <div>
                             <strong class="text-amber-400 font-semibold block mb-0.5 uppercase tracking-wider text-[11px]">Early Alpha &bull; Active Development</strong>
-                            Only the forward pass is implemented so far. The backward pass is currently under active research and engineering—please do not expect a finalized or production-stable product yet.
+                            Only the forward pass is implemented so far. The backward pass is currently under active research and engineering-please do not expect a finalized or production-stable product yet.
           </div>
         </div>
             <div class="text-sm md:text-base text-slate-400 font-medium mb-8">
@@ -124,7 +124,7 @@
             <p>
                 If your 3D model is a perfect, watertight (manifold) mesh, this is easy. You cast a ray from your query point; if it crosses
                 the mesh boundary an odd number of times, you're inside. But perfect 3D models are rare. Real-world 3D
-                data—whether harvested from raw LiDAR scans, chaotic CAD conversions, or raw triangle meshes—is inherently
+                data-whether harvested from raw LiDAR scans, chaotic CAD conversions, or raw triangle meshes-is inherently
                 <strong>broken</strong>. It is full of cracks, missing patches, self-intersections, and floating geometry.
             </p>
             <p>
@@ -522,8 +522,8 @@
                             primitives, <strong>every single geometry element contributes to the continuous field.</strong>
                         </p>
                         <p>
-                            Unlike Signed Distance Fields (SDFs) or discrete voxel grids—which suffer from localized clipping, sharp gradient discontinuities, or zero-gradient dead
-                            zones—the winding number landscape provides an uninterrupted, infinitely smooth gradient flow. This is a direct
+                            Unlike Signed Distance Fields (SDFs) or discrete voxel grids-which suffer from localized clipping, sharp gradient discontinuities, or zero-gradient dead
+                            zones-the winding number landscape provides an uninterrupted, infinitely smooth gradient flow. This is a direct
                             consequence of its <strong>harmonic nature</strong> away from boundaries: Because the field satisfies $\nabla^2
                             \mathcal{W} = 0$, it is structurally barred from forming localized coordinate traps, local maxima, or local minima in
                             empty space.
@@ -1082,7 +1082,7 @@
         <span class="text-slate-400">5.2</span> Triangle Mesh Primitives (Exact Directional Taylor Expansion)
     </h3>
     <p class="text-slate-700 leading-relaxed mb-6">
-        To compute exact loss gradients with respect to the spatial coordinates of triangular mesh vertices $\mathbf{v}_k \in \mathbb{R}^3$ ($k \in \{0, 1, 2\}$), we formulate a local expansion around the geometric element centroid $\mathbf{x}_c = \frac{1}{3}\sum_{i=0}^2 \mathbf{v}_i$. The formulation contracts input spatial moments—scalar mass $G_0 \in \mathbb{R}$, first-order vector moment $\mathbf{G}_1 \in \mathbb{R}^3$, and second-order symmetric tensor moment $\mathbf{G}_2 \in \mathbb{R}^{3 \times 3}$—via non-dimensionalized vector field generators and exact analytical directional derivatives.
+        To compute exact loss gradients with respect to the spatial coordinates of triangular mesh vertices $\mathbf{v}_k \in \mathbb{R}^3$ ($k \in \{0, 1, 2\}$), we formulate a local expansion around the geometric element centroid $\mathbf{x}_c = \frac{1}{3}\sum_{i=0}^2 \mathbf{v}_i$. The formulation contracts input spatial moments-scalar mass $G_0 \in \mathbb{R}$, first-order vector moment $\mathbf{G}_1 \in \mathbb{R}^3$, and second-order symmetric tensor moment $\mathbf{G}_2 \in \mathbb{R}^{3 \times 3}$-via non-dimensionalized vector field generators and exact analytical directional derivatives.
     </p>
 
     <!-- 5.2.1 Permutations and Non-Dimensionalization -->
@@ -1196,7 +1196,7 @@
   </h3>
 
   <p class="mb-4 text-justify">
-    To compute the gradient of a generic loss scalar field $\mathcal{L}$ with respect to the spatial coordinates of a triangular mesh primitive with vertices $\mathbf{v}_k \in \mathbb{R}^3$ ($k \in \{0, 1, 2\}$), we formulate a local directional expansion. Let $\mathbf{x}_c = \frac{1}{3}\sum_{i=0}^2 \mathbf{v}_i$ denote the geometric centroid of the element. The loss sensitivity is evaluated by contracting input spatial order moments—represented by the scalar mass $G_0 \in \mathbb{R}$, the first-order vector moment $\mathbf{G}_1 \in \mathbb{R}^3$, and the second-order symmetric moment tensor $\mathbf{G}_2 \in \mathbb{R}^{3 \times 3}$—against a scale-invariant generator field $F_k(\bar{\mathbf{r}})$ and its higher-order spatial derivatives.
+    To compute the gradient of a generic loss scalar field $\mathcal{L}$ with respect to the spatial coordinates of a triangular mesh primitive with vertices $\mathbf{v}_k \in \mathbb{R}^3$ ($k \in \{0, 1, 2\}$), we formulate a local directional expansion. Let $\mathbf{x}_c = \frac{1}{3}\sum_{i=0}^2 \mathbf{v}_i$ denote the geometric centroid of the element. The loss sensitivity is evaluated by contracting input spatial order moments-represented by the scalar mass $G_0 \in \mathbb{R}$, the first-order vector moment $\mathbf{G}_1 \in \mathbb{R}^3$, and the second-order symmetric moment tensor $\mathbf{G}_2 \in \mathbb{R}^{3 \times 3}$-against a scale-invariant generator field $F_k(\bar{\mathbf{r}})$ and its higher-order spatial derivatives.
   </p>
 
   <!-- 5.2.1 Permutations and Non-Dimensionalization -->
@@ -1349,9 +1349,9 @@
               </a>
               <a target="_blank" href="https://github.com/keyraphi/winder/blob/1838361a153b0657e03cfdd469c44a9ae8b7d21a/src/cpp/tailor_coefficients.h">
                 <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
-                    <div class="text-cyan-400 text-lg mb-2 font-mono">📦 128-Byte Quantized Nodes</div>
+                    <div class="text-cyan-400 text-lg mb-2 font-mono">📦 Barnes-Hut scheme for Gradients</div>
                     <p class="text-sm text-slate-300 leading-relaxed">
-                        Compresses BVH8 entries into compact 128-byte struct using a custom quantization scheme implemented with PTX assembly to maximize memory throughput.
+                        Lightning fast BVH8 construction on querys for gradient computation of geometry.
                     </p>
                 </div>
               </a>
