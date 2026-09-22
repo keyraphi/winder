@@ -11,6 +11,7 @@
 #include <vector_types.h>
 
 struct Vec3;
+struct SceneBounds;
 struct AABB;
 
 struct Vec3_f16 {
@@ -334,6 +335,7 @@ struct Vec3 {
     return x * v.x + y * v.y + z * v.z;
   }
 
+  __host__ __device__ __forceinline__ auto get_bounds() const -> SceneBounds;
   __host__ __device__ __forceinline__ auto get_aabb() const -> AABB;
 
   __host__ __device__ __forceinline__ auto centroid() const -> Vec3 {

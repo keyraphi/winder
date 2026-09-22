@@ -1,5 +1,21 @@
 import bpy
 
+def set_color_ramp_stops(color_ramp_node, stops):
+    """Safely updates a ShaderNodeValToRGB node with a list of (position, RGBA) tuples."""
+    ramp = color_ramp_node.color_ramp
+    stops = sorted(stops, key=lambda s: s[0])
+
+    # Ensure the exact number of elements exist
+    while len(ramp.elements) < len(stops):
+        ramp.elements.new(0.5)
+    while len(ramp.elements) > len(stops):
+        ramp.elements.remove(ramp.elements[-1])
+
+    # Assign positions and colors in ascending order
+    for elem, (pos, color) in zip(ramp.elements, stops):
+        elem.position = pos
+        elem.color = color
+
 def get_or_create_volume_material(mat_name="Winder_Volume_Material"):
     """Volume shader reading 'density' (|w|) for opacity and 'winding' (signed w) for color."""
     mat = bpy.data.materials.get(mat_name)
@@ -20,7 +36,7 @@ def get_or_create_volume_material(mat_name="Winder_Volume_Material"):
 
         dens_scale = nodes.new("ShaderNodeMath")
         dens_scale.operation = "MULTIPLY"
-        dens_scale.inputs[1].default_value = 5.0
+        dens_scale.inputs[1].default_value = 10.0
         links.new(attr_density.outputs["Fac"], dens_scale.inputs[0])
         links.new(dens_scale.outputs["Value"], princ_vol.inputs["Density"])
 
@@ -38,19 +54,17 @@ def get_or_create_volume_material(mat_name="Winder_Volume_Material"):
         links.new(attr_winding.outputs["Fac"], map_range.inputs["Value"])
 
         color_ramp = nodes.new("ShaderNodeValToRGB")
+        # Standard Jet colormap linear color stops
+        stops = [
+            (0.000, (0.0, 0.0, 0.5, 1.0)),  # Dark Blue
+            (0.125, (0.0, 0.0, 1.0, 1.0)),  # Bright Blue
+            (0.375, (0.0, 1.0, 1.0, 1.0)),  # Cyan
+            (0.625, (1.0, 1.0, 0.0, 1.0)),  # Yellow
+            (0.875, (1.0, 0.0, 0.0, 1.0)),  # Red
+            (1.000, (0.5, 0.0, 0.0, 1.0)),  # Dark Red
+        ]
 
-        # Position 0.0: Red (Negative Winding)
-        color_ramp.color_ramp.elements[0].color = (0.9, 0.02, 0.02, 1.0)
-        color_ramp.color_ramp.elements[0].position = 0.0
-
-        # Position 1.0: Green (Positive Winding)
-        color_ramp.color_ramp.elements[1].color = (0.02, 0.9, 0.02, 1.0)
-        color_ramp.color_ramp.elements[1].position = 1.0
-
-        # Position 0.5: Dark Center (Zero Winding)
-        elem_zero = color_ramp.color_ramp.elements.new(0.5)
-        elem_zero.color = (0.02, 0.02, 0.02, 1.0)
-
+        set_color_ramp_stops(color_ramp, stops)
 
         links.new(map_range.outputs["Result"], color_ramp.inputs["Fac"])
         links.new(color_ramp.outputs["Color"], princ_vol.inputs["Color"])
@@ -183,23 +197,6 @@ def build_quiver_geometry_nodes(node_group_name="GN_QuiverPlot", default_scale=0
     return ng
 
 
-def set_color_ramp_stops(color_ramp_node, stops):
-    """Safely updates a ShaderNodeValToRGB node with a list of (position, RGBA) tuples."""
-    ramp = color_ramp_node.color_ramp
-    stops = sorted(stops, key=lambda s: s[0])
-
-    # Ensure the exact number of elements exist
-    while len(ramp.elements) < len(stops):
-        ramp.elements.new(0.5)
-    while len(ramp.elements) > len(stops):
-        ramp.elements.remove(ramp.elements[-1])
-
-    # Assign positions and colors in ascending order
-    for elem, (pos, color) in zip(ramp.elements, stops):
-        elem.position = pos
-        elem.color = color
-
-
 def get_or_create_contour_material(
     vol_obj_name, min_val, max_val, is_winding_field=True
 ):
@@ -228,12 +225,9 @@ def get_or_create_contour_material(
     map_range.location = (-400, 0)
 
     if is_winding_field:
-        # Center 0.5 in the middle of the range [0.5 - D, 0.5 + D]
-        max_dev = max(abs(0.5 - min_val), abs(max_val - 0.5))
-        if max_dev < 1e-6:
-            max_dev = 0.5
-        from_min = 0.5 - max_dev
-        from_max = 0.5 + max_dev
+        # Dont touch the range
+        from_min = 0.0
+        from_max = 1.1
     else:
         # Unconstrained range mapping [min_val, max_val] -> [0.0, 1.0]
         from_min = min_val
@@ -250,28 +244,14 @@ def get_or_create_contour_material(
     color_ramp = nodes.new("ShaderNodeValToRGB")
     color_ramp.location = (-150, 0)
 
-    if is_winding_field:
-        # Winding Field Mode:
-        # Outside (<0.5): Deep Red -> Orange
-        # Center (=0.5): Sharp Black Peak
-        # Inside (>0.5): Orange -> Bright Green
-        stops = [
-            (0.00, (0.50, 0.00, 0.00, 1.0)),  # Deep Red (Far Outside)
-            (0.48, (1.00, 0.40, 0.00, 1.0)),  # Orange (Near Outside)
-            (0.50, (0.00, 0.00, 0.00, 1.0)),  # Sharp Black Peak @ 0.5 Boundary
-            (0.52, (1.00, 0.40, 0.00, 1.0)),  # Orange (Near Inside)
-            (1.00, (0.00, 0.90, 0.20, 1.0)),  # Bright Green (Far Inside)
-        ]
-    else:
-        # General Scalar Mode:
-        # Standard Viridis scientific colormap (Dark Purple -> Teal -> Bright Yellow)
-        stops = [
-            (0.00, (0.267, 0.004, 0.329, 1.0)),  # Dark Purple
-            (0.25, (0.228, 0.322, 0.545, 1.0)),  # Blue
-            (0.50, (0.127, 0.567, 0.550, 1.0)),  # Teal
-            (0.75, (0.369, 0.788, 0.383, 1.0)),  # Green
-            (1.00, (0.993, 0.906, 0.144, 1.0)),  # Yellow
-        ]
+    stops = [
+        (0.000, (0.0, 0.0, 0.5, 1.0)),  # Dark Blue
+        (0.125, (0.0, 0.0, 1.0, 1.0)),  # Bright Blue
+        (0.375, (0.0, 1.0, 1.0, 1.0)),  # Cyan
+        (0.625, (1.0, 1.0, 0.0, 1.0)),  # Yellow
+        (0.875, (1.0, 0.0, 0.0, 1.0)),  # Red
+        (1.000, (0.5, 0.0, 0.0, 1.0)),  # Dark Red
+    ]
 
     set_color_ramp_stops(color_ramp, stops)
 

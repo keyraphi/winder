@@ -19,22 +19,18 @@ if addon_dir not in sys.path:
 import bpy
 import numpy as np
 
-from .dlpack_bridge import CudaBuffer
 from .handlers import register_handlers, unregister_handlers
 from .operators import (
     WM_OT_create_3d_contours,
     WM_OT_create_loss_landscape,
     WM_OT_create_optimization,
     WM_OT_create_winding_field,
+    WM_OT_toggle_freeze_grid,
+    WM_OT_dump_forward_bvh,
+    WM_OT_dump_backward_bvh,
     update_contour_shells,
     update_all_winding_fields,
 )
-from .winder_wrapper import (
-    compute_geometry_gradients,
-    compute_winding_field,
-    extract_geometry_data,
-)
-
 
 class WinderProperties(bpy.types.PropertyGroup):
     geometry_mode: bpy.props.EnumProperty(
@@ -110,10 +106,21 @@ class VIEW3D_PT_winder_panel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         props = context.scene.winder_props
+        obj = context.active_object
 
         layout.prop(props, "geometry_mode")
         layout.prop(props, "query_res")
-        layout.prop(props, "grid_padding")
+
+        row = layout.row(align=True)
+        row.prop(props, "grid_padding")
+
+        # Display Freeze / Unfreeze toggle button for active object
+        if obj and obj.type == "MESH":
+            is_frozen = obj.get("winder_is_grid_frozen", False)
+            btn_text = "Unfreeze Grid" if is_frozen else "Freeze Grid"
+            btn_icon = "LOCKED" if is_frozen else "UNLOCKED"
+            row.operator("winder.toggle_freeze_grid", text=btn_text, icon=btn_icon)
+
         layout.prop(props, "is_quiver_creation_active")
 
         layout.separator()
@@ -131,6 +138,14 @@ class VIEW3D_PT_winder_panel(bpy.types.Panel):
         layout.prop(props, "contour_count")
         layout.prop(props, "is_winding_field")
         layout.operator("winder.create_3d_contours", icon="SURFACE_NCURVE")
+
+        # BVH Debug Section
+        layout.separator()
+        box = layout.box()
+        box.label(text="BVH8 Tree Debug", icon="NODETREE")
+        bvh_row = box.row(align=True)
+        bvh_row.operator("winder.dump_forward_bvh", text="Dump Forward", icon="FORWARD")
+        bvh_row.operator("winder.dump_backward_bvh", text="Dump Backward", icon="BACK")
 
 
 # -------------------------------------------------------------------------
@@ -162,9 +177,12 @@ classes = (
     WinderProperties,
     VIEW3D_PT_winder_panel,
     WM_OT_create_winding_field,
+    WM_OT_toggle_freeze_grid,
     WM_OT_create_optimization,
     WM_OT_create_loss_landscape,
     WM_OT_create_3d_contours,
+    WM_OT_dump_forward_bvh,
+    WM_OT_dump_backward_bvh,
 )
 
 

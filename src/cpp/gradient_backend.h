@@ -2,6 +2,7 @@
 
 #include "aabb.h"
 #include "bvh8.h"
+#include "scene_normalization.h"
 #include "taylor_coefficients.h"
 #include <cstddef>
 #include <cstdint>
@@ -31,6 +32,8 @@ private:
   const size_t m_query_count;
 
   cudaStream_t m_build_stream;
+
+  SceneNormalization m_norm = SceneNormalization::identity();
 
   uint32_t *m_to_internal;
   float *m_sorted_queries;

@@ -3,9 +3,9 @@
 #include "binary_node.h"
 #include "bvh8.h"
 #include "common.cuh"
-#include "soa.h"
 #include "cub/warp/warp_reduce.cuh"
 #include "geometry.h"
+#include "soa.h"
 #include "vec3.h"
 #include <cmath>
 #include <cooperative_groups.h>
@@ -25,8 +25,9 @@
 
 namespace cg = cooperative_groups;
 
-__global__ void
-convert_binary_tree_to_bvh8_kernel(__grid_constant__ const ConvertBinary2BVH8Params params) {
+
+__global__ void convert_binary_tree_to_bvh8_kernel(
+    __grid_constant__ const ConvertBinary2BVH8Params params) {
 
   cg::grid_group grid = cg::this_grid();
   cg::thread_block block = cg::this_thread_block();
@@ -133,6 +134,7 @@ convert_binary_tree_to_bvh8_kernel(__grid_constant__ const ConvertBinary2BVH8Par
 
       // index for this bvh8 node
       uint32_t bvh8_idx = current_level_offset + idx;
+
       // This thread will write its childs at its offset within the block
       // go to start of level -> skip inner nodes of this level ->  skip childs
       // of earlier blocks -> skip childs earlier threas in this block
@@ -201,6 +203,7 @@ convert_binary_tree_to_bvh8_kernel(__grid_constant__ const ConvertBinary2BVH8Par
     }
     // level synchronization
     grid.sync();
+
     uint32_t next_level_width = __ldcg(params.global_counter);
     current_level_offset += current_level_width;
     current_level_width = next_level_width;

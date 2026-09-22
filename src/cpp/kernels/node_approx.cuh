@@ -338,7 +338,8 @@ __device__ __forceinline__ auto compute_node_approximation(
   // Compute contractions using the unit vector, then scale via float32 at the
   // end to prevent overflows of the float16
   result +=
-      computeZeroOrderContribution(zero_order_coeff, r_hat_f16) * factor_zero;
+      computeZeroOrderContribution(zero_order_coeff, r_hat_f16) *
+      factor_zero;
   result += computeFirstOrderContribution(first_order_coeff, r_hat_f16) *
             factor_first;
   result += computeSecondOrderContribution(second_order_coeff, r_hat_f16) *
@@ -346,7 +347,6 @@ __device__ __forceinline__ auto compute_node_approximation(
 
   return result;
 }
-
 
 /**
  * @brief Computes the complete multi-order Taylor approximation of loss
@@ -427,10 +427,8 @@ __device__ __forceinline__ auto compute_node_gradient_approximation(
 
   constexpr float INV_4PI = -0.07957747154594767F; // -1.0 / (4.0 * pi)
 
-  return PointNormal{.p=grad_p * INV_4PI, .n=grad_m * INV_4PI};
+  return PointNormal{.p = grad_p * INV_4PI, .n = grad_m * INV_4PI};
 }
-
-
 
 /**
  * @brief Scale-invariant 0th + 1st + 2nd order Taylor approximation of loss
@@ -449,32 +447,32 @@ __device__ __forceinline__ auto compute_node_gradient_approximation(
   r[0] = geometry.v0 - center_of_mass;
   r[1] = geometry.v1 - center_of_mass;
   r[2] = geometry.v2 - center_of_mass;
-  #pragma unroll
+#pragma unroll
   for (int i = 0; i < 3; ++i) {
     d_raw[i] = r[i].length();
   }
 
   float L_ref = fmaxf(fmaxf(d_raw[0], d_raw[1]), d_raw[2]);
-  if (L_ref < 1e-12F) {
+  if (L_ref < 2e-12F) {
     L_ref = 1e-12F;
   }
 
-  const float inv_L  = 1.F / L_ref;
+  const float inv_L = 1.F / L_ref;
   const float inv_L2 = inv_L * inv_L;
 
   Vec3 r_bar[3];
   float d[3];
   Vec3 r_hat[3];
 
-  #pragma unroll
+#pragma unroll
   for (int i = 0; i < 3; ++i) {
     r_bar[i] = r[i] * inv_L;
-    d[i]     = d_raw[i] * inv_L;
+    d[i] = d_raw[i] * inv_L;
     r_hat[i] = r_bar[i] * (1.F / d[i]);
   }
 
   const float G0_bar = G_0;
-  const Vec3 G1_bar  = G_1 * inv_L;
+  const Vec3 G1_bar = G_1 * inv_L;
 
   // SymMat3x3 indexing (0:xx, 1:xy, 2:xz, 3:yy, 4:yz, 5:zz)
   const float g00 = G_2.data[0] * inv_L2;
@@ -491,7 +489,7 @@ __device__ __forceinline__ auto compute_node_gradient_approximation(
   float alpha[3];
   Vec3 V[3];
 
-  #pragma unroll
+#pragma unroll
   for (int p = 0; p < 3; ++p) {
     const int j = (p + 1) % 3;
     const int m = (p + 2) % 3;
@@ -507,19 +505,20 @@ __device__ __forceinline__ auto compute_node_gradient_approximation(
   const float dot12 = r_bar[1].dot(r_bar[2]);
   const float dot20 = r_bar[2].dot(r_bar[0]);
   const float dot01 = r_bar[0].dot(r_bar[1]);
-  const float D = d[0] * d[1] * d[2] + dot12 * d[0] + dot20 * d[1] + dot01 * d[2];
+  const float D =
+      d[0] * d[1] * d[2] + dot12 * d[0] + dot20 * d[1] + dot01 * d[2];
 
   const float S = N * N + D * D;
-  const float inv_S  = 1.F / S;
+  const float inv_S = 1.F / S;
   const float inv_S2 = inv_S * inv_S;
   const float inv_S3 = inv_S2 * inv_S;
 
   Vec3 W[3];
   Vec3 T0[3];
 
-  #pragma unroll
+#pragma unroll
   for (int p = 0; p < 3; ++p) {
-    W[p]  = U[p] * D - V[p] * N;
+    W[p] = U[p] * D - V[p] * N;
     T0[p] = W[p] * (G0_bar * (2.F * inv_S));
   }
 
@@ -534,9 +533,9 @@ __device__ __forceinline__ auto compute_node_gradient_approximation(
   float d_de[3];
   Vec3 r_hat_de[3];
 
-  #pragma unroll
+#pragma unroll
   for (int p = 0; p < 3; ++p) {
-    d_de[p]     = r_hat[p].dot(e);
+    d_de[p] = r_hat[p].dot(e);
     r_hat_de[p] = (e - r_hat[p] * d_de[p]) * (1.F / d[p]);
   }
 
@@ -544,18 +543,16 @@ __device__ __forceinline__ auto compute_node_gradient_approximation(
   float alpha_de[3];
   Vec3 V_de[3];
 
-  #pragma unroll
+#pragma unroll
   for (int p = 0; p < 3; ++p) {
     const int j = (p + 1) % 3;
     const int m = (p + 2) % 3;
 
     U_de[p] = Vec3::cross(r_bar[j] - r_bar[m], e);
-    alpha_de[p] = d[m] * d_de[j] + d[j] * d_de[m] + (r_bar[j] + r_bar[m]).dot(e);
-    V_de[p] = r_hat[p] * alpha_de[p] 
-            + r_hat_de[p] * alpha[p] 
-            + r_bar[j] * d_de[m] 
-            + r_bar[m] * d_de[j] 
-            + e * (d[j] + d[m]);
+    alpha_de[p] =
+        d[m] * d_de[j] + d[j] * d_de[m] + (r_bar[j] + r_bar[m]).dot(e);
+    V_de[p] = r_hat[p] * alpha_de[p] + r_hat_de[p] * alpha[p] +
+              r_bar[j] * d_de[m] + r_bar[m] * d_de[j] + e * (d[j] + d[m]);
   }
 
   const float N_de = U_sum.dot(e);
@@ -564,54 +561,52 @@ __device__ __forceinline__ auto compute_node_gradient_approximation(
 
   Vec3 T1[3];
 
-  #pragma unroll
+#pragma unroll
   for (int p = 0; p < 3; ++p) {
-    const Vec3 W_de_p = (U[p] * D_de + U_de[p] * D) - (V[p] * N_de + V_de[p] * N);
+    const Vec3 W_de_p =
+        (U[p] * D_de + U_de[p] * D) - (V[p] * N_de + V_de[p] * N);
     T1[p] = W_de_p * (2.F * inv_S) - W[p] * (2.F * S_de * inv_S2);
   }
 
   // -------------------------------------------------------------------------
   // 4. Exact 2nd Directional Derivative Operator (T2 via Polarization)
   // -------------------------------------------------------------------------
-  const float u_weights[6] = {
-      0.5F * (g00 - g01 - g20),
-      0.5F * (g11 - g01 - g12),
-      0.5F * (g22 - g12 - g20),
-      0.5F * g01,
-      0.5F * g12,
-      0.5F * g20
-  };
+  const float u_weights[6] = {0.5F * (g00 - g01 - g20),
+                              0.5F * (g11 - g01 - g12),
+                              0.5F * (g22 - g12 - g20),
+                              0.5F * g01,
+                              0.5F * g12,
+                              0.5F * g20};
 
-  const Vec3 u_dirs[6] = { // in local memory
-      {1.F, 0.F, 0.F},
-      {0.F, 1.F, 0.F},
-      {0.F, 0.F, 1.F},
-      {1.F, 1.F, 0.F},
-      {0.F, 1.F, 1.F},
-      {1.F, 0.F, 1.F}
-  };
+  const Vec3 u_dirs[6] = {// in local memory
+                          {1.F, 0.F, 0.F}, {0.F, 1.F, 0.F}, {0.F, 0.F, 1.F},
+                          {1.F, 1.F, 0.F}, {0.F, 1.F, 1.F}, {1.F, 0.F, 1.F}};
 
   Vec3 T2[3] = {Vec3::zero(), Vec3::zero(), Vec3::zero()};
 
   // Keep this loop to reuse working registers across directions
   for (int k = 0; k < 6; ++k) {
     const float weight = u_weights[k]; // TODO local memory
-    if (weight == 0.F) continue;
+    if (weight == 0.F)
+      continue;
 
-    const Vec3 u = u_dirs[k]; // TODO leads to local memory access - use switch case or something like that
+    const Vec3 u = u_dirs[k]; // TODO leads to local memory access - use switch
+                              // case or something like that
+    const float u_norm2 = u.dot(u);
 
     float d_du[3];
     float d2_du2[3];
     Vec3 r_hat_du[3];
     Vec3 r_hat2_du2[3];
 
-    #pragma unroll
+#pragma unroll
     for (int p = 0; p < 3; ++p) {
-      d_du[p]   = r_hat[p].dot(u);
-      d2_du2[p] = (1.F - d_du[p] * d_du[p]) / d[p];
+      d_du[p] = r_hat[p].dot(u);
+      d2_du2[p] = (u_norm2 - d_du[p] * d_du[p]) / d[p];
 
-      r_hat_du[p]   = (u - r_hat[p] * d_du[p]) / d[p];
-      r_hat2_du2[p] = (r_hat_du[p] * (-2.F * d_du[p]) - r_hat[p] * d2_du2[p]) / d[p];
+      r_hat_du[p] = (u - r_hat[p] * d_du[p]) / d[p];
+      r_hat2_du2[p] =
+          (r_hat_du[p] * (-2.F * d_du[p]) - r_hat[p] * d2_du2[p]) / d[p];
     }
 
     Vec3 U_du[3];
@@ -620,46 +615,43 @@ __device__ __forceinline__ auto compute_node_gradient_approximation(
     Vec3 V_du[3];
     Vec3 V2_du2[3];
 
-    #pragma unroll
+#pragma unroll
     for (int p = 0; p < 3; ++p) {
       const int j = (p + 1) % 3;
       const int m = (p + 2) % 3;
 
-      U_du[p]       = Vec3::cross(r_bar[j] - r_bar[m], u);
-      alpha_du[p]   = d[m] * d_du[j] + d[j] * d_du[m] + (r_bar[j] + r_bar[m]).dot(u);
-      alpha2_du2[p] = d2_du2[j] * d[m] + 2.F * d_du[j] * d_du[m] + d[j] * d2_du2[m] + 2.F;
+      U_du[p] = Vec3::cross(r_bar[j] - r_bar[m], u);
+      alpha_du[p] =
+          d[m] * d_du[j] + d[j] * d_du[m] + (r_bar[j] + r_bar[m]).dot(u);
+      alpha2_du2[p] = d2_du2[j] * d[m] + 2.F * d_du[j] * d_du[m] +
+                      d[j] * d2_du2[m] + 2.F * u_norm2;
 
-      V_du[p] = r_hat[p] * alpha_du[p] 
-              + r_hat_du[p] * alpha[p] 
-              + r_bar[j] * d_du[m] 
-              + r_bar[m] * d_du[j] 
-              + u * (d[j] + d[m]);
+      V_du[p] = r_hat[p] * alpha_du[p] + r_hat_du[p] * alpha[p] +
+                r_bar[j] * d_du[m] + r_bar[m] * d_du[j] + u * (d[j] + d[m]);
 
-      V2_du2[p] = r_hat[p] * alpha2_du2[p]
-                + r_hat_du[p] * (2.F * alpha_du[p])
-                + r_hat2_du2[p] * alpha[p]
-                + r_bar[j] * d2_du2[m]
-                + r_bar[m] * d2_du2[j]
-                + u * (2.F * d_du[m] + 2.F * d_du[j]);
+      V2_du2[p] = r_hat[p] * alpha2_du2[p] + r_hat_du[p] * (2.F * alpha_du[p]) +
+                  r_hat2_du2[p] * alpha[p] + r_bar[j] * d2_du2[m] +
+                  r_bar[m] * d2_du2[j] + u * (2.F * d_du[m] + 2.F * d_du[j]);
     }
 
-    const float N_du   = U_sum.dot(u);
-    const float D_du   = V_sum.dot(u);
+    const float N_du = U_sum.dot(u);
+    const float D_du = V_sum.dot(u);
     const float D2_du2 = V_du[0].dot(u) + V_du[1].dot(u) + V_du[2].dot(u);
 
-    const float S_du   = 2.F * N * N_du + 2.F * D * D_du;
-    const float S2_du2 = 2.F * (N_du * N_du) + 2.F * (D_du * D_du) + 2.F * D * D2_du2;
+    const float S_du = 2.F * N * N_du + 2.F * D * D_du;
+    const float S2_du2 =
+        2.F * (N_du * N_du) + 2.F * (D_du * D_du) + 2.F * D * D2_du2;
 
-    #pragma unroll
+#pragma unroll
     for (int p = 0; p < 3; ++p) {
-      const Vec3 W_du_p = (U[p] * D_du + U_du[p] * D) - (V[p] * N_du + V_du[p] * N);
-      const Vec3 W2_du2_p = (U[p] * D2_du2 + U_du[p] * (2.F * D_du)) 
-                          - (V_du[p] * (2.F * N_du) + V2_du2[p] * N);
+      const Vec3 W_du_p =
+          (U[p] * D_du + U_du[p] * D) - (V[p] * N_du + V_du[p] * N);
+      const Vec3 W2_du2_p = (U[p] * D2_du2 + U_du[p] * (2.F * D_du)) -
+                            (V_du[p] * (2.F * N_du) + V2_du2[p] * N);
 
-      const Vec3 Q_p = W2_du2_p * (2.F * inv_S)
-                     - W_du_p * (4.F * S_du * inv_S2)
-                     - W[p] * (2.F * S2_du2 * inv_S2)
-                     + W[p] * (4.F * S_du * S_du * inv_S3);
+      const Vec3 Q_p =
+          W2_du2_p * (2.F * inv_S) - W_du_p * (4.F * S_du * inv_S2) -
+          W[p] * (2.F * S2_du2 * inv_S2) + W[p] * (4.F * S_du * S_du * inv_S3);
 
       T2[p] += Q_p * weight;
     }
@@ -672,9 +664,9 @@ __device__ __forceinline__ auto compute_node_gradient_approximation(
   const float scale = INV_4PI * inv_L;
 
   Triangle result;
-  result.v0 = (T0[0]+T1[0]+T2[0]) * scale;
-  result.v1 = (T0[1]+T1[1]+T2[1]) * scale;
-  result.v2 = (T0[2]+T1[2]+T2[2]) * scale;
+  result.v0 = (T0[0] + T1[0] + T2[0]) * scale;
+  result.v1 = (T0[1] + T1[1] + T2[1]) * scale;
+  result.v2 = (T0[2] + T1[2] + T2[2]) * scale;
 
   return result;
 }

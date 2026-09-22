@@ -140,7 +140,6 @@ class CudaStream:
             and self.ptr.value
         ):
             prev = self._set_active_device()
-            print("DEBUG: CudaStream.destroy: destroying stream")
             _cudart.cudaStreamDestroy(self.ptr)
             self._restore_device(prev)
             self.ptr = None
@@ -149,13 +148,10 @@ class CudaStream:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        print("DEBUG: CudaStream.__exit__: synchronizing stream")
         self.synchronize()
 
-        print("DEBUG: CudaStream.__exit__: releasing keep_alive")
         self._keep_alive.clear()
 
-        print("DEBUG: CudaStream.__exit__: destroying stream")
         self.destroy()
 
     def __del__(self):
@@ -166,7 +162,6 @@ class CudaStream:
         ):
             try:
                 prev = self._set_active_device()
-                print("DEBUG: CudaStream.__del__: destroying stream")
                 _cudart.cudaStreamDestroy(self.ptr)
                 self._restore_device(prev)
             except Exception:

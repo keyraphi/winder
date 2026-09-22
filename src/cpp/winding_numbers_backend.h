@@ -2,6 +2,7 @@
 #include "aabb.h"
 #include "bvh8.h"
 #include "geometry.h"
+#include "scene_normalization.h"
 #include "taylor_coefficients.h"
 #include "utils.h"
 #include "vec3.h"
@@ -19,7 +20,6 @@
 #define LEAF_SIZE 32
 #define L2_ALIGN 128
 
-
 template <IsGeometry Geometry> class WindingNumbersBackend {
 
 public:
@@ -31,15 +31,17 @@ public:
 
   static auto CreateFromMesh(const float *vertices, size_t vertex_count,
                              const uint32_t *triangle_indices,
-                             size_t triangle_count, int device_id, uint64_t stream)
+                             size_t triangle_count, int device_id,
+                             uint64_t stream)
       -> std::unique_ptr<WindingNumbersBackend<Triangle>>;
 
   static auto CreateFromPoints(const float *points, const float *scaled_normals,
-                               size_t point_count, int device_id, uint64_t stream)
+                               size_t point_count, int device_id,
+                               uint64_t stream)
       -> std::unique_ptr<WindingNumbersBackend<PointNormal>>;
 
-  auto compute(const float *queries, size_t query_count, float* winding_numbers, float beta = -1.F,
-               float epsilon = -1.F, size_t stream = 0) const
+  auto compute(const float *queries, size_t query_count, float *winding_numbers,
+               float beta = -1.F, float epsilon = -1.F, size_t stream = 0) const
       -> void;
 
   [[nodiscard]] auto point_count() const -> size_t { return m_count; }
@@ -61,6 +63,9 @@ private:
   // Private constructor used in factories. Allocates vectors but doesn't fill
   // them yet
   WindingNumbersBackend(size_t size, int device_id, uint64_t stream);
+
+  SceneNormalization m_norm = SceneNormalization::identity();
+
 
 public: // TODO DEBUG  make private!
   const size_t m_count;

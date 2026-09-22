@@ -441,12 +441,22 @@ NB_MODULE(winder_module, m) {
                 `out_winding_numbers`:
                     (M,) float32 CUDA array pre allocated. Will be filled with the winding numbers for the queries
                 `epsilon` : float, optional
-                    Regularization scale (smoothing radius) used to prevent numerical 
-                    singularities (NaN/infinity) when queries land near points in point clouds.
-                    Only applies to point cloud backends.
-                    - distance >= 2*epsilon: Acts as standard unregularized potential.
-                    - distance < 2*epsilon: Smoothly dampens potential to a finite maximum.
-                    Use any negative number to get the default value (1/250).
+                    Dimensionless regularization scale for point clouds, expressed
+                    as a fraction of the bounding box diagonal. Sets the smoothing
+                    radius below which the unregularized 1/r^2 field is damped to
+                    a finite value, preventing NaN/Inf when a query lands near a
+                    source point. Ignored for triangle and mesh backends.
+
+                    Behavior as a function of `t = ||p - q|| / (epsilon * diag)`:
+                      - t >= 2   : unregularized potential (1/r^2)
+                      - t <  2   : smooth falloff, finite at t = 0
+                      - t <  0.1 : near-field regime, bounded by a cubic limit
+
+                    Because the value is a fraction, it is invariant to the units
+                    and scale of the input, which makes it safe to optimize as a
+                    trainable parameter across meshes of different sizes.
+
+                    Use any negative number to select the default (1/250).
                 `stream`  : int, optional
                     The raw 64-bit identifier (handle) of a CUDA stream. 
                     Allows enqueuing operations asynchronously within deep learning frameworks.
@@ -538,9 +548,9 @@ NB_MODULE(winder_module, m) {
                         const Vec3_t &, GradResult_t &, float, const uint64_t>(
           &brute_force_gradients),
       "grad_output"_a, "points"_a, "scaled_normals"_a, "queries"_a,
-      "epsilon"_a = -1, "out_gradients"_a, "stream"_a = 0,
+      "out_gradients"_a, "epsilon"_a = -1, "stream"_a = 0,
       nb::sig("def brute_force_gradients(grad_output: "
-              "winder.types.Array[winder.types.Shape[winder.types.N], "
+              "winder.types.Array[winder.types.Shape[winder.types.M], "
               "winder.types.float32, "
               "winder.types.cuda], points: "
               "winder.types.Array[winder.types.Shape[winder.types.N, "
@@ -590,11 +600,22 @@ NB_MODULE(winder_module, m) {
                       with respect to the source positions at index i (dL/dp)
                       Calculated as: dL/dp = (dL/dw)^T * (dw/dp).
                 `epsilon` : float, optional
-                    Regularization scale (smoothing radius) used to prevent numerical 
-                    singularities (NaN/infinity) when queries land near points in point clouds.
-                    - distance >= 2*epsilon: Acts as standard unregularized potential.
-                    - distance < 2*epsilon: Smoothly dampens potential to a finite maximum.
-                    Use any negative number to get the default value (1/250).
+                    Dimensionless regularization scale for point clouds, expressed
+                    as a fraction of the bounding box diagonal. Sets the smoothing
+                    radius below which the unregularized 1/r^2 field is damped to
+                    a finite value, preventing NaN/Inf when a query lands near a
+                    source point. Ignored for triangle and mesh backends.
+
+                    Behavior as a function of `t = ||p - q|| / (epsilon * diag)`:
+                      - t >= 2   : unregularized potential (1/r^2)
+                      - t <  2   : smooth falloff, finite at t = 0
+                      - t <  0.1 : near-field regime, bounded by a cubic limit
+
+                    Because the value is a fraction, it is invariant to the units
+                    and scale of the input, which makes it safe to optimize as a
+                    trainable parameter across meshes of different sizes.
+
+                    Use any negative number to select the default (1/250).
                 `stream` : int, optional
                     The raw 64-bit identifier (handle) of a CUDA stream. 
                     Allows enqueuing operations asynchronously within deep learning frameworks.
@@ -670,7 +691,7 @@ NB_MODULE(winder_module, m) {
       "grad_output"_a, "triangles"_a, "queries"_a, "out_gradients"_a,
       "stream"_a = 0,
       nb::sig("def brute_force_gradients(grad_output: "
-              "winder.types.Array[winder.types.Shape[winder.types.N], "
+              "winder.types.Array[winder.types.Shape[winder.types.M], "
               "winder.types.float32, "
               "winder.types.cuda], triangles: "
               "winder.types.Array[winder.types.Shape[winder.types.N, "
@@ -826,15 +847,25 @@ NB_MODULE(winder_module, m) {
                     Scalar that controls the degree of approximation.
                     Larger beta leads to more precise results, but also slower execution.
                     Use any negative number to get default values.
-                    Default for point clouds is 2.0.
-                    Default for triangles is 2.3
+                    Default for point clouds is 2.3.
+                    Default for triangles is 2.0
                 `epsilon` : float, optional
-                    Regularization scale (smoothing radius) used to prevent numerical 
-                    singularities (NaN/infinity) when queries land near points in point clouds.
-                    Only applies to point cloud fields and is ignored for triangle based fields.
-                    - distance >= 2*epsilon: Acts as standard unregularized potential.
-                    - distance < 2*epsilon: Smoothly dampens potential to a finite maximum.
-                    Use any negative number to get the default value (1/250).
+                    Dimensionless regularization scale for point clouds, expressed
+                    as a fraction of the bounding box diagonal. Sets the smoothing
+                    radius below which the unregularized 1/r^2 field is damped to
+                    a finite value, preventing NaN/Inf when a query lands near a
+                    source point. Ignored for triangle and mesh backends.
+
+                    Behavior as a function of `t = ||p - q|| / (epsilon * diag)`:
+                      - t >= 2   : unregularized potential (1/r^2)
+                      - t <  2   : smooth falloff, finite at t = 0
+                      - t <  0.1 : near-field regime, bounded by a cubic limit
+
+                    Because the value is a fraction, it is invariant to the units
+                    and scale of the input, which makes it safe to optimize as a
+                    trainable parameter across meshes of different sizes.
+
+                    Use any negative number to select the default (1/250).
                 `stream`  : int, optional
                     The raw 64-bit identifier (handle) of a CUDA stream. 
                     Allows enqueuing operations asynchronously within deep learning frameworks.
@@ -921,7 +952,7 @@ NB_MODULE(winder_module, m) {
                     Scalar that controls the degree of approximation.
                     Larger beta leads to more precise results, but also slower execution.
                     Use any negative number to get default values.
-                    Default for triangles is 2.3 TODO EXPERIMENT
+                    Default for triangles is 2.3 
                 `stream` : int, optional
                     The raw 64-bit identifier (handle) of a CUDA stream. 
                     Allows enqueuing operations asynchronously within deep learning frameworks.
@@ -964,7 +995,7 @@ NB_MODULE(winder_module, m) {
                     Scalar that controls the degree of approximation.
                     Larger beta leads to more precise results, but also slower execution.
                     Use any negative number to get default values.
-                    Default for triangles is 2.3 TODO EXPERIMENT
+                    Default for triangles is 2.3 
                 `stream` : int, optional
                     The raw 64-bit identifier (handle) of a CUDA stream. 
                     Allows enqueuing operations asynchronously within deep learning frameworks.
@@ -1019,13 +1050,24 @@ NB_MODULE(winder_module, m) {
                     Scalar that controls the degree of approximation.
                     Larger beta leads to more precise results, but also slower execution.
                     Use any negative number to get default values.
-                    Default for point clouds is 2.0. TODO EXPERIMENT
+                    Default for point clouds is 2.3.
                 `epsilon` : float, optional
-                    Regularization scale (smoothing radius) used to prevent numerical 
-                    singularities (NaN/infinity) when queries land near points in point clouds.
-                    - distance >= 2*epsilon: Acts as standard unregularized potential.
-                    - distance < 2*epsilon: Smoothly dampens potential to a finite maximum.
-                    Use any negative number to get the default value (1/250).
+                    Dimensionless regularization scale for point clouds, expressed
+                    as a fraction of the bounding box diagonal. Sets the smoothing
+                    radius below which the unregularized 1/r^2 field is damped to
+                    a finite value, preventing NaN/Inf when a query lands near a
+                    source point. Ignored for triangle and mesh backends.
+
+                    Behavior as a function of `t = ||p - q|| / (epsilon * diag)`:
+                      - t >= 2   : unregularized potential (1/r^2)
+                      - t <  2   : smooth falloff, finite at t = 0
+                      - t <  0.1 : near-field regime, bounded by a cubic limit
+
+                    Because the value is a fraction, it is invariant to the units
+                    and scale of the input, which makes it safe to optimize as a
+                    trainable parameter across meshes of different sizes.
+
+                    Use any negative number to select the default (1/250).
                 `stream` : int, optional
                     The raw 64-bit identifier (handle) of a CUDA stream. 
                     Allows enqueuing operations asynchronously within deep learning frameworks.

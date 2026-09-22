@@ -1,33 +1,64 @@
 #pragma once
-#include "vec3.h"
 #include "kernels/common.cuh"
+#include "vec3.h"
 #include <cmath>
 #include <cstdint>
+#include <cuda_fp16.h>
 #include <cuda_runtime_api.h>
 #include <sys/types.h>
 #include <vector_types.h>
-#include <cuda_fp16.h>
 
+// Scene bounds is for the full scene and for normalization. AABB is used in the
+// normalized coordinates
+struct SceneBounds {
+  Vec3 min; // full 32 bit precission
+  Vec3 max;
+
+  __host__ __device__ __forceinline__ static auto empty() -> SceneBounds {
+    SceneBounds result;
+    result.min = Vec3{.x=INFINITY, .y=INFINITY, .z=INFINITY};
+    result.max = Vec3{.x=-INFINITY, .y=-INFINITY, .z=-INFINITY};
+    return result;
+  }
+
+  __host__ __device__ __forceinline__ static auto merge(const SceneBounds &a,
+                                                        const SceneBounds &b)
+      -> SceneBounds {
+    SceneBounds result;
+
+    result.min = Vec3{.x = fminf(a.min.x, b.min.x),
+                      .y = fminf(a.min.y, b.min.y),
+                      .z = fminf(a.min.z, b.min.z)};
+    result.max = Vec3{.x = fmaxf(a.max.x, b.max.x),
+                      .y = fmaxf(a.max.y, b.max.y),
+                      .z = fmaxf(a.max.z, b.max.z)};
+    return result;
+  }
+  __host__ __device__ __forceinline__ auto diagonal() const -> Vec3 {
+    return max - min;
+  }
+};
 
 // 26 byte (compiler will align it to 28 byte)
 struct AABB {
   Vec3_f16 min; // 6 byte
   Vec3_f16 max; // 6 byte
 
-  Vec3 center_of_mass;  // 12 byte
-  half max_distance;  // 2 byte
-
+  Vec3 center_of_mass; // 12 byte
+  half max_distance;   // 2 byte
 
   // factory for empty AABB
   static __host__ __device__ __forceinline__ auto empty() -> AABB {
     AABB result;
-    result.min = Vec3_f16{INFINITY, INFINITY, INFINITY};
-    result.max = Vec3_f16{-INFINITY, -INFINITY, -INFINITY};
+    result.min = Vec3_f16{.x=INFINITY, .y=INFINITY, .z=INFINITY};
+    result.max = Vec3_f16{.x=-INFINITY, .y=-INFINITY, .z=-INFINITY};
     return result;
   }
 
-  __host__ __device__ __forceinline__ auto geometryc_center() const -> Vec3_f16 {
-    return {(min.x + max.x) * __float2half(0.5F), (min.y + max.y) * __float2half(0.5F),
+  __host__ __device__ __forceinline__ auto geometryc_center() const
+      -> Vec3_f16 {
+    return {(min.x + max.x) * __float2half(0.5F),
+            (min.y + max.y) * __float2half(0.5F),
             (min.z + max.z) * __float2half(0.5F)};
   }
 
@@ -52,9 +83,9 @@ struct AABB {
     AABB result;
 
     result.min = Vec3_f16{__hmin(a.min.x, b.min.x), __hmin(a.min.y, b.min.y),
-                      __hmin(a.min.z, b.min.z)};
+                          __hmin(a.min.z, b.min.z)};
     result.max = Vec3_f16{__hmax(a.max.x, b.max.x), __hmax(a.max.y, b.max.y),
-                      __hmax(a.max.z, b.max.z)};
+                          __hmax(a.max.z, b.max.z)};
     // compute new center of mass
     uint32_t total_element_count = a_element_count + b_element_count;
     float a_factor = (float)a_element_count / (float)total_element_count;
@@ -66,7 +97,7 @@ struct AABB {
     result.center_of_mass = com_new;
 
     // Max distance can not be merged
-    // It has to be set seperately
+    // It has to be set separately
     return result;
   }
   __host__ __device__ __forceinline__ static auto
@@ -74,9 +105,9 @@ struct AABB {
                  const float b_weight) -> AABB {
     AABB result;
     result.min = Vec3_f16{__hmin(a.min.x, b.min.x), __hmin(a.min.y, b.min.y),
-                      __hmin(a.min.z, b.min.z)};
+                          __hmin(a.min.z, b.min.z)};
     result.max = Vec3_f16{__hmax(a.max.x, b.max.x), __hmax(a.max.y, b.max.y),
-                      __hmax(a.max.z, b.max.z)};
+                          __hmax(a.max.z, b.max.z)};
 
     float total_weight = a_weight + b_weight;
     float a_factor = total_weight > 0.F ? (a_weight / total_weight) : 0.5F;
@@ -91,6 +122,13 @@ struct AABB {
   }
 };
 
+__host__ __device__ __forceinline__ auto Vec3::get_bounds() const
+    -> SceneBounds {
+  SceneBounds result;
+  result.min = *this;
+  result.max = *this;
+  return result;
+}
 __host__ __device__ __forceinline__ auto Vec3::get_aabb() const -> AABB {
   AABB result;
   result.min = Vec3_f16::from_float(*this);

@@ -1,9 +1,12 @@
 #include "geometry.h"
 #include "kernels/brute_force.cuh"
+#include "kernels/common.cuh"
 #include "kernels/mesh.cuh"
+#include "scene_normalization.h"
 #include "utils.h"
 #include "vec3.h"
 #include "winder_brute_force.h"
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -12,18 +15,11 @@
 #include <cuda_runtime_api.h>
 #include <driver_types.h>
 #include <format>
+#include <ostream>
 #include <stdexcept>
 #include <thrust/execution_policy.h>
 #include <thrust/reduce.h>
 
-#define CUDA_CHECK(expr_to_check)                                              \
-  do {                                                                         \
-    cudaError_t result = expr_to_check;                                        \
-    if (result != cudaSuccess) {                                               \
-      fprintf(stderr, "CUDA Runtime Error: %s:%i:%d = %s\n", __FILE__,         \
-              __LINE__, result, cudaGetErrorString(result));                   \
-    }                                                                          \
-  } while (0)
 
 auto brute_force_point_normal_impl(
     const float *points, const float *scaled_normals, const float *queries,
@@ -44,9 +40,13 @@ auto brute_force_point_normal_impl(
   CUDA_CHECK(cudaEventRecord(start, compute_stream));
 
   if (epsilon < 0.F) {
-    // default from 3D Reconstruction with Fast Dipole Sums
+    // default from 3D ueconstruction with Fast Dipole Sums
     epsilon = 1.F / 250.F;
   }
+
+  SceneBounds scene_bounds = computeSceneBounds(points_vec3, geometry_count);
+  float max_dim = SceneNormalization::effective_extent(scene_bounds);
+  epsilon *= max_dim;
 
   compute_brute_force_point_normal(
       queries_vec3, points_vec3, normals_vec3, (uint32_t)query_count,
@@ -64,6 +64,9 @@ auto brute_force_mesh_impl(const float *vertices,
                            const size_t vertex_count, const size_t query_count,
                            float *winding_numbers, const int device_id,
                            const uint64_t stream) -> void {
+  if (geometry_count == 0) {
+    return;
+  }
   ScopedCudaDevice device_scope{device_id};
 
   cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
@@ -139,6 +142,10 @@ auto brute_force_point_normal_gradient_impl(
     epsilon = 1.F / 250.F;
   }
 
+  SceneBounds scene_bounds = computeSceneBounds(points_vec3, geometry_count);
+  float max_dim = SceneNormalization::effective_extent(scene_bounds);
+  epsilon *= max_dim;
+
   cudaEvent_t start, finish;
   CUDA_CHECK(cudaEventCreate(&start));
   CUDA_CHECK(cudaEventCreate(&finish));
@@ -193,6 +200,10 @@ auto brute_force_mesh_gradient_impl(
     const size_t geometry_count, const size_t query_count,
     const size_t vertex_count, float *vertice_grads, const int device_id,
     const uint64_t stream) -> void {
+
+  if (geometry_count == 0) {
+    return;
+  }
 
   cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
   auto compute_stream_policy = thrust::cuda::par.on(compute_stream);

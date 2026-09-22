@@ -7,11 +7,10 @@
 #include <cmath>
 #include <concepts>
 #include <cstdint>
-#include <cstdlib>
 #include <cuda_fp16.h>
 #include <cuda_runtime_api.h>
 #include <format>
-#include <math.h>
+#include <cmath>
 #include <string>
 #include <vector_types.h>
 
@@ -21,11 +20,11 @@ struct Triangle {
 
   __host__ __device__ __forceinline__ auto
   operator+(const Triangle &other) const -> Triangle {
-    return Triangle{v0 + other.v0, v1 + other.v1, v2 + other.v2};
+    return Triangle{.v0=v0 + other.v0, .v1=v1 + other.v1, .v2=v2 + other.v2};
   }
   __host__ __device__ __forceinline__ auto
   operator-(const Triangle &other) const -> Triangle {
-    return Triangle{v0 - other.v0, v1 - other.v1, v2 - other.v2};
+    return Triangle{.v0=v0 - other.v0, .v1=v1 - other.v1, .v2=v2 - other.v2};
   }
   __host__ __device__ __forceinline__ auto operator+=(const Triangle &other)
       -> Triangle & {
@@ -35,16 +34,33 @@ struct Triangle {
     return *this;
   }
 
-  __host__ __device__ __forceinline__ auto get_aabb() const -> AABB {
+  __host__ __device__ __forceinline__ auto get_bounds() const -> SceneBounds {
     Vec3 min{
-        fminf(v0.x, fminf(v1.x, v2.x)),
-        fminf(v0.y, fminf(v1.y, v2.y)),
-        fminf(v0.z, fminf(v1.z, v2.z)),
+        .x=fminf(v0.x, fminf(v1.x, v2.x)),
+        .y=fminf(v0.y, fminf(v1.y, v2.y)),
+        .z=fminf(v0.z, fminf(v1.z, v2.z)),
     };
     Vec3 max{
-        fmaxf(v0.x, fmaxf(v1.x, v2.x)),
-        fmaxf(v0.y, fmaxf(v1.y, v2.y)),
-        fmaxf(v0.z, fmaxf(v1.z, v2.z)),
+        .x=fmaxf(v0.x, fmaxf(v1.x, v2.x)),
+        .y=fmaxf(v0.y, fmaxf(v1.y, v2.y)),
+        .z=fmaxf(v0.z, fmaxf(v1.z, v2.z)),
+    };
+    SceneBounds result;
+    result.min = min;
+    result.max = max;
+    return result;
+  }
+
+  __host__ __device__ __forceinline__ auto get_aabb() const -> AABB {
+    Vec3 min{
+        .x=fminf(v0.x, fminf(v1.x, v2.x)),
+        .y=fminf(v0.y, fminf(v1.y, v2.y)),
+        .z=fminf(v0.z, fminf(v1.z, v2.z)),
+    };
+    Vec3 max{
+        .x=fmaxf(v0.x, fmaxf(v1.x, v2.x)),
+        .y=fmaxf(v0.y, fmaxf(v1.y, v2.y)),
+        .z=fmaxf(v0.z, fmaxf(v1.z, v2.z)),
     };
     AABB result;
     result.min = min;
@@ -138,6 +154,7 @@ struct PointNormal {
     return (p - pos).length();
   }
 
+  __host__ __device__ __forceinline__ auto get_bounds() const -> SceneBounds;
   __host__ __device__ __forceinline__ auto get_aabb() const -> AABB;
   __host__ __device__ __forceinline__ auto centroid() const -> Vec3;
   __host__ __device__ __forceinline__ auto get_scaled_normal() const -> Vec3;
@@ -201,6 +218,9 @@ PointNormal::load(const SoAView<PointNormal> &view, uint32_t idx,
   return {{1e38F, 1e38F, 1e38F}, {0.F, 0.F, 0.F}};
 }
 
+__host__ __device__ __forceinline__ auto PointNormal::get_bounds() const -> SceneBounds {
+  return p.get_bounds();
+}
 __host__ __device__ __forceinline__ auto PointNormal::get_aabb() const -> AABB {
   return p.get_aabb();
 }
@@ -555,5 +575,6 @@ concept IsGeometry =
 template <typename T>
 concept IsPrimitiveGeometry = requires(T g) {
   { g.get_aabb() } -> std::same_as<AABB>;
+  { g.get_bounds() } -> std::same_as<SceneBounds>;
   { g.centroid() } -> std::same_as<Vec3>;
 };

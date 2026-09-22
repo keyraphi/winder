@@ -6,11 +6,15 @@ import numpy as np
 import mathutils
 import bpy
 
+from .bvh_parser import build_bvh_wireframe_mesh, parse_bvh_dot
+
 from .dlpack_bridge import CudaBuffer, CudaStream
 from .winder_wrapper import (
     extract_geometry_data,
     compute_winding_field,
     compute_geometry_gradients,
+    dump_forward_bvh,
+    dump_backward_bvh,
 )
 from .nodes_builder import (
     build_quiver_geometry_nodes,
@@ -22,7 +26,6 @@ from .nodes_builder import (
 
 def get_or_create_winding_objects(context, obj):
     """Retrieves or instantiates persistent Volume and Quiver objects in place."""
-    print("DEBUG: get_or_create_winding_objects")
     vol_name = f"WindingVol_{obj.name}"
     quiver_name = f"WindingQuiver_{obj.name}"
 
@@ -55,28 +58,37 @@ def get_grid_queries(obj, res=64, padding=0.2, min_aspect_ratio=0.33):
 
     Automatically handles 2D / flat objects (e.g. single triangles or planes)
     by enforcing a minimum thickness relative to the object's maximum dimension.
+    If the object has a frozen grid flag set, reuses the saved world-space bounds.
     """
-    print("DEBUG: get_grid_queries")
-    bbox = np.array([obj.matrix_world @ mathutils.Vector(b) for b in obj.bound_box])
-    min_raw, max_raw = bbox.min(axis=0), bbox.max(axis=0)
+    # Check if grid bounds are frozen for this object
+    if (
+        obj.get("winder_is_grid_frozen", False)
+        and "winder_frozen_min" in obj
+        and "winder_frozen_max" in obj
+    ):
+        min_b = np.array(obj["winder_frozen_min"], dtype=np.float32)
+        max_b = np.array(obj["winder_frozen_max"], dtype=np.float32)
+    else:
+        bbox = np.array([obj.matrix_world @ mathutils.Vector(b) for b in obj.bound_box])
+        min_raw, max_raw = bbox.min(axis=0), bbox.max(axis=0)
 
-    center = (min_raw + max_raw) * 0.5
-    extent = max_raw - min_raw
+        center = (min_raw + max_raw) * 0.5
+        extent = max_raw - min_raw
 
-    # Characteristic size of the object
-    max_dim = np.max(extent)
-    if max_dim < 1e-6:
-        max_dim = 1.0
+        # Characteristic size of the object
+        max_dim = np.max(extent)
+        if max_dim < 1e-6:
+            max_dim = 1.0
 
-    # Clamp thin/flat dimensions so the grid captures 3D field falloff above & below
-    min_extent = max_dim * min_aspect_ratio
-    adj_extent = np.maximum(extent, min_extent)
+        # Clamp thin/flat dimensions so the grid captures 3D field falloff above & below
+        min_extent = max_dim * min_aspect_ratio
+        adj_extent = np.maximum(extent, min_extent)
 
-    # Expand bounds symmetrically around center with padding
-    padded_half_extent = (adj_extent * 0.5) * (1.0 + 2.0 * padding)
+        # Expand bounds symmetrically around center with padding
+        padded_half_extent = (adj_extent * 0.5) * (1.0 + 2.0 * padding)
 
-    min_b = center - padded_half_extent
-    max_b = center + padded_half_extent
+        min_b = center - padded_half_extent
+        max_b = center + padded_half_extent
 
     x = np.linspace(min_b[0], max_b[0], res, dtype=np.float32)
     y = np.linspace(min_b[1], max_b[1], res, dtype=np.float32)
@@ -87,15 +99,56 @@ def get_grid_queries(obj, res=64, padding=0.2, min_aspect_ratio=0.33):
     return queries, (res, res, res), (min_b, max_b)
 
 
+class WM_OT_toggle_freeze_grid(bpy.types.Operator):
+    bl_idname = "winder.toggle_freeze_grid"
+    bl_label = "Toggle Freeze Grid Bounds"
+    bl_description = "Lock current grid bounds so object transformations don't alter the volume query box"
+
+    def execute(self, context):
+        obj = context.active_object
+        if not obj or obj.type != "MESH":
+            self.report({"ERROR"}, "Select a Mesh Object")
+            return {"CANCELLED"}
+
+        props = context.scene.winder_props
+        is_frozen = obj.get("winder_is_grid_frozen", False)
+
+        if is_frozen:
+            # Unfreeze grid
+            obj["winder_is_grid_frozen"] = False
+            if "winder_frozen_min" in obj:
+                del obj["winder_frozen_min"]
+            if "winder_frozen_max" in obj:
+                del obj["winder_frozen_max"]
+            self.report({"INFO"}, f"Unfrozen grid bounds for {obj.name}")
+        else:
+            # Calculate current bounds and freeze
+            obj["winder_is_grid_frozen"] = False  # Ensure fresh calculation
+            _, _, (min_b, max_b) = get_grid_queries(
+                obj, res=props.query_res, padding=props.grid_padding
+            )
+            obj["winder_frozen_min"] = min_b.tolist()
+            obj["winder_frozen_max"] = max_b.tolist()
+            obj["winder_is_grid_frozen"] = True
+            self.report({"INFO"}, f"Frozen grid bounds for {obj.name}")
+
+        # Trigger update if this is the active target object
+        if context.scene.get("winder_active_target") == obj.name:
+            recompute_winding_field(context, obj)
+
+        return {"FINISHED"}
+
+
 def get_multi_object_grid_queries(objs, res=64, padding=0.1):
     """Calculates a unified bounding box surrounding all provided Blender objects."""
     min_b = np.array([float("inf"), float("inf"), float("inf")], dtype=np.float32)
-    max_b = np.array(
-        [-float("inf"), -float("inf"), -float("inf")], dtype=np.float32
-    )
+    max_b = np.array([-float("inf"), -float("inf"), -float("inf")], dtype=np.float32)
 
     for obj in objs:
-        bbox = np.array([obj.matrix_world @ mathutils.Vector(corner) for corner in obj.bound_box], dtype=np.float32)
+        bbox = np.array(
+            [obj.matrix_world @ mathutils.Vector(corner) for corner in obj.bound_box],
+            dtype=np.float32,
+        )
         min_b = np.minimum(min_b, bbox.min(axis=0))
         max_b = np.maximum(max_b, bbox.max(axis=0))
 
@@ -119,10 +172,8 @@ def get_multi_object_grid_queries(objs, res=64, padding=0.1):
     return queries, tuple(dims), (min_b, max_b)
 
 
-
 def recompute_winding_field(context, obj):
     """Evaluates Volume + optional Quivers using in-place data block updates."""
-    print("DEBUG: recompute_winding_field")
     props = context.scene.winder_props
 
     # Fetch or create Volume object (Quiver handling is conditional below)
@@ -176,9 +227,6 @@ def recompute_winding_field(context, obj):
             grad_data = np.empty(grad_shape, dtype=np.float32)
             out_g_buf.copy_to_numpy_async(grad_data, stream=stream)
 
-    print(
-        "DEBUG: Do other stuff with vdb and so on... engine should be deleted already!"
-    )
     # 3. Update OpenVDB Volume File
     voxels = host_w.reshape(shape)
     res_arr = np.array(shape, dtype=np.float64)
@@ -308,7 +356,6 @@ class WM_OT_create_winding_field(bpy.types.Operator):
     bl_label = "Create Winding Number Field"
 
     def execute(self, context):
-        print("DEBUG: WM_OT_create_winding_field.execute")
         obj = context.active_object
         if not obj or obj.type != "MESH":
             self.report({"ERROR"}, "Select a Mesh Object")
@@ -342,8 +389,8 @@ def get_contour_thresholds(
     if is_winding_field:
         if num_shells == 1:
             return [0.5]  # Surface boundary
-        # Linear spacing from 0.0 to 1.0 across requested shell count
-        return np.linspace(0.0, 1.0, num_shells).tolist()
+        # Linear spacing from -0.5 to 1.0 across requested shell count
+        return np.linspace(-0.5, 1.0, num_shells).tolist()
     else:
         cdf = vol_obj.get("winder_quantile_cdf")
         if not cdf:
@@ -506,6 +553,7 @@ def update_all_winding_fields(self, context):
             if area.type == "VIEW_3D":
                 area.tag_redraw()
 
+
 def get_or_create_optimization_objects(context, source_obj):
     """Retrieves or creates dedicated Volume and Quiver containers for loss field optimization."""
     vol_name = f"LossVolume_{source_obj.name}"
@@ -531,12 +579,9 @@ class WM_OT_create_optimization(bpy.types.Operator):
     bl_label = "Create Field Optimization"
     bl_description = "Computes source vs. target winding field loss and visualizes loss gradients on the source geometry"
 
-
     def execute(self, context):
         source_obj = context.active_object
-        selected_objs = [
-            o for o in context.selected_objects if o.type == "MESH"
-        ]
+        selected_objs = [o for o in context.selected_objects if o.type == "MESH"]
 
         if not source_obj or source_obj.type != "MESH":
             self.report({"ERROR"}, "Active selection must be a Mesh object (Source).")
@@ -555,9 +600,7 @@ class WM_OT_create_optimization(bpy.types.Operator):
         padding = props.grid_padding
         mode = props.geometry_mode
 
-        vol_obj, quiver_obj = get_or_create_optimization_objects(
-            context, source_obj
-        )
+        vol_obj, quiver_obj = get_or_create_optimization_objects(context, source_obj)
         source_obj.display_type = "WIRE"
 
         host_loss = None
@@ -581,21 +624,15 @@ class WM_OT_create_optimization(bpy.types.Operator):
             q_buf.copy_from_numpy_async(queries, stream=stream)
 
             # 2. Extract geometry and compute winding field for Source
-            src_geom = extract_geometry_data(
-                source_obj, mode=mode, stream=stream
-            )
-            src_refs = compute_winding_field(
-                src_geom, q_buf, w_src_buf, stream=stream
-            )
+            src_geom = extract_geometry_data(source_obj, mode=mode, stream=stream)
+            src_refs = compute_winding_field(src_geom, q_buf, w_src_buf, stream=stream)
             stream.keep_alive(src_geom, src_refs)
 
             # 3. Extract combined target geometry and compute Target field
             tgt_geom = extract_combined_geometry_data(
                 target_objs, mode=mode, stream=stream
             )
-            tgt_refs = compute_winding_field(
-                tgt_geom, q_buf, w_tgt_buf, stream=stream
-            )
+            tgt_refs = compute_winding_field(tgt_geom, q_buf, w_tgt_buf, stream=stream)
             stream.keep_alive(tgt_geom, tgt_refs)
 
             # 4. Download source and target fields to calculate Loss & dL/dw
@@ -720,9 +757,7 @@ class WM_OT_create_optimization(bpy.types.Operator):
 
         # 8. Store Metadata
         cdf_percentiles = np.linspace(0.0, 100.0, 1001)
-        cdf_values = (
-            np.percentile(host_loss, cdf_percentiles).astype(float).tolist()
-        )
+        cdf_values = np.percentile(host_loss, cdf_percentiles).astype(float).tolist()
         vol_obj["winder_loss_quantile_cdf"] = cdf_values
         vol_obj["winder_source_object"] = source_obj.name
         vol_obj["winder_target_objects"] = [o.name for o in target_objs]
@@ -735,5 +770,101 @@ class WM_OT_create_optimization(bpy.types.Operator):
         self.report(
             {"INFO"},
             f"Created Field Optimization Loss ({self.loss_type}) for {source_obj.name}",
+        )
+        return {"FINISHED"}
+
+
+class WM_OT_dump_forward_bvh(bpy.types.Operator):
+    bl_idname = "winder.dump_forward_bvh"
+    bl_label = "Visualize Forward BVH8"
+    bl_description = "Parse WindingNumberEngine BVH8 .dot representation and create a colorized 3D wireframe mesh"
+
+    def execute(self, context):
+        obj = context.active_object
+        if not obj or obj.type != "MESH":
+            self.report({"ERROR"}, "Select a Mesh Object")
+            return {"CANCELLED"}
+
+        props = context.scene.winder_props
+        with CudaStream() as stream:
+            geom_data = extract_geometry_data(
+                obj, props.geometry_mode, stream=stream
+            )
+            dot_str = dump_forward_bvh(geom_data, stream=stream)
+
+        # Parse .dot hierarchy and construct BVH single-mesh object
+        nodes, adj, root_id = parse_bvh_dot(dot_str)
+
+        if not nodes:
+            self.report({"WARNING"}, "BVH8 string is empty or contains no geometry")
+            return {"CANCELLED"}
+
+        bvh_obj = build_bvh_wireframe_mesh(
+            nodes, adj, root_id, obj_name=f"BVH8_Forward_{obj.name}"
+        )
+
+        # Select created BVH object
+        bpy.ops.object.select_all(action="DESELECT")
+        bvh_obj.select_set(True)
+        context.view_layer.objects.active = bvh_obj
+
+        self.report(
+            {"INFO"},
+            f"Created BVH8 Mesh for {obj.name} ({len(nodes)} total AABB nodes)",
+        )
+        return {"FINISHED"}
+
+
+class WM_OT_dump_backward_bvh(bpy.types.Operator):
+    bl_idname = "winder.dump_backward_bvh"
+    bl_label = "Visualize Backward BVH8"
+    bl_description = "Parse GradientBackend BVH8 .dot representation and create a colorized 3D wireframe mesh"
+
+    def execute(self, context):
+        obj = context.active_object
+        if not obj or obj.type != "MESH":
+            self.report({"ERROR"}, "Select a Mesh Object")
+            return {"CANCELLED"}
+
+        props = context.scene.winder_props
+
+        # Call C++ binding for backward pass dump
+        with CudaStream() as stream:
+            queries, shape, (min_b, max_b) = get_grid_queries(obj, res=props.query_res, padding=props.grid_padding)
+            queries = queries.reshape([-1, 3])
+            num_q = len(queries)
+
+            q_buf = CudaBuffer(queries.shape, dtype=np.float32)
+            q_buf.copy_from_numpy_async(queries, stream=stream)
+
+            ones_arr = np.ones(num_q, dtype=np.float32)
+            ones_buf = CudaBuffer((num_q,), dtype=np.float32)
+            ones_buf.copy_from_numpy_async(ones_arr, stream=stream)
+
+            dot_str = dump_backward_bvh(q_buf, ones_buf, stream=stream)
+
+        nodes, adj, root_id = parse_bvh_dot(dot_str)
+
+        if not nodes:
+            self.report(
+                {"WARNING"}, "Backward BVH8 string is empty or contains no queries"
+            )
+            return {"CANCELLED"}
+
+        bvh_obj = build_bvh_wireframe_mesh(
+            nodes,
+            adj,
+            root_id,
+            obj_name=f"BVH8_Backward_{obj.name}",
+            pass_type="Backward_Jet",
+        )
+
+        bpy.ops.object.select_all(action="DESELECT")
+        bvh_obj.select_set(True)
+        context.view_layer.objects.active = bvh_obj
+
+        self.report(
+            {"INFO"},
+            f"Created Backward BVH8 Mesh for {obj.name} ({len(nodes)} total AABB nodes)",
         )
         return {"FINISHED"}

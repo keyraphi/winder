@@ -9,12 +9,17 @@
 #include "kernels/common.cuh"
 #include "kernels/mesh.cuh"
 #include "kernels/traversal.cuh"
+#include "scene_normalization.h"
 #include "soa.h"
 #include "taylor_coefficients.h"
+#include "thrust/detail/fill.inl"
+#include "thrust/detail/sequence.inl"
+#include "thrust/detail/sort.inl"
 #include "utils.h"
 #include "vec3.h"
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cuda_device_runtime_api.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
@@ -137,8 +142,10 @@ void GradientBackend::init(const float *queries, const float *grad_outputs) {
   uint64_t *query_morton_codes;
   CUDA_CHECK(cudaMallocAsync(&query_morton_codes,
                              m_query_count * sizeof(uint64_t), m_build_stream));
+  SceneBounds query_bounds;
   initializeMortonCodes<Vec3>(queries_v3, query_morton_codes, m_query_count,
-                              m_build_stream);
+                              m_build_stream, &query_bounds);
+  m_norm = SceneNormalization::from_scene_bounds(query_bounds);
   // sort by morton codes
   thrust::sequence(build_stream_policy, m_to_internal,
                    m_to_internal + m_query_count);
@@ -148,7 +155,7 @@ void GradientBackend::init(const float *queries, const float *grad_outputs) {
 
   gather_queries_and_grad_outputs_soa(queries, grad_outputs, m_to_internal,
                                       m_sorted_queries, m_sorted_grad_outputs,
-                                      m_query_count, m_build_stream);
+                                      m_query_count, m_build_stream, m_norm);
 
   auto morton_leaf_stride_idx = thrust::make_transform_iterator(
       thrust::make_counting_iterator<uint64_t>(0),
@@ -215,18 +222,19 @@ void GradientBackend::init(const float *queries, const float *grad_outputs) {
                              max_bvh8_nodes * sizeof(uint32_t),
                              m_build_stream));
 
-  ConvertBinary2BVH8Params params{bvh8_work_queue_A,
-                                  bvh8_work_queue_B,
-                                  bvh8_internal_parent_map,
-                                  global_counter,
-                                  leaf_count,
-                                  m_binary_aabbs,
-                                  binary_nodes,
-                                  bvh8_nodes_child_count,
-                                  bvh8_leaf_parents,
-                                  m_bvh8_nodes,
-                                  m_bvh8_leaf_pointers,
-                                  m_bvh8_node_count};
+  ConvertBinary2BVH8Params params{.work_queue_A = bvh8_work_queue_A,
+                                  .work_queue_B = bvh8_work_queue_B,
+                                  .bvh8_internal_parents =
+                                      bvh8_internal_parent_map,
+                                  .global_counter = global_counter,
+                                  .leaf_count = leaf_count,
+                                  .binary_aabbs = m_binary_aabbs,
+                                  .binary_nodes = binary_nodes,
+                                  .nodes_child_count = bvh8_nodes_child_count,
+                                  .bvh8_leaf_parents = bvh8_leaf_parents,
+                                  .bvh8_nodes = m_bvh8_nodes,
+                                  .bvh8_leaf_pointers = m_bvh8_leaf_pointers,
+                                  .bvh8_node_count = m_bvh8_node_count};
   convert_binary_tree_to_bvh8(params, m_device, m_build_stream);
 
   CUDA_CHECK(cudaFreeAsync(bvh8_work_queue_A, m_build_stream));
@@ -293,8 +301,10 @@ auto GradientBackend::compute(const float *points, const float *scaled_normals,
   CUDA_CHECK(cudaMallocAsync(&geometry_to_internal,
                              geometry_count * sizeof(uint32_t),
                              compute_stream));
+  SceneBounds scene_bounds;
   initializeMortonCodes(points_vec3, geometry_morton_codes, geometry_count,
-                        compute_stream);
+                        compute_stream, &scene_bounds);
+  float max_dim = SceneNormalization::effective_extent(scene_bounds);
 
   // sort by morton codes
   thrust::sequence(compute_stream_policy, geometry_to_internal,
@@ -311,11 +321,12 @@ auto GradientBackend::compute(const float *points, const float *scaled_normals,
       cudaStreamWaitEvent(compute_stream, m_tree_construction_finished_event));
 
   if (beta < 0.F) {
-    beta = 2.0;
+    beta = 2.3;
   }
   if (epsilon < 0.F) {
     epsilon = 1.F / 250.F;
   }
+  epsilon = epsilon * max_dim * m_norm.scale;
 
   uint32_t leaf_count = (m_query_count + LEAF_SIZE - 1) / LEAF_SIZE;
   uint32_t *global_counter;
@@ -323,21 +334,23 @@ auto GradientBackend::compute(const float *points, const float *scaled_normals,
       cudaMallocAsync(&global_counter, sizeof(uint32_t), compute_stream));
 
   ComputeGradientsPointNormalParams params{
-      points_vec3,
-      normals_vec3,
-      geometry_to_internal,
-      m_bvh8_nodes,
-      m_bvh8_leaf_pointers,
-      m_taylor_coefficients,
-      m_binary_aabbs + leaf_count - 1,
-      SoAView<Vec3>{m_sorted_queries, m_query_count},
-      m_sorted_grad_outputs,
-      (uint32_t)m_query_count,
-      (uint32_t)geometry_count,
-      gradients,
-      global_counter,
-      beta,
-      epsilon};
+      .points = points_vec3,
+      .normals = normals_vec3,
+      .sort_indirections = geometry_to_internal,
+      .bvh8_nodes = m_bvh8_nodes,
+      .bvh8_leaf_pointers = m_bvh8_leaf_pointers,
+      .node_coefficients = m_taylor_coefficients,
+      .leaf_aabbs = m_binary_aabbs + leaf_count - 1,
+      .sorted_queries =
+          SoAView<Vec3>{.base_ptr = m_sorted_queries, .stride = m_query_count},
+      .sorted_grad_outputs = m_sorted_grad_outputs,
+      .query_count = (uint32_t)m_query_count,
+      .geometry_count = (uint32_t)geometry_count,
+      .gradients = gradients,
+      .global_device_counter = global_counter,
+      .beta = beta,
+      .epsilon = epsilon,
+      .norm = m_norm};
   compute_point_normal_gradients(params, m_device, compute_stream);
 
   // free temporary memory
@@ -391,19 +404,21 @@ auto GradientBackend::compute(const float *triangles_float,
       cudaMallocAsync(&global_counter, sizeof(uint32_t), compute_stream));
 
   ComputeGradientsTriangleParams params{
-      triangles,
-      geometry_to_internal,
-      m_bvh8_nodes,
-      m_bvh8_leaf_pointers,
-      m_taylor_coefficients,
-      m_binary_aabbs + leaf_count - 1,
-      SoAView<Vec3>{m_sorted_queries, m_query_count},
-      m_sorted_grad_outputs,
-      (uint32_t)m_query_count,
-      (uint32_t)geometry_count,
-      gradients,
-      global_counter,
-      beta};
+      .triangles = triangles,
+      .sort_indirections = geometry_to_internal,
+      .bvh8_nodes = m_bvh8_nodes,
+      .bvh8_leaf_pointers = m_bvh8_leaf_pointers,
+      .node_coefficients = m_taylor_coefficients,
+      .leaf_aabbs = m_binary_aabbs + leaf_count - 1,
+      .sorted_queries =
+          SoAView<Vec3>{.base_ptr = m_sorted_queries, .stride = m_query_count},
+      .sorted_grad_outputs = m_sorted_grad_outputs,
+      .query_count = (uint32_t)m_query_count,
+      .geometry_count = (uint32_t)geometry_count,
+      .gradients = gradients,
+      .global_device_counter = global_counter,
+      .beta = beta,
+      .norm = m_norm};
   compute_triangle_gradients(params, m_device, compute_stream);
 
   // free temporary memory
@@ -416,6 +431,9 @@ auto GradientBackend::compute(const float *vertices,
                               size_t vertex_count, size_t geometry_count,
                               float *vertex_gradients, float beta,
                               uint64_t stream) -> void {
+  if (m_query_count == 0) {
+    return;
+  }
   ScopedCudaDevice device_scope{m_device};
   // convert stream to cuda stream
   cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
@@ -465,8 +483,9 @@ auto GradientBackend::dump() const -> std::string {
     CUDA_CHECK(cudaMemcpy(queries.data(), m_sorted_queries,
                           m_query_count * sizeof(Vec3),
                           cudaMemcpyDeviceToHost));
-    SoAView<Vec3> query_view{reinterpret_cast<float *>(queries.data()),
-                             m_query_count};
+    SoAView<Vec3> query_view{.base_ptr =
+                                 reinterpret_cast<float *>(queries.data()),
+                             .stride = m_query_count};
 
     AABB leaf_aabb = leaf_aabbs[0];
     Vec3 leaf_com = leaf_aabb.center_of_mass;
@@ -517,8 +536,9 @@ auto GradientBackend::dump() const -> std::string {
   std::vector<Vec3> queries(m_query_count);
   CUDA_CHECK(cudaMemcpy(queries.data(), m_sorted_queries,
                         m_query_count * sizeof(Vec3), cudaMemcpyDeviceToHost));
-  SoAView<Vec3> geometry_view{reinterpret_cast<float *>(queries.data()),
-                              m_query_count};
+  SoAView<Vec3> geometry_view{.base_ptr =
+                                  reinterpret_cast<float *>(queries.data()),
+                              .stride = m_query_count};
 
   std::vector<LeafPointers> leaf_pointers(node_count);
   CUDA_CHECK(cudaMemcpy(leaf_pointers.data(), m_bvh8_leaf_pointers,
