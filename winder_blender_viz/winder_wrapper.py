@@ -5,6 +5,12 @@ import winder
 from .dlpack_bridge import CudaBuffer, CudaStream
 
 
+# Default regularization strength (fraction of scene diagonal).
+# Matches the library default of 1/250. Pass 0.0 (or any negative value) to
+# disable regularization and use the sharp kernel.
+DEFAULT_EPSILON = 0.004
+
+
 def _get_stream_handle(stream) -> int:
     if stream is None:
         return 0
@@ -31,36 +37,28 @@ def extract_bmesh_positions(obj):
 
 def extract_geometry_data(obj, mode="Mesh", stream=None):
     """Extracts evaluated vertex/face geometry (post-modifiers & Geometry Nodes)
-
     and uploads directly to CudaBuffer objects.
     """
 
-    # 1. Fetch evaluated object & mesh from the Dependency Graph
     depsgraph = bpy.context.evaluated_depsgraph_get()
     obj_eval = obj.evaluated_get(depsgraph)
     mesh_eval = obj_eval.to_mesh()
 
     try:
-        # 2. Extract local vertex positions
         num_verts = len(mesh_eval.vertices)
         raw_verts = np.empty((num_verts, 3), dtype=np.float32)
         mesh_eval.vertices.foreach_get("co", raw_verts.ravel())
 
-        # Transform local coordinates to world space
         world_mat = np.array(obj_eval.matrix_world, dtype=np.float32).T
-        homo_verts = np.hstack(
-            [raw_verts, np.ones((num_verts, 1), dtype=np.float32)]
-        )
+        homo_verts = np.hstack([raw_verts, np.ones((num_verts, 1), dtype=np.float32)])
         world_verts = (homo_verts @ world_mat)[:, :3].astype(np.float32)
 
-        # 3. Extract loop triangles
         mesh_eval.calc_loop_triangles()
         num_tris = len(mesh_eval.loop_triangles)
         tri_indices = np.empty((num_tris, 3), dtype=np.uint32)
         mesh_eval.loop_triangles.foreach_get("vertices", tri_indices.ravel())
 
     finally:
-        # Free CPU memory allocated for evaluated mesh
         obj_eval.to_mesh_clear()
 
     host_refs = [raw_verts, homo_verts, world_verts, tri_indices]
@@ -71,7 +69,6 @@ def extract_geometry_data(obj, mode="Mesh", stream=None):
 
         v_buf.copy_from_numpy_async(world_verts, stream=stream)
         i_buf.copy_from_numpy_async(tri_indices, stream=stream)
-
 
         return {
             "mode": "Mesh",
@@ -130,6 +127,7 @@ def extract_geometry_data(obj, mode="Mesh", stream=None):
     else:
         raise ValueError(f"Unknown geometry mode: {mode}")
 
+
 def extract_combined_geometry_data(objs, mode="Mesh", stream=None):
     """Combines geometry from multiple objects into unified GPU CudaBuffers."""
     if len(objs) == 1:
@@ -145,7 +143,9 @@ def extract_combined_geometry_data(objs, mode="Mesh", stream=None):
         for obj in objs:
             world_mat = np.array(obj.matrix_world, dtype=np.float32).T
             raw_verts = extract_bmesh_positions(obj)
-            homo = np.hstack([raw_verts, np.ones((len(raw_verts), 1), dtype=np.float32)])
+            homo = np.hstack(
+                [raw_verts, np.ones((len(raw_verts), 1), dtype=np.float32)]
+            )
             w_verts = (homo @ world_mat)[:, :3].astype(np.float32)
 
             if obj.mode == "EDIT":
@@ -157,7 +157,13 @@ def extract_combined_geometry_data(objs, mode="Mesh", stream=None):
                         tris.append([v.index for v in f.verts])
                     elif len(f.verts) > 3:
                         for i in range(1, len(f.verts) - 1):
-                            tris.append([f.verts[0].index, f.verts[i].index, f.verts[i + 1].index])
+                            tris.append(
+                                [
+                                    f.verts[0].index,
+                                    f.verts[i].index,
+                                    f.verts[i + 1].index,
+                                ]
+                            )
                 t_indices = np.array(tris, dtype=np.uint32)
             else:
                 obj.data.calc_loop_triangles()
@@ -196,7 +202,9 @@ def extract_combined_geometry_data(objs, mode="Mesh", stream=None):
         for obj in objs:
             world_mat = np.array(obj.matrix_world, dtype=np.float32).T
             raw_verts = extract_bmesh_positions(obj)
-            homo = np.hstack([raw_verts, np.ones((len(raw_verts), 1), dtype=np.float32)])
+            homo = np.hstack(
+                [raw_verts, np.ones((len(raw_verts), 1), dtype=np.float32)]
+            )
             w_verts = (homo @ world_mat)[:, :3].astype(np.float32)
 
             if obj.mode == "EDIT":
@@ -208,7 +216,13 @@ def extract_combined_geometry_data(objs, mode="Mesh", stream=None):
                         tris.append([v.index for v in f.verts])
                     elif len(f.verts) > 3:
                         for i in range(1, len(f.verts) - 1):
-                            tris.append([f.verts[0].index, f.verts[i].index, f.verts[i + 1].index])
+                            tris.append(
+                                [
+                                    f.verts[0].index,
+                                    f.verts[i].index,
+                                    f.verts[i + 1].index,
+                                ]
+                            )
                 t_indices = np.array(tris, dtype=np.uint32)
             else:
                 obj.data.calc_loop_triangles()
@@ -248,7 +262,9 @@ def extract_combined_geometry_data(objs, mode="Mesh", stream=None):
         for obj in objs:
             world_mat = np.array(obj.matrix_world, dtype=np.float32).T
             raw_verts = extract_bmesh_positions(obj)
-            homo = np.hstack([raw_verts, np.ones((len(raw_verts), 1), dtype=np.float32)])
+            homo = np.hstack(
+                [raw_verts, np.ones((len(raw_verts), 1), dtype=np.float32)]
+            )
             w_verts = (homo @ world_mat)[:, :3].astype(np.float32)
 
             if obj.mode == "EDIT":
@@ -260,7 +276,13 @@ def extract_combined_geometry_data(objs, mode="Mesh", stream=None):
                         tris.append([v.index for v in f.verts])
                     elif len(f.verts) > 3:
                         for i in range(1, len(f.verts) - 1):
-                            tris.append([f.verts[0].index, f.verts[i].index, f.verts[i + 1].index])
+                            tris.append(
+                                [
+                                    f.verts[0].index,
+                                    f.verts[i].index,
+                                    f.verts[i + 1].index,
+                                ]
+                            )
                 t_indices = np.array(tris, dtype=np.uint32)
             else:
                 obj.data.calc_loop_triangles()
@@ -282,14 +304,21 @@ def extract_combined_geometry_data(objs, mode="Mesh", stream=None):
             "_host_refs": host_refs,
         }
 
+
 def compute_winding_field(
     geom_data: dict,
     queries_buf: CudaBuffer,
     out_buf: CudaBuffer,
-    epsilon: float = -1.0,
+    epsilon: float = DEFAULT_EPSILON,
     beta: float = -1.0,
     stream=None,
 ):
+    """Forward winding number evaluation.
+
+    `epsilon` is a fraction of the scene diagonal. 0.0 (or any negative value)
+    disables regularization and returns the sharp field. The library default
+    is DEFAULT_EPSILON = 1/250 = 0.004.
+    """
     mode = geom_data["mode"]
     use_engine = geom_data["count"] > 1000
     stream_handle = _get_stream_handle(stream)
@@ -298,14 +327,14 @@ def compute_winding_field(
     if mode == "PointNormal":
         if use_engine:
             engine = winder.WindingNumberEngine(
-                geom_data["points"], geom_data["scaled_normals"], stream=stream_handle
+                geom_data["points"], geom_data["scaled_normals"], stream_handle
             )
             engine.compute(
                 queries_buf, out_buf, float(beta), float(epsilon), stream_handle
             )
             host_refs.append(engine)
         else:
-            winder.brute_force_winding_numbers(
+            winder.brute_force_winding_numbers_point_normal(
                 geom_data["points"],
                 geom_data["scaled_normals"],
                 queries_buf,
@@ -317,13 +346,19 @@ def compute_winding_field(
     elif mode == "Triangle":
         if use_engine:
             engine = winder.WindingNumberEngine(
-                geom_data["triangles"], stream=stream_handle
+                geom_data["triangles"], stream_handle
             )
-            engine.compute(queries_buf, out_buf, float(beta), stream_handle)
+            engine.compute(
+                queries_buf, out_buf, float(beta), float(epsilon), stream_handle
+            )
             host_refs.append(engine)
         else:
-            winder.brute_force_winding_numbers(
-                geom_data["triangles"], queries_buf, out_buf, stream_handle
+            winder.brute_force_winding_numbers_triangle_soup(
+                geom_data["triangles"],
+                queries_buf,
+                out_buf,
+                float(epsilon),
+                stream_handle,
             )
 
     elif mode == "Mesh":
@@ -331,16 +366,19 @@ def compute_winding_field(
             engine = winder.WindingNumberEngine(
                 geom_data["vertices"],
                 geom_data["triangle_indices"],
-                stream=stream_handle,
+                stream_handle,
             )
-            engine.compute(queries_buf, out_buf, float(beta), stream_handle)
+            engine.compute(
+                queries_buf, out_buf, float(beta), float(epsilon), stream_handle
+            )
             host_refs.append(engine)
         else:
-            winder.brute_force_winding_numbers(
+            winder.brute_force_winding_numbers_mesh(
                 geom_data["vertices"],
                 geom_data["triangle_indices"],
                 queries_buf,
                 out_buf,
+                float(epsilon),
                 stream_handle,
             )
     return host_refs
@@ -351,10 +389,15 @@ def compute_geometry_gradients(
     queries_buf: CudaBuffer,
     dL_dw_buf: CudaBuffer,
     out_grad_buf: CudaBuffer,
-    epsilon: float = -1.0,
+    epsilon: float = DEFAULT_EPSILON,
     beta: float = -1.0,
     stream=None,
 ):
+    """Backward gradient of the winding number field w.r.t. geometry.
+
+    `epsilon` is a fraction of the scene diagonal. 0.0 (or negative) disables
+    regularization and returns the sharp-kernel gradient. Default 1/250.
+    """
     mode = geom_data["mode"]
     use_engine = geom_data["count"] > 1000
     stream_handle = _get_stream_handle(stream)
@@ -363,7 +406,7 @@ def compute_geometry_gradients(
     if mode == "PointNormal":
         if use_engine:
             engine = winder.GradientEngine(queries_buf, dL_dw_buf, stream_handle)
-            engine.compute(
+            engine.compute_point_normal(
                 geom_data["points"],
                 geom_data["scaled_normals"],
                 out_grad_buf,
@@ -373,7 +416,7 @@ def compute_geometry_gradients(
             )
             host_refs.append(engine)
         else:
-            winder.brute_force_gradients(
+            winder.brute_force_gradients_point_normal(
                 dL_dw_buf,
                 geom_data["points"],
                 geom_data["scaled_normals"],
@@ -386,40 +429,48 @@ def compute_geometry_gradients(
     elif mode == "Triangle":
         if use_engine:
             engine = winder.GradientEngine(queries_buf, dL_dw_buf, stream_handle)
-            engine.compute(
-                geom_data["triangles"], out_grad_buf, float(beta), stream_handle
+            engine.compute_triangle_soup(
+                geom_data["triangles"],
+                out_grad_buf,
+                float(beta),
+                float(epsilon),
+                stream_handle,
             )
             host_refs.append(engine)
         else:
-            winder.brute_force_gradients(
+            winder.brute_force_gradients_triangle_soup(
                 dL_dw_buf,
                 geom_data["triangles"],
                 queries_buf,
                 out_grad_buf,
+                float(epsilon),
                 stream_handle,
             )
 
     elif mode == "Mesh":
         if use_engine:
             engine = winder.GradientEngine(queries_buf, dL_dw_buf, stream_handle)
-            engine.compute(
+            engine.compute_mesh(
                 geom_data["vertices"],
                 geom_data["triangle_indices"],
                 out_grad_buf,
                 float(beta),
+                float(epsilon),
                 stream_handle,
             )
             host_refs.append(engine)
         else:
-            winder.brute_force_gradients(
+            winder.brute_force_gradients_mesh(
                 dL_dw_buf,
                 geom_data["vertices"],
                 geom_data["triangle_indices"],
                 queries_buf,
                 out_grad_buf,
+                float(epsilon),
                 stream_handle,
             )
     return host_refs
+
 
 def dump_forward_bvh(geom_data: dict, stream=None) -> str:
     """Instantiates WindingNumberEngine for geom_data and returns its BVH8 .dot string."""

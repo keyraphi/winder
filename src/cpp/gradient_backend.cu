@@ -17,6 +17,7 @@
 #include "thrust/detail/sort.inl"
 #include "utils.h"
 #include "vec3.h"
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -106,6 +107,10 @@ GradientBackend::~GradientBackend() {
   if (m_sorted_queries) {
     cudaFreeAsync(m_sorted_queries, m_build_stream);
     m_sorted_queries = nullptr;
+  }
+  if (m_sorted_grad_outputs) {
+    cudaFreeAsync(m_sorted_grad_outputs, m_build_stream);
+    m_sorted_grad_outputs = nullptr;
   }
   if (m_binary_aabbs) {
     cudaFreeAsync(m_binary_aabbs, m_build_stream);
@@ -323,9 +328,7 @@ auto GradientBackend::compute(const float *points, const float *scaled_normals,
   if (beta < 0.F) {
     beta = 2.3;
   }
-  if (epsilon < 0.F) {
-    epsilon = 1.F / 250.F;
-  }
+  epsilon = std::max(0.F, epsilon);
   epsilon = epsilon * max_dim * m_norm.scale;
 
   uint32_t leaf_count = (m_query_count + LEAF_SIZE - 1) / LEAF_SIZE;
@@ -360,7 +363,7 @@ auto GradientBackend::compute(const float *points, const float *scaled_normals,
 
 auto GradientBackend::compute(const float *triangles_float,
                               size_t geometry_count, float *gradients,
-                              float beta, uint64_t stream) -> void {
+                              float beta, float epsilon, uint64_t stream) -> void {
   ScopedCudaDevice device_scope{m_device};
   // convert stream to cuda stream
   cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
@@ -377,8 +380,10 @@ auto GradientBackend::compute(const float *triangles_float,
   CUDA_CHECK(cudaMallocAsync(&geometry_to_internal,
                              geometry_count * sizeof(uint32_t),
                              compute_stream));
+  SceneBounds scene_bounds;
   initializeMortonCodes(triangles, geometry_morton_codes, geometry_count,
-                        compute_stream);
+                        compute_stream, &scene_bounds);
+  float max_dim = SceneNormalization::effective_extent(scene_bounds);
 
   // sort by morton codes
   thrust::sequence(compute_stream_policy, geometry_to_internal,
@@ -397,6 +402,8 @@ auto GradientBackend::compute(const float *triangles_float,
   if (beta < 0.F) {
     beta = 2.3;
   }
+  epsilon = std::max(0.F, epsilon);
+  epsilon = epsilon * max_dim * m_norm.scale;
 
   uint32_t leaf_count = (m_query_count + LEAF_SIZE - 1) / LEAF_SIZE;
   uint32_t *global_counter;
@@ -418,6 +425,7 @@ auto GradientBackend::compute(const float *triangles_float,
       .gradients = gradients,
       .global_device_counter = global_counter,
       .beta = beta,
+      .epsilon = epsilon,
       .norm = m_norm};
   compute_triangle_gradients(params, m_device, compute_stream);
 
@@ -430,6 +438,7 @@ auto GradientBackend::compute(const float *vertices,
                               const uint32_t *triangle_indices,
                               size_t vertex_count, size_t geometry_count,
                               float *vertex_gradients, float beta,
+                              float epsilon,
                               uint64_t stream) -> void {
   if (m_query_count == 0) {
     return;
@@ -451,7 +460,7 @@ auto GradientBackend::compute(const float *vertices,
   CUDA_CHECK(cudaMallocAsync(
       &triangle_gradients, geometry_count * sizeof(Triangle), compute_stream));
 
-  this->compute(triangles, geometry_count, triangle_gradients, beta, stream);
+  this->compute(triangles, geometry_count, triangle_gradients, beta, epsilon, stream);
   CUDA_CHECK(cudaFreeAsync(triangles, compute_stream));
 
   CUDA_CHECK(cudaMemsetAsync(vertex_gradients, 0,

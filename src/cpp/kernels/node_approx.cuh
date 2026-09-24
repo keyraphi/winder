@@ -1,7 +1,5 @@
 #pragma once
 #include "aabb.h"
-#include "cuda/std/__cmath/isinf.h"
-#include "cuda/std/__cmath/isnan.h"
 #include "geometry.h"
 #include "mat3x3.h"
 #include "tensor3.h"
@@ -31,21 +29,38 @@ should_node_be_approximated(const PointNormal &geometry, const AABB &aabb,
   if (dist_geometry_to_com2 < min_far_field_dist2) {
     return false;
   }
+  // Far-field check with the effective radius.
   float max_distance = __half2float(aabb.max_distance);
   float effective_R = fmaxf(max_distance, 2.0F / inv_epsilon);
 
   return dist_geometry_to_com2 > (effective_R * effective_R * beta_2);
 }
 
+template <typename Reg>
 __device__ __forceinline__ auto
 should_node_be_approximated(const Triangle &geometry, const AABB &aabb,
-                            const float beta_2) -> bool {
-  float max_distance_to_center = __half2float(aabb.max_distance);
-  Vec3 com = aabb.center_of_mass;
-  float dist_geometry_to_com2 =
-      (geometry.centroid() - com).length2(); // TODO consider large triangles
-  return dist_geometry_to_com2 >
-         max_distance_to_center * max_distance_to_center * beta_2;
+                            const float beta_2, const TriangleContext<Reg> ctx)
+    -> bool {
+  const Vec3 com = aabb.center_of_mass;
+  const float dist_geometry_to_com2 = geometry.min_vert_distance_to2(com);
+
+  if constexpr (std::is_same_v<Reg, RegSharp>) {
+    // No regularization: pure sharp criterion.
+    const float R = __half2float(aabb.max_distance);
+    return dist_geometry_to_com2 > R * R * beta_2;
+  } else {
+    // Near-field guard: refuse to approximate if the nearest vertex is
+    // inside the regularized band.
+    if (dist_geometry_to_com2 < 4.F * ctx.eps2) {
+      return false;
+    }
+
+    // Far-field check with the effective radius.
+    const float R = __half2float(aabb.max_distance);
+    const float two_eps = 2.F * ctx.eps; // or store eps in ctx
+    const float effective_R = fmaxf(R, two_eps);
+    return dist_geometry_to_com2 > effective_R * effective_R * beta_2;
+  }
 }
 
 /**
@@ -338,8 +353,7 @@ __device__ __forceinline__ auto compute_node_approximation(
   // Compute contractions using the unit vector, then scale via float32 at the
   // end to prevent overflows of the float16
   result +=
-      computeZeroOrderContribution(zero_order_coeff, r_hat_f16) *
-      factor_zero;
+      computeZeroOrderContribution(zero_order_coeff, r_hat_f16) * factor_zero;
   result += computeFirstOrderContribution(first_order_coeff, r_hat_f16) *
             factor_first;
   result += computeSecondOrderContribution(second_order_coeff, r_hat_f16) *

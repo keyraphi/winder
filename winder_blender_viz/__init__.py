@@ -64,6 +64,15 @@ class WinderProperties(bpy.types.PropertyGroup):
         description="Bounding box expansion factor (e.g. 0.2 = 20% margin on each axis)",
         update=update_all_winding_fields,
     )
+    epsilon: bpy.props.FloatProperty(
+        name="epsilon",
+        default=0.004,
+        min=0.0,
+        max=1,
+        precision=4,
+        description="Regularization size as fraction of diagonal.",
+        update=update_all_winding_fields,
+    )
     is_quiver_creation_active: bpy.props.BoolProperty(
         name="Show Gradient Directions",
         description="Create a quiver visualization for every geometry primitive",
@@ -113,6 +122,7 @@ class VIEW3D_PT_winder_panel(bpy.types.Panel):
 
         row = layout.row(align=True)
         row.prop(props, "grid_padding")
+        row.prop(props, "epsilon")
 
         # Display Freeze / Unfreeze toggle button for active object
         if obj and obj.type == "MESH":

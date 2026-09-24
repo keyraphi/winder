@@ -11,6 +11,7 @@ from .bvh_parser import build_bvh_wireframe_mesh, parse_bvh_dot
 from .dlpack_bridge import CudaBuffer, CudaStream
 from .winder_wrapper import (
     extract_geometry_data,
+    extract_combined_geometry_data,
     compute_winding_field,
     compute_geometry_gradients,
     dump_forward_bvh,
@@ -197,7 +198,9 @@ def recompute_winding_field(context, obj):
 
         geom_data = extract_geometry_data(obj, props.geometry_mode, stream=stream)
         stream.keep_alive(
-            compute_winding_field(geom_data, q_buf, out_w_buf, stream=stream)
+            compute_winding_field(
+                geom_data, q_buf, out_w_buf, props.epsilon, stream=stream
+            )
         )
 
         host_w = np.empty(num_q, dtype=np.float32)
@@ -220,7 +223,12 @@ def recompute_winding_field(context, obj):
             out_g_buf = CudaBuffer(grad_shape, dtype=np.float32)
             stream.keep_alive(
                 compute_geometry_gradients(
-                    geom_data, q_buf, ones_buf, out_g_buf, stream=stream
+                    geom_data,
+                    q_buf,
+                    ones_buf,
+                    out_g_buf,
+                    epsilon=props.epsilon,
+                    stream=stream,
                 )
             )
 
@@ -625,14 +633,18 @@ class WM_OT_create_optimization(bpy.types.Operator):
 
             # 2. Extract geometry and compute winding field for Source
             src_geom = extract_geometry_data(source_obj, mode=mode, stream=stream)
-            src_refs = compute_winding_field(src_geom, q_buf, w_src_buf, stream=stream)
+            src_refs = compute_winding_field(
+                src_geom, q_buf, w_src_buf, props.epsilon, stream=stream
+            )
             stream.keep_alive(src_geom, src_refs)
 
             # 3. Extract combined target geometry and compute Target field
             tgt_geom = extract_combined_geometry_data(
                 target_objs, mode=mode, stream=stream
             )
-            tgt_refs = compute_winding_field(tgt_geom, q_buf, w_tgt_buf, stream=stream)
+            tgt_refs = compute_winding_field(
+                tgt_geom, q_buf, w_tgt_buf, props.epsilon, stream=stream
+            )
             stream.keep_alive(tgt_geom, tgt_refs)
 
             # 4. Download source and target fields to calculate Loss & dL/dw
@@ -670,7 +682,12 @@ class WM_OT_create_optimization(bpy.types.Operator):
             stream.keep_alive(dL_dw_buf, out_grad_buf)
 
             grad_refs = compute_geometry_gradients(
-                src_geom, q_buf, dL_dw_buf, out_grad_buf, stream=stream
+                src_geom,
+                q_buf,
+                dL_dw_buf,
+                out_grad_buf,
+                epsilon=props.epsilon,
+                stream=stream,
             )
             stream.keep_alive(grad_refs)
 
@@ -787,9 +804,7 @@ class WM_OT_dump_forward_bvh(bpy.types.Operator):
 
         props = context.scene.winder_props
         with CudaStream() as stream:
-            geom_data = extract_geometry_data(
-                obj, props.geometry_mode, stream=stream
-            )
+            geom_data = extract_geometry_data(obj, props.geometry_mode, stream=stream)
             dot_str = dump_forward_bvh(geom_data, stream=stream)
 
         # Parse .dot hierarchy and construct BVH single-mesh object
@@ -830,7 +845,9 @@ class WM_OT_dump_backward_bvh(bpy.types.Operator):
 
         # Call C++ binding for backward pass dump
         with CudaStream() as stream:
-            queries, shape, (min_b, max_b) = get_grid_queries(obj, res=props.query_res, padding=props.grid_padding)
+            queries, shape, (min_b, max_b) = get_grid_queries(
+                obj, res=props.query_res, padding=props.grid_padding
+            )
             queries = queries.reshape([-1, 3])
             num_q = len(queries)
 

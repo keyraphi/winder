@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <cooperative_groups.h>
 #include <cooperative_groups/scan.h>
@@ -548,10 +549,7 @@ auto WindingNumbersBackend<Geometry>::compute(const float *queries,
     // defaults from Fast Winding Numbers paper
     beta = GeometryTraits<Geometry>::default_beta;
   }
-  if (epsilon < 0.F) {
-    // default from 3D Reconstruction with Fast Dipole Sums
-    epsilon = 1.F / 250.F;
-  }
+  epsilon = std::max(0.F, epsilon);
   uint32_t leaf_count = (m_count + LEAF_SIZE - 1) / LEAF_SIZE;
   uint32_t *global_counter;
   CUDA_CHECK(

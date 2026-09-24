@@ -68,6 +68,7 @@ struct ComputeGradientsTriangleParams {
   float *gradients;
   uint32_t *global_device_counter;
   const float beta;
+  const float epsilon;
   const SceneNormalization norm;
 };
 

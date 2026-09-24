@@ -72,7 +72,7 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
     const SoAView<Geometry> sorted_geometry, const uint32_t query_count,
     const uint32_t geometry_count, float *__restrict__ winding_numbers,
     uint32_t *__restrict__ global_device_counter, const float beta_2,
-    const float inv_epsilon, const SceneNormalization norm) {
+    const typename Geometry::Context ctx, const SceneNormalization norm) {
 
   const uint32_t warp_id = threadIdx.x / 32;
   const uint32_t lane_id = threadIdx.x % 32;
@@ -280,7 +280,7 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
             float my_contribution = 0.F;
             if (is_my_geometry_in_bounds) {
               my_contribution =
-                  my_geometry.contributionToQuery(shared_query, inv_epsilon);
+                  my_geometry.contributionToQuery(shared_query, ctx);
             }
             // sum up all contributions in warp
             float total_contribution = warp_reduce_add_xor(my_contribution);
@@ -313,7 +313,7 @@ __global__ void compute_winding_numbers_single_leaf_kernel(
     const Vec3 *queries, const uint32_t *sort_indirections,
     const SoAView<Geometry> sorted_geometry, const uint32_t query_count,
     const uint32_t geometry_count, float *winding_numbers,
-    const float inv_epsilon, const SceneNormalization norm) {
+    const typename Geometry::Context ctx, const SceneNormalization norm) {
   // Global index of the query this thread is responsible for
   uint32_t my_query_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -338,7 +338,7 @@ __global__ void compute_winding_numbers_single_leaf_kernel(
   // query.
   for (uint32_t i = 0; i < geometry_count; ++i) {
     my_winding_number +=
-        shared_geometry[i].contributionToQuery(my_query, inv_epsilon);
+        shared_geometry[i].contributionToQuery(my_query, ctx);
   }
 
   // Write out results
@@ -353,7 +353,7 @@ void compute_winding_numbers(
     return;
   }
 
-  float inv_epsilon = 1.F / params.epsilon;
+  auto ctx = Geometry::Context::make(params.epsilon);
   // There i no tree if there is only one leaf
   if (params.geometry_count <= 32) {
     uint32_t threads = 256;
@@ -362,7 +362,7 @@ void compute_winding_numbers(
         <<<blocks, threads, 0, stream>>>(
             params.queries, params.sort_indirections, params.sorted_geometry,
             params.query_count, params.geometry_count, params.winding_numbers,
-            inv_epsilon, params.norm);
+            ctx, params.norm);
     CUDA_CHECK(cudaGetLastError());
     return;
   }
@@ -390,7 +390,7 @@ void compute_winding_numbers(
       params.bvh8_leaf_pointers, params.node_coefficients,
       params.leaf_coefficients, params.leaf_aabbs, params.sorted_geometry,
       params.query_count, params.geometry_count, params.winding_numbers,
-      params.global_device_counter, beta_2, inv_epsilon, params.norm);
+      params.global_device_counter, beta_2, ctx, params.norm);
   CUDA_CHECK(cudaGetLastError());
 }
 
@@ -400,7 +400,7 @@ __global__ void compute_point_normal_gradient_single_leaf_kernel(
     const SoAView<Vec3> sorted_queries,
     const float *__restrict__ sorted_grad_outputs, const uint32_t query_count,
     const uint32_t geometry_count, float *__restrict__ gradients,
-    const float inv_epsilon, const SceneNormalization norm) {
+    const PointNormalContext ctx, const SceneNormalization norm) {
   // Global index of the geometry this thread is responsible for
   uint32_t my_geometry_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -423,19 +423,13 @@ __global__ void compute_point_normal_gradient_single_leaf_kernel(
       PointNormal{.p = points[original_idx], .n = normals[original_idx]});
   PointNormal my_grad{.p = Vec3::zero(), .n = Vec3::zero()};
 
-  constexpr float INV_PI_1_5 = 0.179587122F; // 1.0 / (pi^1.5)
-  const float inv_epsilon3 = inv_epsilon * inv_epsilon * inv_epsilon;
-  const float reg_term_const = inv_epsilon3 * INV_PI_1_5;
-  const float near_field_g_denum = (INV_PI_1_5 / 3.F) * inv_epsilon3;
-
   // Since there is only one leaf, all queries (1-32 elements)
   // are stored at the beginning of sorted_queries.
   // Every thread iterates through all available queries for its
   // PointNormal.
   for (uint32_t i = 0; i < query_count; ++i) {
     PointNormal contrib = my_geometry.gradContributionOfQuery(
-        shared_query[i], shared_grad_output[i], inv_epsilon, reg_term_const,
-        near_field_g_denum);
+        shared_query[i], shared_grad_output[i], ctx);
     my_grad += contrib;
   }
 
@@ -464,7 +458,7 @@ struct PointNormalGradientKernelParams {
   uint32_t query_count;
   uint32_t geometry_count;
   float beta_2;
-  float inv_epsilon;
+  PointNormalContext reg_context;
   SceneNormalization norm;
 };
 
@@ -574,7 +568,7 @@ __global__ void __launch_bounds__(128) compute_point_normal_gradient_kernel(
       bool need_taylor_coefficients =
           is_active &&
           should_node_be_approximated(my_geometry, current_node.getAABB(),
-                                      params.beta_2, params.inv_epsilon);
+                                      params.beta_2, params.reg_context.inv_epsilon);
 
       uint32_t load_taylor_coefficients_mask =
           __ballot_sync(0xFFFFFFFF, need_taylor_coefficients);
@@ -629,13 +623,6 @@ __global__ void __launch_bounds__(128) compute_point_normal_gradient_kernel(
           uint32_t leaf_idx = shared_leaf_ptrs[warp_id].indices[child_idx];
 
           if (is_still_active) {
-            constexpr float INV_PI_1_5 = 0.179587122F;
-            const float inv_epsilon3 =
-                params.inv_epsilon * params.inv_epsilon * params.inv_epsilon;
-            const float reg_term_const = inv_epsilon3 * INV_PI_1_5;
-            const float near_field_g_denum =
-                (INV_PI_1_5 * (1.F / 3.F)) * inv_epsilon3;
-
             for (uint32_t query_counter = 0; query_counter < LEAF_SIZE;
                  ++query_counter) {
               uint32_t query_idx = query_counter + leaf_idx * LEAF_SIZE;
@@ -647,8 +634,7 @@ __global__ void __launch_bounds__(128) compute_point_normal_gradient_kernel(
               float grad_output = params.sorted_grad_outputs[query_idx];
               kahan_add(my_gradient,
                         my_geometry.gradContributionOfQuery(
-                            query, grad_output, params.inv_epsilon,
-                            reg_term_const, near_field_g_denum),
+                            query, grad_output, params.reg_context),
                         compensation);
             }
           }
@@ -691,7 +677,7 @@ void compute_point_normal_gradients(
     return;
   }
 
-  float inv_epsilon = 1.F / params.epsilon;
+  const auto ctx = PointNormalContext::make(params.epsilon);
   // There is no tree if there is only one leaf
   if (params.query_count <= 32) {
     uint32_t threads = 256;
@@ -700,7 +686,7 @@ void compute_point_normal_gradients(
                                                        stream>>>(
         params.points, params.normals, params.sort_indirections,
         params.sorted_queries, params.sorted_grad_outputs, params.query_count,
-        params.geometry_count, params.gradients, inv_epsilon, params.norm);
+        params.geometry_count, params.gradients, ctx, params.norm);
     CUDA_CHECK(cudaGetLastError());
     return;
   }
@@ -738,7 +724,7 @@ void compute_point_normal_gradients(
       .query_count = params.query_count,
       .geometry_count = params.geometry_count,
       .beta_2 = beta_2,
-      .inv_epsilon = inv_epsilon,
+      .reg_context = ctx,
       .norm = params.norm};
   compute_point_normal_gradient_kernel<<<blocks, threads, 0, stream>>>(
       kernel_params);
@@ -751,6 +737,7 @@ __global__ void compute_triangle_gradient_single_leaf_kernel(
     const SoAView<Vec3> sorted_queries,
     const float *__restrict__ sorted_grad_outputs, const uint32_t query_count,
     const uint32_t geometry_count, float *__restrict__ gradients,
+    const typename Triangle::Context ctx,
     const SceneNormalization norm) {
   // Global index of the geometry this thread is responsible for
   uint32_t my_geometry_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -779,7 +766,7 @@ __global__ void compute_triangle_gradient_single_leaf_kernel(
   // PointNormal.
   for (uint32_t i = 0; i < query_count; ++i) {
     Triangle contrib = my_geometry.gradContributionOfQuery(
-        shared_query[i], shared_grad_output[i]);
+        shared_query[i], shared_grad_output[i], ctx);
     my_grad += contrib;
   }
 
@@ -810,6 +797,7 @@ struct TriangleGradientKernelParams {
   uint32_t query_count;
   uint32_t geometry_count;
   float beta_2;
+  typename Triangle::Context reg_context;
   SceneNormalization norm;
 };
 
@@ -923,7 +911,7 @@ __global__ void __launch_bounds__(128) compute_triangle_gradient_kernel(
       bool need_taylor_coefficients =
           is_active &&
           should_node_be_approximated(shared_warp_geometry[warp_id][lane_id],
-                                      current_node.getAABB(), params.beta_2);
+                                      current_node.getAABB(), params.beta_2, params.reg_context);
 
       uint32_t load_taylor_coefficients_mask =
           __ballot_sync(0xFFFFFFFF, need_taylor_coefficients);
@@ -988,7 +976,7 @@ __global__ void __launch_bounds__(128) compute_triangle_gradient_kernel(
               float grad_output = params.sorted_grad_outputs[query_idx];
               kahan_add(my_gradient,
                         shared_warp_geometry[warp_id][lane_id]
-                            .gradContributionOfQuery(query, grad_output),
+                            .gradContributionOfQuery(query, grad_output, params.reg_context),
                         compensation);
             }
           }
@@ -1024,6 +1012,8 @@ void compute_triangle_gradients(const ComputeGradientsTriangleParams &params,
     return;
   }
 
+  const auto ctx = Triangle::Context::make(params.epsilon);
+
   // There is no tree if there is only one leaf
   if (params.query_count <= 32) {
     uint32_t threads = 256;
@@ -1032,7 +1022,7 @@ void compute_triangle_gradients(const ComputeGradientsTriangleParams &params,
                                                    stream>>>(
         params.triangles, params.sort_indirections, params.sorted_queries,
         params.sorted_grad_outputs, params.query_count, params.geometry_count,
-        params.gradients, params.norm);
+        params.gradients, ctx, params.norm);
     return;
   }
 
@@ -1054,6 +1044,7 @@ void compute_triangle_gradients(const ComputeGradientsTriangleParams &params,
   cudaGetDeviceProperties(&deviceProp, device_id);
   int blocks = blocks_per_sm * deviceProp.multiProcessorCount;
 
+
   TriangleGradientKernelParams kernel_params{
       .triangles = params.triangles,
       .sort_indirections = params.sort_indirections,
@@ -1068,6 +1059,7 @@ void compute_triangle_gradients(const ComputeGradientsTriangleParams &params,
       .query_count = params.query_count,
       .geometry_count = params.geometry_count,
       .beta_2 = beta_2,
+      .reg_context = ctx,
       .norm = params.norm};
   compute_triangle_gradient_kernel<<<blocks, threads, 0, stream>>>(
       kernel_params);

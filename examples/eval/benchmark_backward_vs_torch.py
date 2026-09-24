@@ -49,6 +49,9 @@ import torch
 import winder
 
 
+DEFAULT_EPSILON = 0.004  # = 1/250, matches the library default
+
+
 # ============================================================================
 # Mesh loading
 # ============================================================================
@@ -189,7 +192,7 @@ def _point_normal_grads_torch(
     epsilon: float,
     chunk_size: int,
     try_compile: bool,
-) -> tuple[np.ndarray, float, str | Non]:
+) -> tuple[np.ndarray, float, str | None]:
     # Convert to point-normal
     v0, v1, v2 = triangles_np[:, 0], triangles_np[:, 1], triangles_np[:, 2]
     points = ((v0 + v1 + v2) / 3.0).astype(np.float32)
@@ -320,6 +323,10 @@ def _mesh_grads_torch(
 # ============================================================================
 
 
+def _stream():
+    return torch.cuda.current_stream().cuda_stream
+
+
 def _wall_time_cuda(fn, warmup: int = 1, iters: int = 3) -> float:
     """Wall-clock ms with CUDA synchronize at boundaries."""
     for _ in range(warmup):
@@ -335,7 +342,7 @@ def _wall_time_cuda(fn, warmup: int = 1, iters: int = 3) -> float:
     return float(np.median(times))
 
 
-def _cuda_backward_triangle(tris_np, queries_np, grad_output_np, beta):
+def _cuda_backward_triangle(tris_np, queries_np, grad_output_np, beta, epsilon):
     device = "cuda"
     t = torch.from_numpy(tris_np).to(device)
     q = torch.from_numpy(queries_np).to(device)
@@ -345,20 +352,26 @@ def _cuda_backward_triangle(tris_np, queries_np, grad_output_np, beta):
     out_brute = torch.empty([N, 3, 3], device=device, dtype=torch.float32)
     out_fast = torch.empty_like(out_brute)
 
-    t_brute = _wall_time_cuda(
-        lambda: winder.brute_force_gradients(g, t, q, out_brute, stream=0)
-    )
+    def _brute():
+        winder.brute_force_gradients_triangle_soup(
+            g, t, q, out_brute, float(epsilon), _stream()
+        )
+
+    t_brute = _wall_time_cuda(_brute)
 
     def _fast():
-        eng = winder.GradientEngine(q, g, stream=0)
-        eng.compute(t, out_fast, beta=beta, stream=0)
+        eng = winder.GradientEngine(q, g, _stream())
+        eng.compute_triangle_soup(
+            t, out_fast, float(beta), float(epsilon), _stream()
+        )
 
     t_fast = _wall_time_cuda(_fast)
 
     return out_brute.cpu().numpy(), out_fast.cpu().numpy(), t_brute, t_fast
 
 
-def _cuda_backward_mesh(vertices_np, faces_np, queries_np, grad_output_np, beta):
+def _cuda_backward_mesh(vertices_np, faces_np, queries_np, grad_output_np,
+                        beta, epsilon):
     device = "cuda"
     v = torch.from_numpy(vertices_np).to(device)
     f = torch.from_numpy(faces_np.astype(np.uint32)).to(device)
@@ -369,13 +382,16 @@ def _cuda_backward_mesh(vertices_np, faces_np, queries_np, grad_output_np, beta)
     out_brute = torch.empty([K, 3], device=device, dtype=torch.float32)
     out_fast = torch.empty_like(out_brute)
 
-    t_brute = _wall_time_cuda(
-        lambda: winder.brute_force_gradients(g, v, f, q, out_brute, stream=0)
-    )
+    def _brute():
+        winder.brute_force_gradients_mesh(
+            g, v, f, q, out_brute, float(epsilon), _stream()
+        )
+
+    t_brute = _wall_time_cuda(_brute)
 
     def _fast():
-        eng = winder.GradientEngine(q, g, stream=0)
-        eng.compute(v, f, out_fast, beta=beta, stream=0)
+        eng = winder.GradientEngine(q, g, _stream())
+        eng.compute_mesh(v, f, out_fast, float(beta), float(epsilon), _stream())
 
     t_fast = _wall_time_cuda(_fast)
 
@@ -401,15 +417,18 @@ def _cuda_backward_point_normal(tris_np, queries_np, grad_output_np, beta, epsil
     out_brute = torch.empty([N, 2, 3], device=device, dtype=torch.float32)
     out_fast = torch.empty_like(out_brute)
 
-    t_brute = _wall_time_cuda(
-        lambda: winder.brute_force_gradients(
-            g, p, n, q, out_brute, epsilon=epsilon, stream=0
+    def _brute():
+        winder.brute_force_gradients_point_normal(
+            g, p, n, q, out_brute, float(epsilon), _stream()
         )
-    )
+
+    t_brute = _wall_time_cuda(_brute)
 
     def _fast():
-        eng = winder.GradientEngine(q, g, stream=0)
-        eng.compute(p, n, out_fast, beta=beta, epsilon=epsilon, stream=0)
+        eng = winder.GradientEngine(q, g, _stream())
+        eng.compute_point_normal(
+            p, n, out_fast, float(beta), float(epsilon), _stream()
+        )
 
     t_fast = _wall_time_cuda(_fast)
 
@@ -465,7 +484,13 @@ def main():
         help="Comma-separated: triangle, mesh, point_normal.",
     )
     p.add_argument("--beta", type=float, default=2.3)
-    p.add_argument("--pn-epsilon", type=float, default=1.0 / 250.0)
+    p.add_argument(
+        "--epsilon",
+        type=float,
+        default=DEFAULT_EPSILON,
+        help=f"Regularization fraction of scene scale, applied to all modes. "
+             f"Default {DEFAULT_EPSILON} (= 1/250). Use 0 for the sharp kernel.",
+    )
     p.add_argument(
         "--torch-chunk-size",
         type=int,
@@ -537,7 +562,6 @@ def main():
 
                 try:
                     if mode == "triangle":
-                        # PyTorch
                         pt_grads, pt_ms, c_err = _triangle_grads_torch(
                             tris,
                             queries,
@@ -547,13 +571,11 @@ def main():
                         )
                         row["pytorch_ms"] = pt_ms
                         row["torch_compile_error"] = c_err or ""
-                        # CUDA
                         bf, ft, bf_ms, ft_ms = _cuda_backward_triangle(
-                            tris, queries, grad_out, args.beta
+                            tris, queries, grad_out, args.beta, args.epsilon
                         )
                         row["cuda_brute_ms"] = bf_ms
                         row["cuda_fast_ms"] = ft_ms
-                        # Sanity: compare shapes
                         assert pt_grads.shape == bf.shape == ft.shape
 
                     elif mode == "mesh":
@@ -568,7 +590,8 @@ def main():
                         row["pytorch_ms"] = pt_ms
                         row["torch_compile_error"] = c_err or ""
                         bf, ft, bf_ms, ft_ms = _cuda_backward_mesh(
-                            vertices, faces, queries, grad_out, args.beta
+                            vertices, faces, queries, grad_out,
+                            args.beta, args.epsilon,
                         )
                         row["cuda_brute_ms"] = bf_ms
                         row["cuda_fast_ms"] = ft_ms
@@ -579,14 +602,14 @@ def main():
                             tris,
                             queries,
                             grad_out,
-                            args.pn_epsilon,
+                            args.epsilon,
                             args.torch_chunk_size,
                             args.try_torch_compile,
                         )
                         row["pytorch_ms"] = pt_ms
                         row["torch_compile_error"] = c_err or ""
                         bf, ft, bf_ms, ft_ms = _cuda_backward_point_normal(
-                            tris, queries, grad_out, args.beta, args.pn_epsilon
+                            tris, queries, grad_out, args.beta, args.epsilon
                         )
                         row["cuda_brute_ms"] = bf_ms
                         row["cuda_fast_ms"] = ft_ms
@@ -602,7 +625,6 @@ def main():
                     rows.append(row)
                     continue
 
-                # Speedups
                 row["speedup_pt_vs_fast"] = (
                     row["pytorch_ms"] / row["cuda_fast_ms"]
                     if row["cuda_fast_ms"] > 0

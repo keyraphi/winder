@@ -32,12 +32,14 @@ from tqdm.auto import tqdm
 import winder
 
 
+DEFAULT_EPSILON = 0.004  # = 1/250, matches the library default
+
 def cache_path_for(
-    cache_dir: Path, mesh_name: str, n_queries: int, beta: float
+    cache_dir: Path, mesh_name: str, n_queries: int, beta: float, epsilon: float
 ) -> Path:
-    """One cache file per (mesh, query count, beta)."""
+    """One cache file per (mesh, query count, beta, epsilon)."""
     safe = mesh_name.replace("/", "_")
-    return cache_dir / f"{safe}__q{n_queries}__b{beta}.npz"
+    return cache_dir / f"{safe}__q{n_queries}__b{beta}__e{epsilon}.npz"
 
 
 def find_mesh(archive: str, mesh_name: str) -> bytes:
@@ -83,7 +85,7 @@ def sample_queries_grid(tris: np.ndarray, n_queries: int) -> np.ndarray:
     return pts.astype(np.float32)
 
 
-def load_or_build(archive, mesh_name, n_queries, beta, cache_path) -> tuple:
+def load_or_build(archive, mesh_name, n_queries, beta, epsilon, cache_path) -> tuple:
     """Return (tris, queries), loading from cache if it exists."""
     if cache_path.exists():
         print(f"[CACHE] loading {cache_path}")
@@ -98,7 +100,13 @@ def load_or_build(archive, mesh_name, n_queries, beta, cache_path) -> tuple:
     tris = parse_stl_via_igl(raw)
     queries = sample_queries_grid(tris, n_queries)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(cache_path, tris=tris, queries=queries, beta=np.float32(beta))
+    np.savez_compressed(
+        cache_path,
+        tris=tris,
+        queries=queries,
+        beta=np.float32(beta),
+        epsilon=np.float32(epsilon),
+    )
     print(f"[CACHE] wrote {cache_path}")
     return tris, queries
 
@@ -135,8 +143,6 @@ def print_mesh_diagnostics(tris: np.ndarray) -> None:
         f"{np.median(areas):.3e} / {areas.max():.3e}"
     )
 
-    # Vertex-duplication check: if many triangles share vertices, the tree
-    # structure can behave differently than the raw count suggests.
     verts = flat.reshape(-1, 3)
     unique_verts = np.unique(np.round(verts, decimals=4), axis=0)
     print(f"[INFO] verts (raw)    = {len(verts)}")
@@ -149,6 +155,13 @@ def main():
     p.add_argument("--mesh", required=True, help="Substring of the tar member name")
     p.add_argument("--query_count", type=int, default=1000000)
     p.add_argument("--beta", type=float, default=2.0)
+    p.add_argument(
+        "--epsilon",
+        type=float,
+        default=DEFAULT_EPSILON,
+        help=f"Regularization fraction of scene scale. "
+        f"Default {DEFAULT_EPSILON} (= 1/250). Use 0 for the sharp kernel.",
+    )
     p.add_argument("--cache_dir", type=str, default="/tmp/thingi10k_cached")
     p.add_argument(
         "--no_cache",
@@ -164,16 +177,20 @@ def main():
     args = p.parse_args()
 
     cache_dir = Path(args.cache_dir)
-    cache_path = cache_path_for(cache_dir, args.mesh, args.query_count, args.beta)
+    cache_path = cache_path_for(
+        cache_dir, args.mesh, args.query_count, args.beta, args.epsilon
+    )
     if args.no_cache and cache_path.exists():
         cache_path.unlink()
         print(f"[CACHE] removed {cache_path}")
 
     tris, queries = load_or_build(
-        args.archive, args.mesh, args.query_count, args.beta, cache_path
+        args.archive, args.mesh, args.query_count, args.beta, args.epsilon, cache_path
     )
     print_mesh_diagnostics(tris)
     print(f"[INFO] queries shape  = {queries.shape}")
+    print(f"[INFO] beta           = {args.beta}")
+    print(f"[INFO] epsilon        = {args.epsilon}")
 
     if args.stage == "all" or args.stage in ("tensors", "brute", "engine", "compute"):
         print("[STEP] moving tensors to GPU")
@@ -189,7 +206,9 @@ def main():
 
     if args.stage == "all" or args.stage in ("brute", "engine", "compute"):
         print("[STEP] brute force")
-        winder.brute_force_winding_numbers(t_tri, t_q, wn_brute, stream=0)
+        winder.brute_force_winding_numbers_triangle_soup(
+            t_tri, t_q, wn_brute, float(args.epsilon), 0
+        )
         torch.cuda.synchronize()
         print("        OK")
         if args.stage == "brute":
@@ -204,7 +223,7 @@ def main():
             return
 
     print("[STEP] computing winding numbers")
-    engine.compute(t_q, wn_fast, beta=args.beta, stream=0)
+    engine.compute(t_q, wn_fast, float(args.beta), float(args.epsilon), 0)
     torch.cuda.synchronize()
     print("        OK")
 
