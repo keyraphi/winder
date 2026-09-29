@@ -329,7 +329,7 @@ auto GradientBackend::compute(const float *points, const float *scaled_normals,
     beta = 2.3;
   }
   epsilon = std::max(0.F, epsilon);
-  epsilon = epsilon * max_dim * m_norm.scale;
+  float scene_scale = max_dim * m_norm.scale;
 
   uint32_t leaf_count = (m_query_count + LEAF_SIZE - 1) / LEAF_SIZE;
   uint32_t *global_counter;
@@ -353,6 +353,7 @@ auto GradientBackend::compute(const float *points, const float *scaled_normals,
       .global_device_counter = global_counter,
       .beta = beta,
       .epsilon = epsilon,
+      .scene_scale = scene_scale,
       .norm = m_norm};
   compute_point_normal_gradients(params, m_device, compute_stream);
 
@@ -403,7 +404,7 @@ auto GradientBackend::compute(const float *triangles_float,
     beta = 2.3;
   }
   epsilon = std::max(0.F, epsilon);
-  epsilon = epsilon * max_dim * m_norm.scale;
+  float scene_scale = max_dim * m_norm.scale;
 
   uint32_t leaf_count = (m_query_count + LEAF_SIZE - 1) / LEAF_SIZE;
   uint32_t *global_counter;
@@ -426,6 +427,7 @@ auto GradientBackend::compute(const float *triangles_float,
       .global_device_counter = global_counter,
       .beta = beta,
       .epsilon = epsilon,
+      .scene_scale = scene_scale,
       .norm = m_norm};
   compute_triangle_gradients(params, m_device, compute_stream);
 

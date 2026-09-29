@@ -550,6 +550,7 @@ auto WindingNumbersBackend<Geometry>::compute(const float *queries,
     beta = GeometryTraits<Geometry>::default_beta;
   }
   epsilon = std::max(0.F, epsilon);
+  float scene_scale = 1.F;
   uint32_t leaf_count = (m_count + LEAF_SIZE - 1) / LEAF_SIZE;
   uint32_t *global_counter;
   CUDA_CHECK(
@@ -569,6 +570,7 @@ auto WindingNumbersBackend<Geometry>::compute(const float *queries,
       global_counter,
       beta,
       epsilon,
+      scene_scale,
       m_norm};
   compute_winding_numbers<Geometry>(params, m_device, compute_stream);
   // free temporary memory

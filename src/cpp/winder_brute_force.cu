@@ -39,17 +39,19 @@ auto brute_force_point_normal_impl(
 
   CUDA_CHECK(cudaEventRecord(start, compute_stream));
 
+  float max_dim = 0.F;
   if (epsilon > 0.F) {
-    SceneBounds scene_bounds = computeSceneBounds(points_vec3, geometry_count, compute_stream);
-    float max_dim = SceneNormalization::effective_extent(scene_bounds);
-    epsilon *= max_dim;
+    SceneBounds scene_bounds =
+        computeSceneBounds(points_vec3, geometry_count, compute_stream);
+    max_dim = SceneNormalization::effective_extent(scene_bounds);
   } else {
     epsilon = 0.F;
   }
 
-  compute_brute_force_point_normal(
-      queries_vec3, points_vec3, normals_vec3, (uint32_t)query_count,
-      (uint32_t)geometry_count, winding_numbers, epsilon, compute_stream);
+  compute_brute_force_point_normal(queries_vec3, points_vec3, normals_vec3,
+                                   (uint32_t)query_count,
+                                   (uint32_t)geometry_count, winding_numbers,
+                                   epsilon, max_dim, compute_stream);
 
   CUDA_CHECK(cudaEventRecord(finish, compute_stream));
   // free events
@@ -106,8 +108,6 @@ auto brute_force_triangle_impl(const float *triangles_float,
   const auto *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
   const auto *triangles = reinterpret_cast<const Triangle *>(triangles_float);
 
-  epsilon = std::max(epsilon, 0.F); // epsilon can not be negative
-                                    //
   cudaEvent_t start, finish;
   CUDA_CHECK(cudaEventCreate(&start));
   CUDA_CHECK(cudaEventCreate(&finish));
@@ -116,10 +116,18 @@ auto brute_force_triangle_impl(const float *triangles_float,
   cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
 
   CUDA_CHECK(cudaEventRecord(start, compute_stream));
+  float max_dim = 0.F;
+  if (epsilon > 0.F) {
+    SceneBounds scene_bounds =
+        computeSceneBounds(triangles, geometry_count, compute_stream);
+    max_dim = SceneNormalization::effective_extent(scene_bounds);
+  } else {
+    epsilon = 0.F;
+  }
 
   compute_brute_force_triangle(queries_vec3, triangles, (uint32_t)query_count,
                                (uint32_t)geometry_count, winding_numbers,
-                               epsilon, compute_stream);
+                               epsilon, max_dim, compute_stream);
 
   CUDA_CHECK(cudaEventRecord(finish, compute_stream));
   // free events
@@ -146,11 +154,11 @@ auto brute_force_point_normal_gradient_impl(
   // convert stream to cuda stream
   cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
 
+  float max_dim = 0.F;
   if (epsilon > 0.F) {
     SceneBounds scene_bounds =
         computeSceneBounds(points_vec3, geometry_count, compute_stream);
-    float max_dim = SceneNormalization::effective_extent(scene_bounds);
-    epsilon *= max_dim;
+    max_dim = SceneNormalization::effective_extent(scene_bounds);
   } else {
     epsilon = 0.F;
   }
@@ -160,7 +168,7 @@ auto brute_force_point_normal_gradient_impl(
   compute_brute_force_gradients_point_normals(
       grad_output, points_vec3, scaled_normals_vec3, queries_vec3,
       (uint32_t)geometry_count, (uint32_t)query_count, gradients, epsilon,
-      compute_stream);
+      max_dim, compute_stream);
 
   CUDA_CHECK(cudaEventRecord(finish, compute_stream));
   // free events
@@ -187,18 +195,18 @@ auto brute_force_triangle_gradient_impl(
 
   CUDA_CHECK(cudaEventRecord(start, compute_stream));
 
+  float max_dim = 0.F;
   if (epsilon > 0.F) {
     SceneBounds scene_bounds =
         computeSceneBounds(triangles, geometry_count, compute_stream);
-    float max_dim = SceneNormalization::effective_extent(scene_bounds);
-    epsilon *= max_dim;
+    max_dim = SceneNormalization::effective_extent(scene_bounds);
   } else {
     epsilon = 0.F;
   }
 
   compute_brute_force_gradients_triangles(
       grad_output, triangles, queries_vec3, (uint32_t)geometry_count,
-      (uint32_t)query_count, gradients, epsilon, compute_stream);
+      (uint32_t)query_count, gradients, epsilon, max_dim, compute_stream);
 
   CUDA_CHECK(cudaEventRecord(finish, compute_stream));
   // free events

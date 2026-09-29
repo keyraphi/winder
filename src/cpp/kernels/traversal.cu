@@ -353,7 +353,7 @@ void compute_winding_numbers(
     return;
   }
 
-  auto ctx = Geometry::Context::make(params.epsilon);
+  auto ctx = Geometry::Context::make(params.epsilon, params.scene_scale);
   // There i no tree if there is only one leaf
   if (params.geometry_count <= 32) {
     uint32_t threads = 256;
@@ -568,7 +568,7 @@ __global__ void __launch_bounds__(128) compute_point_normal_gradient_kernel(
       bool need_taylor_coefficients =
           is_active &&
           should_node_be_approximated(my_geometry, current_node.getAABB(),
-                                      params.beta_2, params.reg_context.inv_epsilon);
+                                        params.beta_2, params.reg_context.inv_eps_length);
 
       uint32_t load_taylor_coefficients_mask =
           __ballot_sync(0xFFFFFFFF, need_taylor_coefficients);
@@ -677,7 +677,7 @@ void compute_point_normal_gradients(
     return;
   }
 
-  const auto ctx = PointNormalContext::make(params.epsilon);
+  const auto ctx = PointNormalContext::make(params.epsilon,params.scene_scale);
   // There is no tree if there is only one leaf
   if (params.query_count <= 32) {
     uint32_t threads = 256;
@@ -1012,7 +1012,7 @@ void compute_triangle_gradients(const ComputeGradientsTriangleParams &params,
     return;
   }
 
-  const auto ctx = Triangle::Context::make(params.epsilon);
+  const auto ctx = Triangle::Context::make(params.epsilon, params.scene_scale);
 
   // There is no tree if there is only one leaf
   if (params.query_count <= 32) {

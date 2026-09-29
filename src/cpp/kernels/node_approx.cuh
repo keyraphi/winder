@@ -51,13 +51,13 @@ should_node_be_approximated(const Triangle &geometry, const AABB &aabb,
   } else {
     // Near-field guard: refuse to approximate if the nearest vertex is
     // inside the regularized band.
-    if (dist_geometry_to_com2 < 4.F * ctx.eps2) {
+    if (dist_geometry_to_com2 < 4.F * ctx.eps_length2) {
       return false;
     }
 
     // Far-field check with the effective radius.
     const float R = __half2float(aabb.max_distance);
-    const float two_eps = 2.F * ctx.eps; // or store eps in ctx
+    const float two_eps = 2.F * ctx.eps_length; // or store eps in ctx
     const float effective_R = fmaxf(R, two_eps);
     return dist_geometry_to_com2 > effective_R * effective_R * beta_2;
   }

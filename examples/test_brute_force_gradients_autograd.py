@@ -146,6 +146,20 @@ def generate_queries(vertices, indices, mode, num_queries=100, rng=None):
 # =============================================================================
 # Regularization helpers for the torch reference
 # =============================================================================
+def torch_angular_bump(u: torch.Tensor) -> torch.Tensor:
+    """Cubic smoothstep on u, clamped so it is flat outside [0.25, 1].
+
+    Matches `angular_bump` in geometry.h:
+        t = clamp((u - 1/4) * 4/3, 0, 1)
+        w = 1 - t^2 (3 - 2t)
+
+    The clamp has zero gradient when active in PyTorch, so the composition
+    is C^1 in the same way as the C++ branchy version.
+    """
+    t = torch.clamp((u - 0.25) * (4.0 / 3.0), 0.0, 1.0)
+    return 1.0 - t * t * (3.0 - 2.0 * t)
+
+
 def torch_g_compact(t: torch.Tensor) -> torch.Tensor:
     """Compact-support g(t): quartic on [0,1], cubic on [1,2], identity above 2.
 
@@ -210,18 +224,26 @@ def torch_regularized_edge_lengths(
 # =============================================================================
 # Reference implementations (float64 autograd)
 # =============================================================================
+
 def pytorch_triangle_winding_grads_chunked_64(
     vertices: torch.Tensor,  # (N, 3, 3) float64
     queries: torch.Tensor,  # (Q, 3)    float64
     grad_output: torch.Tensor,  # (Q,)      float64
-    eps_world: float = 0.0,
+    eps_world: float = 0.0,  # softening length, world units
+    eps_fraction: float = 0.0,  # dimensionless fraction (for the angular bump)
     reg_mode: str = "sharp",
     chunk_size: int = 50,
 ) -> torch.Tensor:
-    """Exact float64 autograd gradients w.r.t. the vertices of a triangle soup."""
+    """Exact float64 autograd gradients w.r.t. the vertices of a triangle soup.
+
+    Matches the C++ forward exactly:
+      1. length regularization (sharp / plummer / compact) on |a|, |b|, |c|
+      2. angular bump on (det_norm, div_norm) with the same eps_fraction
+    """
     v = vertices.clone().detach().requires_grad_(True)
     num_queries = queries.shape[0]
     inv_two_pi = 1.0 / (2.0 * math.pi)
+    inv_sqrt2 = 1.0 / math.sqrt(2.0)
 
     for i in range(0, num_queries, chunk_size):
         q_chunk = queries[i : i + chunk_size]
@@ -249,8 +271,17 @@ def pytorch_triangle_winding_grads_chunked_64(
         det_norm = torch.sum(a * cross_bc, dim=-1) * inv_a * inv_b * inv_c
         div_norm = 1.0 + cos_ab + cos_ac + cos_bc
 
-        sol_angle = torch.atan2(det_norm, div_norm) * inv_two_pi
+        # Angular bump (matches C++ geometry.h `contributionToQuery`)
+        if eps_fraction > 0.0:
+            u = (det_norm * det_norm + div_norm * div_norm) / (
+                eps_fraction * eps_fraction
+            )
+            w = torch_angular_bump(u)
+            shift = eps_fraction * inv_sqrt2 * w
+            det_norm = det_norm + shift
+            div_norm = div_norm + shift
 
+        sol_angle = torch.atan2(det_norm, div_norm) * inv_two_pi
         loss_chunk = torch.sum(sol_angle * g_chunk[:, None])
         loss_chunk.backward()
 
@@ -263,13 +294,14 @@ def pytorch_mesh_winding_grads_chunked_64(
     queries: torch.Tensor,  # (Q, 3) float64
     grad_output: torch.Tensor,  # (Q,)   float64
     eps_world: float = 0.0,
+    eps_fraction: float = 0.0,
     reg_mode: str = "sharp",
     chunk_size: int = 50,
 ) -> torch.Tensor:
-    """Exact float64 autograd gradients w.r.t. shared mesh vertices."""
     v = vertices.clone().detach().requires_grad_(True)
     num_queries = queries.shape[0]
     inv_two_pi = 1.0 / (2.0 * math.pi)
+    inv_sqrt2 = 1.0 / math.sqrt(2.0)
 
     for i in range(0, num_queries, chunk_size):
         q_chunk = queries[i : i + chunk_size]
@@ -297,6 +329,15 @@ def pytorch_mesh_winding_grads_chunked_64(
         cross_bc = torch.cross(b, c, dim=-1)
         det_norm = torch.sum(a * cross_bc, dim=-1) * inv_a * inv_b * inv_c
         div_norm = 1.0 + cos_ab + cos_ac + cos_bc
+
+        if eps_fraction > 0.0:
+            u = (det_norm * det_norm + div_norm * div_norm) / (
+                eps_fraction * eps_fraction
+            )
+            w = torch_angular_bump(u)
+            shift = eps_fraction * inv_sqrt2 * w
+            det_norm = det_norm + shift
+            div_norm = div_norm + shift
 
         sol_angle = torch.atan2(det_norm, div_norm) * inv_two_pi
         loss_chunk = torch.sum(sol_angle * g_chunk[:, None])
@@ -559,7 +600,8 @@ def test_triangle_gradients(
     # Epsilon in world units. The C++ internally normalizes the scene by
     # its characteristic extent, so eps_world = eps_fraction * scale.
     # ------------------------------------------------------------------
-    scale = scene_scale(vertices)
+    triangles = vertices[indices]
+    scale = scene_scale(triangles.reshape(-1, 3))
     eps_world = epsilon * scale
 
     # ------------------------------------------------------------------
@@ -586,6 +628,7 @@ def test_triangle_gradients(
         q_64,
         g_out_64,
         eps_world=eps_world,
+        eps_fraction=epsilon,
         reg_mode=reg_mode,
     )
     ref_grads_32 = ref_grads_64.to(torch.float32)
@@ -619,7 +662,8 @@ def test_mesh_gradients(
     g_out_tensor = torch.from_numpy(grad_output).cuda()
     cuda_grads = torch.empty_like(v_tensor)
 
-    scale = scene_scale(vertices)
+    used_vertices = vertices[indices].reshape(-1, 3)
+    scale = scene_scale(used_vertices)
     eps_world = epsilon * scale
 
     winder.brute_force_gradients_mesh(
@@ -643,6 +687,7 @@ def test_mesh_gradients(
         q_64,
         g_out_64,
         eps_world=eps_world,
+        eps_fraction=epsilon,
         reg_mode=reg_mode,
     )
     ref_grads_32 = ref_grads_64.to(torch.float32)
@@ -786,7 +831,7 @@ def main():
         "--reg_mode",
         type=str,
         choices=REG_MODES,
-        default="plummer",
+        default="compact",
         help="Regularization strategy used by the torch reference.",
     )
     parser.add_argument("--seed", type=int, default=0)

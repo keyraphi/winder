@@ -23,6 +23,7 @@ template <IsGeometry Geometry> struct ComputeWindingNumbersParams {
   uint32_t *global_device_counter;
   const float beta;
   const float epsilon;
+  const float scene_scale;
   const SceneNormalization norm;
 };
 
@@ -47,6 +48,7 @@ struct ComputeGradientsPointNormalParams {
   uint32_t *global_device_counter;
   const float beta;
   const float epsilon;
+  const float scene_scale;
   const SceneNormalization norm;
 };
 
@@ -69,6 +71,7 @@ struct ComputeGradientsTriangleParams {
   uint32_t *global_device_counter;
   const float beta;
   const float epsilon;
+  const float scene_scale;
   const SceneNormalization norm;
 };
 

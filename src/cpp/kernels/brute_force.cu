@@ -132,13 +132,13 @@ __global__ void compute_winding_numbers_brute_force_triangle_kernel(
 void compute_brute_force_point_normal(
     const Vec3 *queries_vec3, const Vec3 *points_vec3, const Vec3 *normals_vec3,
     const uint32_t query_count, const uint32_t geometry_count,
-    float *winding_numbers, float epsilon, cudaStream_t compute_stream) {
+    float *winding_numbers, float epsilon, float scene_scale, cudaStream_t compute_stream) {
 
   if (query_count == 0) {
     return;
   }
 
-  const auto ctx = PointNormalContext::make(epsilon);
+  const auto ctx = PointNormalContext::make(epsilon, scene_scale);
 
   constexpr uint32_t threads = 256;
   uint32_t blocks = (query_count + threads - 1) / threads;
@@ -157,6 +157,7 @@ void compute_brute_force_triangle(const Vec3 *queries_vec3,
                                   const uint32_t query_count,
                                   const uint32_t geometry_count,
                                   float *winding_numbers, const float epsilon,
+                                  const float scene_scale,
                                   cudaStream_t compute_stream) {
   if (query_count == 0) {
     return;
@@ -166,7 +167,7 @@ void compute_brute_force_triangle(const Vec3 *queries_vec3,
   uint32_t blocks = (query_count + threads - 1) / threads;
   size_t smem_size = threads * sizeof(Triangle);
 
-  const auto ctx = Triangle::Context::make(epsilon);
+  const auto ctx = Triangle::Context::make(epsilon, scene_scale);
 
   compute_winding_numbers_brute_force_triangle_kernel<threads>
       <<<blocks, threads, smem_size, compute_stream>>>(
@@ -273,12 +274,12 @@ void compute_brute_force_gradients_point_normals(
     const float *grad_output, const Vec3 *points_vec3,
     const Vec3 *scaled_normals_vec3, const Vec3 *queries_vec3,
     const uint32_t geometry_count, const uint32_t query_count, float *gradients,
-    const float epsilon, cudaStream_t compute_stream) {
+    const float epsilon, const float scene_scale, cudaStream_t compute_stream) {
 
   constexpr uint32_t threads = 256;
   uint32_t geom_blocks = (geometry_count + threads - 1) / threads;
 
-  const auto ctx = PointNormalContext::make(epsilon);
+  const auto ctx = PointNormalContext::make(epsilon, scene_scale);
   size_t smem_size = threads * (sizeof(Vec3) + sizeof(float));
 
   gradients_brute_force_point_normals_kernel<threads>
@@ -389,6 +390,7 @@ void compute_brute_force_gradients_triangles(
     const float *grad_output, const Triangle *triangles,
     const Vec3 *queries_vec3, const uint32_t geometry_count,
     const uint32_t query_count, float *gradients, const float epsilon,
+    const float scene_scale,
     cudaStream_t compute_stream) {
 
   constexpr uint32_t threads = 256;
@@ -396,7 +398,7 @@ void compute_brute_force_gradients_triangles(
 
   size_t smem_size = threads * (sizeof(Vec3) + sizeof(float));
 
-  const auto ctx = Triangle::Context::make(epsilon);
+  const auto ctx = Triangle::Context::make(epsilon, scene_scale);
 
   gradients_brute_force_triangles_kernel<threads>
       <<<geom_blocks, threads, smem_size, compute_stream>>>(

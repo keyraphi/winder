@@ -39,15 +39,15 @@ struct RegPlummer {};
 struct RegCompact {};
 
 #ifndef WINDER_DEFAULT_REG
-using DefaultReg = RegPlummer;
+using DefaultReg = RegCompact;
 #else
 using DefaultReg = WINDER_DEFAULT_REG;
 #endif
 
-#define TWO_OVER_SQRT_PI 1.1283791671F
-#define FOUR_OVER_3SQRT_PI 0.75225277806F // (4 / (3 * sqrt(pi)))
-#define INV_FOUR_PI 0.07957747154F
-#define INV_TWO_PI 0.15915494309F
+constexpr float TWO_OVER_SQRT_PI = 1.1283791671F;
+constexpr float FOUR_OVER_3SQRT_PI = 0.75225277806F; // (4 / (3 * sqrt(pi)))
+constexpr float INV_FOUR_PI = 0.07957747154F;
+constexpr float INV_TWO_PI = 0.15915494309F;
 
 // =============================================================================
 // Contexts (all values precomputed on host, passed by value to kernels)
@@ -65,10 +65,10 @@ struct RegularizedEdge {
   float hat_scale; // dr/dv = a * hat_scale  (only when NeedFull)
 };
 
-namespace winder_reg_compact {
-constexpr float SQRT2 = std::numbers::sqrt2_v<float>;
 constexpr float INV_SQRT2 = 0.7071067811865476F;
+constexpr float SQRT2 = std::numbers::sqrt2_v<float>;
 
+namespace winder_reg_compact {
 // Quartic [0, 1]: g(t) = 1 + A2 t^2 + A4 t^4
 constexpr float A2 = 0.4748737341529164F;
 constexpr float A4 = -0.0606601717798213F;
@@ -96,39 +96,56 @@ __host__ __device__ __forceinline__ auto S_regularization(const float t)
 // =============================================================================
 // Triangle contexts -- precompute everything once per launch
 // =============================================================================
-
-template <> struct TriangleContext<RegSharp> {
-  __host__ __device__ __forceinline__ static auto make(float /*eps*/)
-      -> TriangleContext {
-    return {};
-  }
-};
-
 template <> struct TriangleContext<RegPlummer> {
-  float eps;  // softening length (needed for traversal criterion)
-  float eps2; // softening length squared
+  float eps_length;
+  float eps_length2;
+  float inv_eps_length2;
+  float eps_angle;
+  float inv_eps_angle;
+  float inv_eps_angle2;
 
-  __host__ __device__ __forceinline__ static auto make(float eps)
+  __host__ __device__ __forceinline__ static auto make(float eps_fraction,
+                                                       float scene_scale)
       -> TriangleContext {
-    return TriangleContext{.eps=eps, .eps2=eps * eps};
+    TriangleContext ctx{};
+    ctx.eps_angle = eps_fraction;
+    ctx.inv_eps_angle = eps_fraction > 0.F ? 1.F / eps_fraction : 0.F;
+    ctx.inv_eps_angle2 =
+        eps_fraction > 0.F ? 1.F / (eps_fraction * eps_fraction) : 0.F;
+    ctx.eps_length = eps_fraction * scene_scale;
+    ctx.eps_length2 = ctx.eps_length * ctx.eps_length;
+    ctx.inv_eps_length2 = ctx.eps_length > 0.F ? 1.F / ctx.eps_length2 : 0.F;
+    return ctx;
   }
 };
 
 template <> struct TriangleContext<RegCompact> {
-  float eps;      // softening length (needed for `g * eps`)
-  float eps2;     // eps^2 (for the sharp fallback test)
-  float inv_eps;  // 1 / eps
-  float inv_eps2; // 1 / eps^2
+  float eps_length;
+  float eps_length2;
+  float inv_eps_length;
+  float inv_eps_length2;
+  float eps_angle;
+  float inv_eps_angle;
+  float inv_eps_angle2;
 
-  __host__ __device__ __forceinline__ static auto make(float eps)
+  __host__ __device__ __forceinline__ static auto make(float eps_fraction,
+                                                       float scene_scale)
       -> TriangleContext {
-    TriangleContext c{
-        .eps = eps, .eps2 = eps * eps, .inv_eps = 0.F, .inv_eps2 = 0.F};
-    if (eps > 0.F) {
-      c.inv_eps = 1.F / eps;
-      c.inv_eps2 = 1.F / c.eps2;
+    TriangleContext ctx{};
+    ctx.eps_angle = eps_fraction;
+    ctx.inv_eps_angle = eps_fraction > 0.F ? 1.F / eps_fraction : 0.F;
+    ctx.inv_eps_angle2 =
+        eps_fraction > 0.F ? 1.F / (eps_fraction * eps_fraction) : 0.F;
+    ctx.eps_length = eps_fraction * scene_scale;
+    ctx.eps_length2 = ctx.eps_length * ctx.eps_length;
+    if (ctx.eps_length > 0.F) {
+      ctx.inv_eps_length = 1.F / ctx.eps_length;
+      ctx.inv_eps_length2 = 1.F / ctx.eps_length2;
+    } else {
+      ctx.inv_eps_length = 0.F;
+      ctx.inv_eps_length2 = 0.F;
     }
-    return c;
+    return ctx;
   }
 };
 
@@ -136,19 +153,33 @@ template <> struct TriangleContext<RegCompact> {
 // PointNormal context -- precompute all derived scalars
 // =============================================================================
 struct PointNormalContext {
-  float inv_epsilon;        // 1 / epsilon
-  float reg_term_const;     // inv_epsilon^3 * INV_PI_1_5
-  float near_field_g_denum; // (INV_PI_1_5 / 3) * inv_epsilon^3
+  float inv_eps_length;
+  float reg_term_const;
+  float near_field_g_denum;
 
-  __host__ __device__ __forceinline__ static auto make(float eps)
+  __host__ __device__ __forceinline__ static auto make(float eps_fraction,
+                                                       float scene_scale)
       -> PointNormalContext {
     constexpr float INV_PI_1_5 = 0.179587122F;
-    const float inv_eps = 1.F / eps;
+    const float eps_length = eps_fraction * scene_scale;
+    if (eps_length <= 0.F) {
+      return PointNormalContext{.inv_eps_length = 0.F,
+                                .reg_term_const = 0.F,
+                                .near_field_g_denum = 0.F};
+    }
+    const float inv_eps = 1.F / eps_length;
     const float inv_eps3 = inv_eps * inv_eps * inv_eps;
-    return PointNormalContext{.inv_epsilon = inv_eps,
-                              .reg_term_const = inv_eps3 * INV_PI_1_5,
-                              .near_field_g_denum =
-                                  (INV_PI_1_5 / 3.F) * inv_eps3};
+    return PointNormalContext{
+        .inv_eps_length = inv_eps,
+        .reg_term_const = inv_eps3 * INV_PI_1_5,
+        .near_field_g_denum = (INV_PI_1_5 / 3.F) * inv_eps3,
+    };
+  }
+};
+template <> struct TriangleContext<RegSharp> {
+  __host__ __device__ __forceinline__ static auto make(float /*eps*/)
+      -> TriangleContext {
+    return {};
   }
 };
 
@@ -209,7 +240,7 @@ compact_edge(const float a2, const float eps, const float inv_eps,
     out.inv_r = inv_eps / g;
     if constexpr (NeedFull) {
       out.r = g * eps;
-      out.hat_scale = (2.F * A2 + 4.F * A4 * t2) * inv_eps2;
+      out.hat_scale = (2.F * A2 + 4.F * A4 * t2) * inv_eps;
     }
   } else if (t2 <= 4.F) {
     // Cubic bridge [1, 2].
@@ -246,16 +277,28 @@ regularize_edge(const float a2, const TriangleContext<Reg> ctx)
   if constexpr (std::is_same_v<Reg, RegSharp>) {
     return sharp_edge<NeedFull>(a2);
   } else if constexpr (std::is_same_v<Reg, RegPlummer>) {
-    if (ctx.eps2 <= 0.F) {
+    if (ctx.eps_length2 <= 0.F) {
       return sharp_edge<NeedFull>(a2);
     }
-    return plummer_edge<NeedFull>(a2, ctx.eps2);
+    return plummer_edge<NeedFull>(a2, ctx.eps_length2);
   } else {
-    if (ctx.eps <= 0.F) {
+    if (ctx.eps_length <= 0.F) {
       return sharp_edge<NeedFull>(a2);
     }
-    return compact_edge<NeedFull>(a2, ctx.eps, ctx.inv_eps, ctx.inv_eps2);
+    return compact_edge<NeedFull>(a2, ctx.eps_length, ctx.inv_eps_length,
+                                  ctx.inv_eps_length2);
   }
+}
+
+__host__ __device__ __forceinline__ auto angular_bump(const float u) -> float {
+  const float t = fminf(fmaxf((u - 0.25F) * (4.F / 3.F), 0.F), 1.F);
+  return 1.F - t * t * (3.F - 2.F * t);
+}
+
+__host__ __device__ __forceinline__ auto angular_bump_prime(const float u)
+    -> float {
+  const float t = fminf(fmaxf((u - 0.25F) * (4.F / 3.F), 0.F), 1.F);
+  return -8.F * t * (1.F - t); // dw/du = -6t(1-t)(4/3) = 8t(1-t)
 }
 
 // =============================================================================
@@ -447,10 +490,23 @@ struct Triangle {
     const float det_norm = a.dot(Vec3::cross(b, c)) * inv_a * inv_b * inv_c;
     const float div_norm = 1.F + cos_ab + cos_ac + cos_bc;
 
-    if (fabsf(div_norm) < 1e-6F) {
-      return 0.5F;
+    float P = det_norm;
+    float Q = div_norm;
+
+    if constexpr (!std::is_same_v<Reg, RegSharp>) {
+      if (ctx.inv_eps_length2 > 0.F) {
+        const float u = (P * P + Q * Q) * ctx.inv_eps_angle2;
+        const float c = ctx.eps_angle * INV_SQRT2 * angular_bump(u);
+        P += c;
+        Q += c;
+      }
     }
-    return atan2f(det_norm, div_norm) * INV_TWO_PI;
+    if constexpr (std::is_same_v<Reg, RegSharp>) {
+      if (fabsf(Q) < 1e-6F) {
+        return 0.5F;
+      }
+    }
+    return atan2f(P, Q) * INV_TWO_PI;
   }
 
   // -------------------------------------------------------------------------
@@ -489,13 +545,6 @@ struct Triangle {
     const float det_norm = a.dot(Vec3::cross(b, c)) * inv_a * inv_b * inv_c;
     const float div_norm = 1.F + cos_ab + cos_ac + cos_bc;
 
-    const float denom_norm = det_norm * det_norm + div_norm * div_norm;
-    if (denom_norm < 1e-12F) {
-      return Triangle{.v0 = Vec3{.x = 0.F, .y = 0.F, .z = 0.F},
-                      .v1 = Vec3{.x = 0.F, .y = 0.F, .z = 0.F},
-                      .v2 = Vec3{.x = 0.F, .y = 0.F, .z = 0.F}};
-    }
-
     const Vec3 dN_dv0 = Vec3::cross(b, c);
     const Vec3 dN_dv1 = Vec3::cross(c, a);
     const Vec3 dN_dv2 = Vec3::cross(a, b);
@@ -511,12 +560,46 @@ struct Triangle {
     const Vec3 dD_dv2 =
         hat_c * (a_len * b_len + a_dot_b) + a * b_len + b * a_len;
 
+    const float P = det_norm;
+    const float Q = div_norm;
     const float inv_L = inv_a * inv_b * inv_c;
+
+    if constexpr (!std::is_same_v<Reg, RegSharp>) {
+      if (ctx.inv_eps_angle2 > 0.F) {
+        const float u = (P * P + Q * Q) * ctx.inv_eps_angle2;
+        const float w = angular_bump(u);
+        const float wp = angular_bump_prime(u);
+        const float c = ctx.eps_angle * INV_SQRT2 * w;
+        const float alpha = SQRT2 * wp * ctx.inv_eps_angle;
+        const float P_reg = P + c;
+        const float Q_reg = Q + c;
+        const float D_reg = P_reg * P_reg + Q_reg * Q_reg;
+        const float QmP = Q - P;
+        const float A = Q_reg + alpha * P * QmP;
+        const float B = -P_reg + alpha * Q * QmP;
+        const float C = QmP * (c - alpha * (P * P + Q * Q));
+        const float factor = g * INV_TWO_PI / D_reg;
+        return Triangle{
+            .v0 = factor *
+                  (A * inv_L * dN_dv0 + B * inv_L * dD_dv0 + C * inv_a * hat_a),
+            .v1 = factor *
+                  (A * inv_L * dN_dv1 + B * inv_L * dD_dv1 + C * inv_b * hat_b),
+            .v2 = factor *
+                  (A * inv_L * dN_dv2 + B * inv_L * dD_dv2 + C * inv_c * hat_c),
+        };
+      }
+    }
+    // Sharp code path
+    const float denom_norm = P * P + Q * Q;
+    if (denom_norm < 1e-12F) {
+      return Triangle{
+          .v0 = Vec3::zero(), .v1 = Vec3::zero(), .v2 = Vec3::zero()};
+    }
     const float factor = g * INV_TWO_PI * (inv_L / denom_norm);
 
-    return Triangle{.v0 = (dN_dv0 * div_norm - dD_dv0 * det_norm) * factor,
-                    .v1 = (dN_dv1 * div_norm - dD_dv1 * det_norm) * factor,
-                    .v2 = (dN_dv2 * div_norm - dD_dv2 * det_norm) * factor};
+    return Triangle{.v0 = (dN_dv0 * Q - dD_dv0 * P) * factor,
+                    .v1 = (dN_dv1 * Q - dD_dv1 * P) * factor,
+                    .v2 = (dN_dv2 * Q - dD_dv2 * P) * factor};
   }
 
   [[nodiscard]] auto dump() const -> std::string {
@@ -586,13 +669,13 @@ struct PointNormal {
     const float inv_dist3 = inv_dist2 * inv_distance;
 
     const float distance = dist2 * inv_distance;
-    const float t = distance * ctx.inv_epsilon;
+    const float t = distance * ctx.inv_eps_length;
 
     float s_over_dist3;
     if (t < 2.F) {
       if (t < 0.1F) {
         s_over_dist3 = FOUR_OVER_3SQRT_PI *
-                       (ctx.inv_epsilon * ctx.inv_epsilon * ctx.inv_epsilon);
+                       (ctx.inv_eps_length * ctx.inv_eps_length * ctx.inv_eps_length);
       } else {
         s_over_dist3 = S_regularization(t) * inv_dist3;
       }
@@ -617,7 +700,7 @@ struct PointNormal {
     const float inv_dist3 = inv_dist2 * inv_dist;
 
     const float distance = dist2 * inv_dist;
-    const float t = distance * ctx.inv_epsilon;
+    const float t = distance * ctx.inv_eps_length;
 
     float scale_n;
     float scale_d;
