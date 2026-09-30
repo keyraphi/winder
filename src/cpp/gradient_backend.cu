@@ -155,7 +155,7 @@ void GradientBackend::init(const float *queries, const float *grad_outputs) {
   thrust::sequence(build_stream_policy, m_to_internal,
                    m_to_internal + m_query_count);
   // sorts both morton_codes and m_to_internal
-  thrust::sort_by_key(build_stream_policy, query_morton_codes,
+  thrust::stable_sort_by_key(build_stream_policy, query_morton_codes,
                       query_morton_codes + m_query_count, m_to_internal);
 
   gather_queries_and_grad_outputs_soa(queries, grad_outputs, m_to_internal,
@@ -314,7 +314,7 @@ auto GradientBackend::compute(const float *points, const float *scaled_normals,
   // sort by morton codes
   thrust::sequence(compute_stream_policy, geometry_to_internal,
                    geometry_to_internal + geometry_count);
-  thrust::sort_by_key(compute_stream_policy, geometry_morton_codes,
+  thrust::stable_sort_by_key(compute_stream_policy, geometry_morton_codes,
                       geometry_morton_codes + geometry_count,
                       geometry_to_internal);
 
@@ -389,7 +389,7 @@ auto GradientBackend::compute(const float *triangles_float,
   // sort by morton codes
   thrust::sequence(compute_stream_policy, geometry_to_internal,
                    geometry_to_internal + geometry_count);
-  thrust::sort_by_key(compute_stream_policy, geometry_morton_codes,
+  thrust::stable_sort_by_key(compute_stream_policy, geometry_morton_codes,
                       geometry_morton_codes + geometry_count,
                       geometry_to_internal);
 

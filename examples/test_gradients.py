@@ -605,7 +605,7 @@ def test_triangle_gradients(
         gt = run_brute_force_triangle_gradients(triangles, queries, g, epsilon)
         fast = run_fast_triangle_gradients(triangles, queries, g, beta, epsilon)
 
-        strict = beta == -1 or beta is None
+        strict = beta is not None and beta >=10
         for idx, name in enumerate(["Triangle v0", "Triangle v1", "Triangle v2"]):
             m = validate_gradients(
                 fast[:, idx],
@@ -663,7 +663,7 @@ def test_mesh_gradients(
         gt = run_brute_force_mesh_gradients(vertices, indices, queries, g, epsilon)
         fast = run_fast_mesh_gradients(vertices, indices, queries, g, beta, epsilon)
 
-        strict = beta == -1 or beta is None
+        strict = beta is not None and beta >=10
         m = validate_gradients(
             fast,
             gt,
@@ -725,7 +725,7 @@ def test_point_normal_gradients(
             points, scaled_normals, queries, g, epsilon, beta
         )
 
-        strict = beta == -1 or beta is None
+        strict = beta is not None and beta >=10
         for idx, name in enumerate(["PointNormal n", "PointNormal p"]):
             m = validate_gradients(
                 fast[:, idx],

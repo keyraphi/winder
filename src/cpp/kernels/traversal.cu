@@ -117,6 +117,7 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
       my_query = norm.to_normalized(queries[original_query_idx]);
     }
     float my_winding_number = 0.F;
+    float my_wn_comp = 0.F; // for kahan add
 
     // Always start traversal on root
     int stack_ptr = 0;
@@ -190,7 +191,7 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
         float approx_contribution = compute_node_approximation(
             my_query, parent_aabb.center_of_mass, zero_order_coeff,
             first_order_coeff, second_order_coeff);
-        my_winding_number += approx_contribution;
+        kahan_add(my_winding_number, approx_contribution, my_wn_comp);
 
         // Remember that I have the full contribution of this node already.
         my_required_stack_depth = stack_ptr;
@@ -244,7 +245,7 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
                 current_leaf_coefficients.zero_order,
                 current_leaf_coefficients.first_order,
                 current_leaf_coefficients.second_order);
-            my_winding_number += approx_contribution;
+            kahan_add(my_winding_number, approx_contribution, my_wn_comp);
             is_detail_eval_needed = false;
           }
           uint32_t detailed_leaf_evaluation_mask = __ballot_sync(
@@ -287,6 +288,7 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
             // only leader adds that contribution
             if ((int)lane_id == current_leader) {
               my_winding_number += total_contribution;
+              kahan_add(my_winding_number, total_contribution, my_wn_comp);
             }
           }
         } else {
@@ -337,8 +339,7 @@ __global__ void compute_winding_numbers_single_leaf_kernel(
   // Every thread iterates through all available geometry for its specific
   // query.
   for (uint32_t i = 0; i < geometry_count; ++i) {
-    my_winding_number +=
-        shared_geometry[i].contributionToQuery(my_query, ctx);
+    my_winding_number += shared_geometry[i].contributionToQuery(my_query, ctx);
   }
 
   // Write out results
@@ -462,15 +463,6 @@ struct PointNormalGradientKernelParams {
   SceneNormalization norm;
 };
 
-__device__ __forceinline__ void kahan_add(PointNormal &gradient,
-                                          const PointNormal &x,
-                                          PointNormal &compensation) {
-  PointNormal y = x - compensation;
-  PointNormal t = gradient + y;
-  compensation = (t - gradient) - y;
-  gradient = t;
-};
-
 __global__ void __launch_bounds__(128) compute_point_normal_gradient_kernel(
     __grid_constant__ const PointNormalGradientKernelParams params) {
   const uint32_t warp_id = threadIdx.x / 32;
@@ -566,9 +558,9 @@ __global__ void __launch_bounds__(128) compute_point_normal_gradient_kernel(
       // Check the nodes parent_aabb. If it is too far away approximate using
       // taylor coefficients
       bool need_taylor_coefficients =
-          is_active &&
-          should_node_be_approximated(my_geometry, current_node.getAABB(),
-                                        params.beta_2, params.reg_context.inv_eps_length);
+          is_active && should_node_be_approximated(
+                           my_geometry, current_node.getAABB(), params.beta_2,
+                           params.reg_context.inv_eps_length);
 
       uint32_t load_taylor_coefficients_mask =
           __ballot_sync(0xFFFFFFFF, need_taylor_coefficients);
@@ -633,8 +625,8 @@ __global__ void __launch_bounds__(128) compute_point_normal_gradient_kernel(
                                       params.query_count);
               float grad_output = params.sorted_grad_outputs[query_idx];
               kahan_add(my_gradient,
-                        my_geometry.gradContributionOfQuery(
-                            query, grad_output, params.reg_context),
+                        my_geometry.gradContributionOfQuery(query, grad_output,
+                                                            params.reg_context),
                         compensation);
             }
           }
@@ -677,7 +669,7 @@ void compute_point_normal_gradients(
     return;
   }
 
-  const auto ctx = PointNormalContext::make(params.epsilon,params.scene_scale);
+  const auto ctx = PointNormalContext::make(params.epsilon, params.scene_scale);
   // There is no tree if there is only one leaf
   if (params.query_count <= 32) {
     uint32_t threads = 256;
@@ -737,8 +729,7 @@ __global__ void compute_triangle_gradient_single_leaf_kernel(
     const SoAView<Vec3> sorted_queries,
     const float *__restrict__ sorted_grad_outputs, const uint32_t query_count,
     const uint32_t geometry_count, float *__restrict__ gradients,
-    const typename Triangle::Context ctx,
-    const SceneNormalization norm) {
+    const typename Triangle::Context ctx, const SceneNormalization norm) {
   // Global index of the geometry this thread is responsible for
   uint32_t my_geometry_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -799,14 +790,6 @@ struct TriangleGradientKernelParams {
   float beta_2;
   typename Triangle::Context reg_context;
   SceneNormalization norm;
-};
-
-__device__ __forceinline__ void kahan_add(Triangle &gradient, const Triangle &x,
-                                          Triangle &compensation) {
-  Triangle y = x - compensation;
-  Triangle t = gradient + y;
-  compensation = (t - gradient) - y;
-  gradient = t;
 };
 
 // Kernel signature using __grid_constant__
@@ -911,7 +894,8 @@ __global__ void __launch_bounds__(128) compute_triangle_gradient_kernel(
       bool need_taylor_coefficients =
           is_active &&
           should_node_be_approximated(shared_warp_geometry[warp_id][lane_id],
-                                      current_node.getAABB(), params.beta_2, params.reg_context);
+                                      current_node.getAABB(), params.beta_2,
+                                      params.reg_context);
 
       uint32_t load_taylor_coefficients_mask =
           __ballot_sync(0xFFFFFFFF, need_taylor_coefficients);
@@ -976,7 +960,8 @@ __global__ void __launch_bounds__(128) compute_triangle_gradient_kernel(
               float grad_output = params.sorted_grad_outputs[query_idx];
               kahan_add(my_gradient,
                         shared_warp_geometry[warp_id][lane_id]
-                            .gradContributionOfQuery(query, grad_output, params.reg_context),
+                            .gradContributionOfQuery(query, grad_output,
+                                                     params.reg_context),
                         compensation);
             }
           }
@@ -1043,7 +1028,6 @@ void compute_triangle_gradients(const ComputeGradientsTriangleParams &params,
   cudaDeviceProp deviceProp;
   cudaGetDeviceProperties(&deviceProp, device_id);
   int blocks = blocks_per_sm * deviceProp.multiProcessorCount;
-
 
   TriangleGradientKernelParams kernel_params{
       .triangles = params.triangles,

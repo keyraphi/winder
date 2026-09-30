@@ -301,6 +301,34 @@ __host__ __device__ __forceinline__ auto angular_bump_prime(const float u)
   return -8.F * t * (1.F - t); // dw/du = -6t(1-t)(4/3) = 8t(1-t)
 }
 
+// IEEE-correct fused-safe scalar arithmetic. These are immune to
+// -use_fast_math and to any compiler contraction, and are the building
+// blocks for numerically robust accumulation (e.g. Kahan summation).
+__host__ __device__ __forceinline__ auto ieee_add(float a, float b) -> float {
+#if defined(__CUDA_ARCH__)
+  return __fadd_rn(a, b);
+#else
+  return a + b;
+#endif
+}
+
+__host__ __device__ __forceinline__ auto ieee_sub(float a, float b) -> float {
+#if defined(__CUDA_ARCH__)
+  return __fsub_rn(a, b);
+#else
+  return a - b;
+#endif
+}
+
+// Scalar Kahan: fast-math-immune. Mirrors the struct versions.
+__device__ __forceinline__ void kahan_add(float &sum, float x,
+                                          float &compensation) {
+  float y = ieee_sub(x, compensation);
+  float t = ieee_add(sum, y);
+  compensation = ieee_sub(ieee_sub(t, sum), y);
+  sum = t;
+}
+
 // =============================================================================
 // Triangle
 // =============================================================================
@@ -325,6 +353,34 @@ struct Triangle {
     v1 += other.v1;
     v2 += other.v2;
     return *this;
+  }
+  __host__ __device__ __forceinline__ auto ieee_add(const Triangle &o) const
+      -> Triangle {
+    return {
+        .v0 = {.x = ::ieee_add(v0.x, o.v0.x),
+               .y = ::ieee_add(v0.y, o.v0.y),
+               .z = ::ieee_add(v0.z, o.v0.z)},
+        .v1 = {.x = ::ieee_add(v1.x, o.v1.x),
+               .y = ::ieee_add(v1.y, o.v1.y),
+               .z = ::ieee_add(v1.z, o.v1.z)},
+        .v2 = {.x = ::ieee_add(v2.x, o.v2.x),
+               .y = ::ieee_add(v2.y, o.v2.y),
+               .z = ::ieee_add(v2.z, o.v2.z)},
+    };
+  }
+  __host__ __device__ __forceinline__ auto ieee_sub(const Triangle &o) const
+      -> Triangle {
+    return {
+        .v0 = {.x = ::ieee_sub(v0.x, o.v0.x),
+               .y = ::ieee_sub(v0.y, o.v0.y),
+               .z = ::ieee_sub(v0.z, o.v0.z)},
+        .v1 = {.x = ::ieee_sub(v1.x, o.v1.x),
+               .y = ::ieee_sub(v1.y, o.v1.y),
+               .z = ::ieee_sub(v1.z, o.v1.z)},
+        .v2 = {.x = ::ieee_sub(v2.x, o.v2.x),
+               .y = ::ieee_sub(v2.y, o.v2.y),
+               .z = ::ieee_sub(v2.z, o.v2.z)},
+    };
   }
 
   __host__ __device__ __forceinline__ auto get_bounds() const -> SceneBounds {
@@ -632,6 +688,32 @@ struct PointNormal {
     n += other.n;
     return *this;
   }
+  // IEEE-correct, fast-math-immune elementwise operations. Use these
+  // instead of + / - in hot accumulation loops where -use_fast_math
+  // would otherwise destroy numerical robustness.
+  __host__ __device__ __forceinline__ auto ieee_add(const PointNormal &o) const
+      -> PointNormal {
+    return {
+        .p = {.x = ::ieee_add(p.x, o.p.x),
+              .y = ::ieee_add(p.y, o.p.y),
+              .z = ::ieee_add(p.z, o.p.z)},
+        .n = {.x = ::ieee_add(n.x, o.n.x),
+              .y = ::ieee_add(n.y, o.n.y),
+              .z = ::ieee_add(n.z, o.n.z)},
+    };
+  }
+
+  __host__ __device__ __forceinline__ auto ieee_sub(const PointNormal &o) const
+      -> PointNormal {
+    return {
+        .p = {.x = ::ieee_sub(p.x, o.p.x),
+              .y = ::ieee_sub(p.y, o.p.y),
+              .z = ::ieee_sub(p.z, o.p.z)},
+        .n = {.x = ::ieee_sub(n.x, o.n.x),
+              .y = ::ieee_sub(n.y, o.n.y),
+              .z = ::ieee_sub(n.z, o.n.z)},
+    };
+  }
 
   __host__ __device__ __forceinline__ static auto
   load(const SoAView<PointNormal> &view, uint32_t idx, uint32_t count)
@@ -672,13 +754,13 @@ struct PointNormal {
     const float t = distance * ctx.inv_eps_length;
 
     float s_over_dist3;
-    if (t < 2.F) {
-      if (t < 0.1F) {
-        s_over_dist3 = FOUR_OVER_3SQRT_PI *
-                       (ctx.inv_eps_length * ctx.inv_eps_length * ctx.inv_eps_length);
-      } else {
-        s_over_dist3 = S_regularization(t) * inv_dist3;
-      }
+    if (ctx.inv_eps_length <= 0.F) {
+      s_over_dist3 = inv_dist3;
+    } else if (t < 0.1F) {
+      s_over_dist3 = FOUR_OVER_3SQRT_PI * ctx.inv_eps_length *
+                     ctx.inv_eps_length * ctx.inv_eps_length;
+    } else if (t < 2.F) {
+      s_over_dist3 = S_regularization(t) * inv_dist3;
     } else {
       s_over_dist3 = inv_dist3;
     }
@@ -704,8 +786,14 @@ struct PointNormal {
 
     float scale_n;
     float scale_d;
-
-    if (t < 0.1F) {
+    if (ctx.inv_eps_length <= 0.F) {
+      // Unregularized (sharp) dipole. Singular at distance = 0, no guard.
+      const float g_denum = INV_FOUR_PI * inv_dist3;
+      const float dot = n.x * d.x + n.y * d.y + n.z * d.z;
+      const float shared_factor = dot * inv_dist2;
+      scale_n = g * g_denum;
+      scale_d = g * shared_factor * (-3.F * g_denum);
+    } else if (t < 0.1F) {
       scale_n = g * ctx.near_field_g_denum;
       scale_d = 0.F;
     } else {
@@ -894,6 +982,22 @@ PointNormal::get_taylor_terms(const Vec3 &p_center, bool is_active,
     }
   }
 }
+
+__device__ __forceinline__ void kahan_add(PointNormal &gradient,
+                                          const PointNormal &x,
+                                          PointNormal &compensation) {
+  PointNormal y = x.ieee_sub(compensation);
+  PointNormal t = gradient.ieee_add(y);
+  compensation = (t.ieee_sub(gradient)).ieee_sub(y);
+  gradient = t;
+};
+__device__ __forceinline__ void kahan_add(Triangle &gradient, const Triangle &x,
+                                          Triangle &compensation) {
+  Triangle y = x.ieee_sub(compensation);
+  Triangle t = gradient.ieee_add(y);
+  compensation = (t.ieee_sub(gradient)).ieee_sub(y);
+  gradient = t;
+};
 
 // =============================================================================
 // Concept -- both geometries must expose a `Context` type and take it by value

@@ -24,16 +24,20 @@ should_node_be_approximated(const PointNormal &geometry, const AABB &aabb,
                             const float beta_2, const float inv_epsilon)
     -> bool {
   Vec3 com = aabb.center_of_mass;
-  float dist_geometry_to_com2 = (geometry.centroid() - com).length2();
-  const float min_far_field_dist2 = 4.0F / (inv_epsilon * inv_epsilon);
-  if (dist_geometry_to_com2 < min_far_field_dist2) {
-    return false;
-  }
-  // Far-field check with the effective radius.
   float max_distance = __half2float(aabb.max_distance);
-  float effective_R = fmaxf(max_distance, 2.0F / inv_epsilon);
+  float dist_geometry_to_com2 = (geometry.centroid() - com).length2();
+  if (inv_epsilon > 0.F) {
+    const float min_far_field_dist2 = 4.0F / (inv_epsilon * inv_epsilon);
+    if (dist_geometry_to_com2 < min_far_field_dist2) {
+      return false;
+    }
+    // Far-field check with the effective radius.
+    const float effective_R = fmaxf(max_distance, 2.F / inv_epsilon);
+    return dist_geometry_to_com2 > effective_R * effective_R * beta_2;
 
-  return dist_geometry_to_com2 > (effective_R * effective_R * beta_2);
+  }
+  // Sharp dipol - criterion like in the forward pass
+  return dist_geometry_to_com2 > (max_distance * max_distance * beta_2);
 }
 
 template <typename Reg>

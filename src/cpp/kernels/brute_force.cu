@@ -46,19 +46,13 @@ __global__ void compute_winding_numbers_brute_force_point_normal_kernel(
 #pragma unroll 4
         for (uint32_t j = 0; j < BlockSize; ++j) {
           PointNormal pn{.p = point_tile[j], .n = normal_tile[j]};
-          float contrib = pn.contributionToQuery(my_q, ctx) - c;
-          float t = my_wn + contrib;
-          c = (t - my_wn) - contrib;
-          my_wn = t;
+          kahan_add(my_wn, pn.contributionToQuery(my_q, ctx), c);
         }
       } else {
         // Fallback for trailing partial tiles
         for (uint32_t j = 0; j < num_elements_in_tile; ++j) {
           PointNormal pn{.p = point_tile[j], .n = normal_tile[j]};
-          float contrib = pn.contributionToQuery(my_q, ctx) - c;
-          float t = my_wn + contrib;
-          c = (t - my_wn) - contrib;
-          my_wn = t;
+          kahan_add(my_wn, pn.contributionToQuery(my_q, ctx), c);
         }
       }
     }
@@ -106,18 +100,12 @@ __global__ void compute_winding_numbers_brute_force_triangle_kernel(
         // full loop unrolling
 #pragma unroll 4
         for (uint32_t j = 0; j < BlockSize; ++j) {
-          float contrib = tile[j].contributionToQuery(my_q, reg_ctx) - c;
-          float t = my_wn + contrib;
-          c = (t - my_wn) - contrib;
-          my_wn = t;
+          kahan_add(my_wn, tile[j].contributionToQuery(my_q, reg_ctx), c);
         }
       } else {
         // Fallback for trailing partial tiles
         for (uint32_t j = 0; j < num_elements_in_tile; ++j) {
-          float contrib = tile[j].contributionToQuery(my_q, reg_ctx) - c;
-          float t = my_wn + contrib;
-          c = (t - my_wn) - contrib;
-          my_wn = t;
+          kahan_add(my_wn, tile[j].contributionToQuery(my_q, reg_ctx), c);
         }
       }
     }
@@ -132,7 +120,8 @@ __global__ void compute_winding_numbers_brute_force_triangle_kernel(
 void compute_brute_force_point_normal(
     const Vec3 *queries_vec3, const Vec3 *points_vec3, const Vec3 *normals_vec3,
     const uint32_t query_count, const uint32_t geometry_count,
-    float *winding_numbers, float epsilon, float scene_scale, cudaStream_t compute_stream) {
+    float *winding_numbers, float epsilon, float scene_scale,
+    cudaStream_t compute_stream) {
 
   if (query_count == 0) {
     return;
@@ -222,12 +211,10 @@ __global__ void gradients_brute_force_point_normals_kernel(
       if (pn_idx < geometry_count) {
 #pragma unroll 4
         for (uint32_t j = 0; j < BlockSize; ++j) {
-          PointNormal contrib = my_point_normal.gradContributionOfQuery(
-              tile_q[j], tile_g[j], ctx);
-          contrib = contrib - c;
-          PointNormal t = my_grad + contrib;
-          c = (t - my_grad) - contrib;
-          my_grad = t;
+          kahan_add(my_grad,
+                    my_point_normal.gradContributionOfQuery(tile_q[j],
+                                                            tile_g[j], ctx),
+                    c);
         }
       }
     } else {
@@ -246,12 +233,10 @@ __global__ void gradients_brute_force_point_normals_kernel(
       // Fallback for the trailing partial tile
       if (pn_idx < geometry_count) {
         for (uint32_t j = 0; j < num_elements_in_tile; ++j) {
-          PointNormal contrib = my_point_normal.gradContributionOfQuery(
-              tile_q[j], tile_g[j], ctx);
-          contrib = contrib - c;
-          PointNormal t = my_grad + contrib;
-          c = (t - my_grad) - contrib;
-          my_grad = t;
+          kahan_add(my_grad,
+                    my_point_normal.gradContributionOfQuery(tile_q[j],
+                                                            tile_g[j], ctx),
+                    c);
         }
       }
     }
@@ -335,12 +320,10 @@ __global__ void gradients_brute_force_triangles_kernel(
       if (triangle_idx < geometry_count) {
 #pragma unroll 4
         for (uint32_t j = 0; j < BlockSize; ++j) {
-          Triangle contrib = my_triangle.gradContributionOfQuery(
-              tile_q[j], tile_g[j], reg_ctx);
-          contrib = contrib - c;
-          Triangle t = my_grad + contrib;
-          c = (t - my_grad) - contrib;
-          my_grad = t;
+          kahan_add(my_grad,
+                    my_triangle.gradContributionOfQuery(tile_q[j], tile_g[j],
+                                                        reg_ctx),
+                    c);
         }
       }
     } else {
@@ -390,8 +373,7 @@ void compute_brute_force_gradients_triangles(
     const float *grad_output, const Triangle *triangles,
     const Vec3 *queries_vec3, const uint32_t geometry_count,
     const uint32_t query_count, float *gradients, const float epsilon,
-    const float scene_scale,
-    cudaStream_t compute_stream) {
+    const float scene_scale, cudaStream_t compute_stream) {
 
   constexpr uint32_t threads = 256;
   uint32_t geom_blocks = (geometry_count + threads - 1) / threads;

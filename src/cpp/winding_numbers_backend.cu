@@ -221,7 +221,7 @@ void WindingNumbersBackend<Triangle>::initialize_triangle_data(
   thrust::sequence(m_build_stream_policy, m_to_internal,
                    m_to_internal + m_count);
   // sorts both morton_codes and m_to_internal
-  thrust::sort_by_key(m_build_stream_policy, geometry_morton_codes,
+  thrust::stable_sort_by_key(m_build_stream_policy, geometry_morton_codes,
                       geometry_morton_codes + m_count, m_to_internal);
   // sort triangles using m_to_internal
   gather_triangles_soa(triangles, m_to_internal, m_sorted_geometry, m_count,
@@ -370,7 +370,7 @@ void WindingNumbersBackend<PointNormal>::initialize_point_data(
   thrust::sequence(m_build_stream_policy, m_to_internal,
                    m_to_internal + m_count);
   // sorts both morton_codes and m_to_internal
-  thrust::sort_by_key(m_build_stream_policy, geometry_morton_codes,
+  thrust::stable_sort_by_key(m_build_stream_policy, geometry_morton_codes,
                       geometry_morton_codes + m_count, m_to_internal);
 
   gather_point_normals_soa(points, normals, m_to_internal, m_sorted_geometry,
@@ -535,7 +535,7 @@ auto WindingNumbersBackend<Geometry>::compute(const float *queries,
 
   thrust::sequence(compute_stream_policy, queries_to_internal,
                    queries_to_internal + query_count);
-  thrust::sort_by_key(compute_stream_policy, queries_morton,
+  thrust::stable_sort_by_key(compute_stream_policy, queries_morton,
                       queries_morton + query_count, queries_to_internal);
 
   // free morton code memory
