@@ -1,0 +1,2304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Winding Numbers Presentation</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@4.5.0/dist/reveal.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@4.5.0/dist/theme/white.css">
+
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js"></script>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            ut: {
+              red: '#a51e37',
+              gold: '#b4a069',
+              dark: '#32414b',
+              blue: '#0069aa',
+              green: '#7da54b'
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    /* =========================================================
+       UNIVERSITY OF TÜBINGEN CORPORATE DESIGN PALETTE
+       ========================================================= */
+    :root {
+      --ut-red: #a51e37;
+      --ut-gold: #b4a069;
+      --ut-dark: #32414b;
+      --ut-blue-dark: #415a8c;
+      --ut-blue-mid: #0069aa;
+      --ut-blue-light: #50aac8;
+      --ut-green-dark: #326e1e;
+      --ut-green-mid: #7da54b;
+      --ut-green-light: #82b9a0;
+      --ut-taupe: #b4a096;
+      --ut-mauve: #af6e96;
+      --ut-orange: #c8503c;
+      --ut-brown: #916946;
+      --ut-yellow: #d29600;
+      --ut-gold-light: #d7b469;
+    }
+
+    /* Helper Classes for Markup */
+    .ut-red { color: var(--ut-red) !important; }
+    .ut-gold { color: var(--ut-gold) !important; }
+    .ut-dark { color: var(--ut-dark) !important; }
+    .ut-blue { color: var(--ut-blue-mid) !important; }
+    .ut-green { color: var(--ut-green-mid) !important; }
+
+    /* Base Slide Styles */
+    .reveal { font-family: 'Fira Sans', sans-serif; color: var(--ut-dark); }
+    .reveal h1 { color: var(--ut-dark); text-transform: none; }
+    .reveal h2 { color: var(--ut-dark); text-transform: none; border-bottom: 2px solid var(--ut-red); }
+    .reveal h3 { color: var(--ut-dark); text-transform: none; font-size: 1.1em; }
+    .reveal h4 { color: var(--ut-dark); text-transform: none; font-size: 1.0em; }
+
+    /* Global Persistent Header (Top-Right Logo) */
+    .reveal .global-header {
+      position: absolute;
+      top: 20px;
+      right: 25px;
+      z-index: 10;
+      pointer-events: none;
+    }
+
+    .reveal .global-header img {
+      height: 45px;
+      background: transparent;
+      border: none;
+      box-shadow: none;
+    }
+
+    /* Global Persistent Footer */
+    .reveal .global-footer {
+      position: absolute;
+      bottom: 15px;
+      left: 25px;
+      right: 25px;
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.45em;
+      color: #777;
+      border-top: 1px solid #e0e0e0;
+      padding-top: 5px;
+      z-index: 10;
+      pointer-events: none;
+    }
+    .reveal .slides > section {
+      height: 100% !important;
+      box-sizing: border-box;
+    }
+
+    /* Fixed bottom slide citation */
+    .reveal .slide-footer {
+      position: absolute !important;
+      bottom: 28px; /* Adjust this value so it sits perfectly above your global footer */
+      left: 0;
+      width: 100%;
+      text-align: left;
+      font-family: sans-serif;
+      font-size: 0.55em;
+      color: #6b7280;
+      line-height: 1.2;
+      pointer-events: none;
+      z-index: 10;
+    }
+    /* Align slide content to the top with a subtle padding */
+    .reveal .slides > section,
+    .reveal .slides > section > section {
+      padding-top: 40px !important;
+      box-sizing: border-box;
+    }
+
+    /* Ensure headings start flush near the top */
+    .reveal h1,
+    .reveal h2,
+    .reveal h3 {
+      margin-top: 0 !important;
+      margin-bottom: 0.8em !important;
+    }
+    .reveal table th,
+    .reveal table td {
+      border-bottom: none !important;
+    }
+
+    .small {
+      font-size: 0.7em !important;
+    }
+    /* Restore KaTeX fraction lines against Tailwind resets */
+    .katex .frac-line {
+      border-bottom-width: 1px !important;
+      border-bottom-style: solid !important;
+    }
+
+    canvas { background: #fff; }
+    #windingCanvas { border: 1px solid #ccc; }
+  </style>
+</head>
+<body>
+  <div class="reveal">
+
+    <div class="global-header">
+      <img src="images/UniversitaetTuebingen_WortBildMarke.png" alt="University Logo">
+    </div>
+
+    <div class="global-footer">
+      <span>Raphael Braun</span>
+      <span>Winder: Fast Winding Numbers on GPU</span>
+      <span id="footer-date"></span>
+    </div>
+
+    <div class="slides">
+
+      <!--Title Page-->
+      <section>
+        <div class="flex items-center justify-between gap-12 text-left">
+          <div class="flex-1">
+            <h1 class="text-7xl font-bold mb-2 text-ut-dark">Winder</h1>
+            <h2 class="text-3xl font-semibold text-ut-dark border-b-2 border-ut-red pb-2">Differentiable Fast Winding Numbers on GPU</h2>
+            <p class="text-ut-gold mt-6">Intermediate Presentation</p>
+          </div>
+
+          <div class="flex-1 flex justify-center">
+            <video
+              data-autoplay
+              loop
+              muted
+              playsinline
+              class="w-full m-8  aspect-square object-cover rounded-xl shadow-2xl"
+            >
+              <source src="videos/showcase_video.mp4" type="video/mp4">
+              Your browser does not support the video tag.
+            </video>
+          </div>
+        </div>
+      </section>
+
+      <!-- Slide 1: Introduction to Winding Numbers -->
+      <section id="intro-winding-slide">
+        <h2>What is a "Winding Number"</h2>
+
+        <div class="flex items-center justify-between gap-8 mt-4">
+          <!-- Left Column: Text (50%) -->
+          <div class="w-1/2 text-left space-y-4">
+            <p class="font-semibold text-ut-dark">
+              Intuitive Definition
+            </p>
+            <ul class="space-y-3">
+              <li>
+                Number of Times a <strong>closed curve</strong> travels <strong>counterclockwise</strong> around a given point.
+              </li>
+              <li>
+                Depends on orientation. <strong>Negative</strong> for <strong>clockwise</strong> turns.
+              </li>
+              <li>
+                <strong>Robust Topological Invariant:</strong> Produces an exact integer ($w \in \mathbb{Z}$) for any closed loop, regardless of local self-intersections or backtracking.
+              </li>
+            </ul>
+          </div>
+
+          <!-- Right Column: Animated Canvas with Title & Live Float Readout (50%) -->
+          <div class="w-1/2 flex flex-col items-center justify-center">
+            <!-- Title Label -->
+            <div class="mb-3 px-4 py-1.5 bg-gray-100 rounded-lg border border-gray-300 font-semibold text-ut-dark small">
+              Point $\mathbf{x}$ with Winding Index $\text{wind}(\mathbf{x}) = 2$
+            </div>
+
+            <div class="relative bg-white p-2 rounded-lg border border-gray-300 shadow-sm">
+              <canvas id="introWindingCanvas" width="500" height="480" class="block"></canvas>
+            </div>
+
+            <!-- Live Float Winding Readout Underneath Canvas -->
+            <div class="mt-3 px-5 py-2 bg-gray-100 rounded-lg border border-gray-300 text-center min-w-[220px]">
+              <div class="small font-semibold text-ut-red tracking-wider small">Accumulated Winding </div>
+              <div id="introFloatReadout" class="text-2xl font-bold font-mono text-ut-dark">0.00</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+
+      <!--Generalized Winding Numbers in 2D-->
+      <section id="what-is-winding-number">
+        <h2>The Generalized Winding Numbers</h2>
+        <div>
+          <div class="flex items-top justify-between gap-8">
+            <ul class="space-y-3" style="margin-right: 12rem">
+              <li>
+                Generalized Winding Number at position $\bm{x}$: $w(\bm{x})$
+                Fraction of signed angle subtended at $\bm{x}$.
+                <div style="margin-top: 2rem;">
+                  <label for="angleSlider" class="block font-medium mb-1 text-ut-dark small">Curve $C$:</label>
+                  <input type="range" id="angleSlider" min="10" max="360" value="180" step="2" class="w-full accent-ut-red">
+                </div>
+              </li>
+              <li class="fragment" data-fragment-index="1">
+                <p>Line integral along $C$, accumulating differential signed angles.</p>
+                <p class="mt-6">
+                  $$w(\bm{x}) = \frac{1}{2\pi} \int_{\mathcal{C}} \frac{(\bm{y}-\bm{x})^\perp \cdot d\bm{y}}{\|\bm{y}-\bm{x}\|^2}$$
+                </p>
+              </li>
+            </ul>
+
+            <div class="w-1/3">
+              <div class="w-full flex items-center justify-center gap-3">
+                <canvas id="colorbarCanvas" width="80" height="450"></canvas>
+                <canvas id="windingCanvas" width="450" height="450"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+        <footer class="slide-footer">
+          <span class="cite-author">Jacobson et al. (2013)</span> — Robust inside-outside segmentation using generalized winding numbers. <em>ACM TOG</em>.
+        </footer>
+      </section>
+
+      <!-- Combined Slide 2: Properties of Winding Numbers -->
+      <section id="properties-slide">
+        <h2>Properties of Winding Numbers</h2>
+        <div class="flex items-center justify-between gap-6">
+
+          <!-- Left Column: Properties List with Fragments -->
+          <div class="w-1/2 text-left">
+            <ul class="space-y-4">
+              <li id="frag-prop-0" class="p-2 rounded border border-transparent transition-all">
+                <strong>Harmonic Field:</strong> Field is <i>harmonic</i> $\nabla^{2}w(\mathbf{x})=0$ everywhere outside the curve boundary.
+              </li>
+            <div id="resetContainer" class="mt-6 p-2">
+              <button id="resetLinesBtn" class="px-4 py-2 bg-ut-red text-white rounded font-medium shadow hover:bg-opacity-90 transition">
+                Reset Interactive Canvas
+              </button>
+            </div>
+              <li id="frag-prop-1" class="fragment p-2 rounded border border-transparent transition-all" data-fragment-index="1">
+                <strong>Superposition:</strong> Winding numbers of individual facets sum linearly to the full curve:
+                <div class="small font-mono mt-1 text-gray-600">$w(\mathbf{p}) = \sum_i w_{_i}(\mathbf{p})$</div>
+              </li>
+              <li id="frag-prop-2" class="fragment p-2 rounded border border-transparent transition-all" data-fragment-index="2">
+                <strong>Open Boundaries & Holes:</strong> Smooth harmonic decay and continuous transition across boundary gaps.
+              </li>
+              <li id="frag-prop-3" class="fragment p-2 rounded border border-transparent transition-all" data-fragment-index="3">
+                <strong>Duplicate / Inverted Facets:</strong> Opposite segment orientations cancel out cleanly ($1 - 1 = 0$).
+              </li>
+            </ul>
+
+          </div>
+
+          <!-- Right Column: Swappable Interactive Panels -->
+          <div class="w-1/2 flex items-center justify-center min-h-[520px]">
+
+            <!-- Panel 0: Harmonic Field (Free Interactive Drawing) -->
+            <div id="panel-prop-0" class="prop-panel flex items-center justify-center gap-3">
+              <canvas id="propColorbarCanvas0" width="70" height="420"></canvas>
+              <div class="flex flex-col items-center gap-2">
+                <canvas id="propCanvas0" width="420" height="420" class="border border-gray-300 rounded shadow-sm cursor-crosshair"></canvas>
+                <span class="small text-gray-500">Click & drag on canvas to draw directed segments</span>
+              </div>
+            </div>
+
+            <!-- Panel 1: Superposition (Compact Figure 9 Layout) -->
+            <div id="panel-prop-1" class="prop-panel hidden flex flex-col items-center justify-center gap-4">
+              <!-- Mini Segment Decomposition Row -->
+              <div class="flex items-center justify-center gap-2 bg-gray-50 p-3 rounded border border-gray-200">
+                <div class="flex flex-col items-center">
+                  <canvas id="supMini0" width="100" height="100" class="border bg-white rounded"></canvas>
+                  <span class="small font-semibold mt-1">$w_1$</span>
+                </div>
+                <span class="font-bold text-ut-dark">+</span>
+                <div class="flex flex-col items-center">
+                  <canvas id="supMini1" width="100" height="100" class="border bg-white rounded"></canvas>
+                  <span class="small font-semibold mt-1">$w_2$</span>
+                </div>
+                <span class="font-bold text-ut-dark">+</span>
+                <div class="flex flex-col items-center">
+                  <canvas id="supMini2" width="100" height="100" class="border bg-white rounded"></canvas>
+                  <span class="small font-semibold mt-1">$w_3$</span>
+                </div>
+                <span class="font-bold text-ut-dark">+</span>
+                <div class="flex flex-col items-center">
+                  <canvas id="supMini3" width="100" height="100" class="border bg-white rounded"></canvas>
+                  <span class="small font-semibold mt-1">$w_4$</span>
+                </div>
+              </div>
+
+              <div class="font-bold text-ut-dark text-center">=</div>
+
+              <!-- Combined Result Field & Live Inspector -->
+              <div class="flex items-start gap-3">
+                  <canvas id="supColorbarCanvas" width="70" height="420"></canvas>
+                <div class="flex flex-col items-center">
+                  <canvas id="supMainCanvas" width="420" height="420" class="border border-gray-300 rounded shadow-sm cursor-crosshair"></canvas>
+                  <div id="supInspectorBox" class="mt-2 p-2 bg-gray-100 rounded border border-gray-300 small font-mono text-left w-full">
+                    Hover canvas to inspect point values
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Panel 2: Open Boundaries -->
+            <div id="panel-prop-2" class="prop-panel hidden flex items-center justify-center gap-3">
+              <canvas id="propColorbarCanvas2" width="70" height="420"></canvas>
+              <div class="flex flex-col items-center gap-2">
+                <canvas id="propCanvas2" width="420" height="420" class="border border-gray-300 rounded shadow-sm"></canvas>
+                <span class="small text-gray-500 w-2/3 text">Harmonic field spilling across gap</span>
+              </div>
+            </div>
+
+            <!-- Panel 3: Inverted / Duplicate Facet Cancellation -->
+            <div id="panel-prop-3" class="prop-panel hidden flex items-start justify-center gap-3">
+                 <canvas id="propColorbarCanvas3" class="flex" width="70" height="420"></canvas>
+                <div class="flex flex-col items-start gap-2">
+                  <canvas id="propCanvas3" width="420" height="420" class="border border-gray-300 rounded shadow-sm"></canvas>
+                  <span class="small text-gray-500 w-1/2">Coincident opposite segments (+1 and -1) cancel to 0 everywhere</span>
+                </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Slide: Generalized Winding Numbers in 3D -->
+      <section id="generalized-winding-3d-slide">
+        <h2>Generalized Winding Numbers in 3D</h2>
+
+        <div class="flex items-start justify-between gap-6 mt-6">
+          <!-- Left Column: Equations & Formulations (2/3 width) -->
+          <div class="w-4/5 text-left space-y-5">
+
+            <!-- 1. Continuous Formulation -->
+            <div class="space-y-1">
+              <p class="font-semibold text-ut-dark">
+                Continuous formulation in 3D
+              </p>
+              <div class="small bg-gray-50 p-3 rounded-lg border border-gray-200">
+                $$\mathcal{W}(\mathbf{x}) = \frac{1}{4\pi} \iint_{\mathcal{M}} \frac{(\mathbf{p} - \mathbf{x}) \cdot n(\mathbf{p})}{\|\mathbf{p} - \mathbf{x}\|^3} \, dA(\mathbf{p})$$
+              </div>
+            </div>
+
+            <!-- 2. Discrete Point Normals (Fragment 1) -->
+            <div class="space-y-1 fragment" data-fragment-index="1">
+              <p class="font-semibold text-ut-dark">
+                Discrete formulation
+              </p>
+              <div class="small bg-gray-50 p-3 rounded-lg border border-gray-200">
+                Dipole (PointNormal)
+                <!-- $$\mathcal{W} = \frac{1}{4\pi} \sum_i \frac{(p_i -x)}{2}$$ -->
+                $$\mathcal{W}_{\text{points}}(\mathbf{x}) = \frac{1}{4\pi} \sum_{i} \frac{(\mathbf{p_i} - \mathbf{x}) \cdot n_i }{ \|\mathbf{p_i} - \mathbf{x}\|^3} a_i$$
+              </div>
+            </div>
+
+            <!-- 3. Discrete Triangles (Fragment 2) -->
+            <div class="space-y-1 fragment" data-fragment-index="2">
+              <p class="font-semibold text-ut-dark">
+                Discrete formulation Triangles
+              </p>
+              <div class="small bg-gray-50 p-3 rounded-lg border border-gray-200">
+                $$\mathcal{W}_{\text{mesh}}(\mathbf{x}) = \frac{1}{4\pi} \sum_{t \in \mathcal{T}} \Omega_t(\mathbf{x})$$
+              </div>
+            </div>
+
+          </div>
+
+          <!-- Right Column: Videos Stack (1/3 width) -->
+          <div class="w-1/5 flex flex-col gap-4">
+
+            <!-- Video 1 (Base) -->
+            <div>
+              <!-- <video data-autoplay loop muted playsinline class="w-full h-auto aspect-square" src="videos/generalized_winding_numbers_3d.mp4"></video> -->
+              <video data-autoplay loop muted playsinline class="w-full aspect-square object-cover" src="videos/generalized_winding_numbers_3d.mp4"></video>
+            </div>
+
+            <!-- Video 2 (Revealed with Fragment 1) -->
+            <div class="overflow-hidden  fragment" data-fragment-index="1">
+              <video data-autoplay loop muted playsinline class="w-full  object-cover" src="videos/single_dipole.mp4"></video>
+            </div>
+
+            <!-- Video 3 (Revealed with Fragment 2) -->
+            <div class="overflow-hidden  fragment" data-fragment-index="2">
+              <video data-autoplay loop muted playsinline class="w-full object-cover" src="videos/single_triangle.mp4"></video>
+            </div>
+
+          </div>
+        </div>
+      </section>
+
+      <!-- Slide: Complexity in 3D -->
+      <section id="complexity-3d-slide">
+        <h2>Complexity in 3D</h2>
+
+        <!-- Top Equation Box -->
+        <div class="small bg-gray-50 p-3 rounded-lg border border-gray-200 mb-4 inline-block px-8">
+          $$\begin{align*}
+          \mathcal{W}_{\text{mesh}}(\mathbf{x}) &= \frac{1}{4\pi} \sum_{t \in \mathcal{T}} \Omega_t(\mathbf{x}) &
+          \Omega_t(\mathbf{x}) &= 2 \arctan\left(\frac{a \cdot (b \times c)}{\|a\|\|b\|\|c\| + (a \cdot b)\|c\| + (b \cdot
+          c)\|a\| + (c \cdot a)\|b\|}\right)
+          \end{align*}
+          $$
+        </div>
+
+        <!-- Bullet Summary -->
+        <div class="text-left small mb-4  mx-auto flex justify-between bg-white px-4 py-2 rounded border border-gray-100 shadow-sm">
+          <span><strong>Mesh Complexity:</strong> $N$ triangles</span>
+          <span><strong>Query Grid:</strong> $M$ positions $\mathbf{x}$</span>
+          <span class="text-ut-red font-semibold"><strong>Direct Evaluation:</strong> $\mathcal{O}(NM)$</span>
+        </div>
+
+        <!-- Main Content Grid: Table (Left) + Image Preview (Right) -->
+        <div class="flex items-start justify-between gap-6 mt-2">
+
+          <!-- Academic Paper-Style Table (Zero Borders) -->
+          <div class="w-5/6">
+            <table class="w-full text-left small font-sans border-none [&_th]:border-none [&_td]:border-none [&_tr]:border-none">
+              <thead>
+                <tr class="font-semibold text-gray-800 uppercase tracking-wider">
+                  <th class="py-2 px-2 text-left">Mesh</th>
+                  <th class="py-2 px-2 text-right">Triangles: $N$</th>
+                  <th class="py-2 px-2 text-right">Grid Resolution: $M$</th>
+                  <th class="py-2 px-2 text-right">Evaluations: $N \times M$</th>
+                  <th class="py-2 px-2 text-right">Brute Force</th>
+                </tr>
+              </thead>
+              <tbody class="font-mono">
+
+                <!-- Group 1: Benchy (Fragment 1) -->
+                <tr class="fragment" data-fragment-index="1">
+                  <td class="py-1.5 px-2 font-sans font-medium text-left" rowspan="3">benchy</td>
+                  <td class="py-1.5 px-2 text-right" rowspan="3">225,154</td>
+                  <td class="py-1.5 px-2 text-right">$256^3$</td>
+                  <td class="py-1.5 px-2 text-right">$3.78 \times 10^{12}$</td>
+                  <td class="py-1.5 px-2 text-right">$52,4 sec$</td>
+                </tr>
+                <tr class="fragment" data-fragment-index="1">
+                  <td class="py-1.5 px-2 text-right">$512^3$</td>
+                  <td class="py-1.5 px-2 text-right">$3.02 \times 10^{13}$</td>
+                  <td class="py-1.5 px-2 text-right">-</td>
+                </tr>
+                <tr class="fragment" data-fragment-index="1">
+                  <td class="py-1.5 px-2 text-right">$1024^3$</td>
+                  <td class="py-1.5 px-2 text-right">$2.42 \times 10^{14}$</td>
+                  <td class="py-1.5 px-2 text-right">-</td>
+                </tr>
+
+                <!-- Group 2: Jaws Attack Benchy (Fragment 2) -->
+                <tr class="fragment" data-fragment-index="2">
+                  <td class="py-1.5 px-2 font-sans font-medium text-left" rowspan="3">jaws_attack</td>
+                  <td class="py-1.5 px-2 text-right" rowspan="3">538,660</td>
+                  <td class="py-1.5 px-2 text-right">$256^3$</td>
+                  <td class="py-1.5 px-2 text-right">$9.04 \times 10^{12}$</td>
+                  <td class="py-1.5 px-2 text-right">130 sec</td>
+                </tr>
+                <tr class="fragment" data-fragment-index="2">
+                  <td class="py-1.5 px-2 text-right">$512^3$</td>
+                  <td class="py-1.5 px-2 text-right">$7.23 \times 10^{13}$</td>
+                  <td class="py-1.5 px-2 text-right">-</td>
+                </tr>
+                <tr class="fragment" data-fragment-index="2">
+                  <td class="py-1.5 px-2 text-right">$1024^3$</td>
+                  <td class="py-1.5 px-2 text-right">$5.78 \times 10^{14}$</td>
+                  <td class="py-1.5 px-2 text-right">-</td>
+                </tr>
+
+                <!-- Group 3: Snakeman (Fragment 3) -->
+                <tr class="fragment" data-fragment-index="3">
+                  <td class="py-1.5 px-2 font-sans font-medium text-left" rowspan="3">snakeman</td>
+                  <td class="py-1.5 px-2 text-right" rowspan="3">5,000,608</td>
+                  <td class="py-1.5 px-2 text-right">$256^3$</td>
+                  <td class="py-1.5 px-2 text-right">$8.39 \times 10^{13}$</td>
+                  <td class="py-1.5 px-2 text-right">1213 sec</td>
+                </tr>
+                <tr class="fragment" data-fragment-index="3">
+                  <td class="py-1.5 px-2 text-right">$512^3$</td>
+                  <td class="py-1.5 px-2 text-right">$6.71 \times 10^{14}$</td>
+                  <td class="py-1.5 px-2 text-right">-</td>
+                </tr>
+                <tr class="fragment" data-fragment-index="3">
+                  <td class="py-1.5 px-2 text-right">$1024^3$</td>
+                  <td class="py-1.5 px-2 text-right">$5.37 \times 10^{15}$</td>
+                  <td class="py-1.5 px-2 text-right">-</td>
+                </tr>
+
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Right Side: Synchronized Image Preview Stack -->
+          <div class="w-1/6 relative flex items-center justify-center rounded-lg  overflow-hidden" style="height:13em">
+
+            <!-- Image 1: Benchy -->
+            <img src="images/benchy.png"
+                 alt="Benchy Mesh"
+                 class="absolute inset-0 w-full h-full object-contain p-2 bg-white transition-opacity duration-300 fragment fade-in-then-out"
+                 data-fragment-index="1" />
+
+            <!-- Image 2: Jaws Attack -->
+            <img src="images/jaw_attack.png"
+                 alt="Jaw Attack Mesh"
+                 class="absolute inset-0 w-full h-full object-contain p-2 bg-white transition-opacity duration-300 fragment fade-in-then-out"
+                 data-fragment-index="2" />
+
+            <!-- Image 3: Snakeman -->
+            <img src="images/snakeman.png"
+                 alt="Snakeman Mesh"
+                 class="absolute inset-0 w-full h-full object-contain p-2 bg-white transition-opacity duration-300 fragment"
+                 data-fragment-index="3" />
+
+          </div>
+
+        </div>
+      </section>
+
+      <!-- Slide: Fast Winding Numbers (Barill et al. 2018) -->
+      <section id="fast-winding-numbers-slide">
+        <h2>Fast Winding Numbers</h2>
+
+        <div class="flex items-start justify-between gap-6 mt-2">
+          <!-- Left Column: Explanation & Steps (Fragment Controlled) -->
+          <div class="w-8/12 text-left small space-y-3">
+
+            <!-- Stage 0: Raw Geometry -->
+            <div id="fwn-step-0" class="p-3 bg-white rounded-lg border-2 border-ut-red shadow-sm transition-all duration-300">
+              <h4 class="font-bold text-gray-800 mb-1">1. Exact Input Geometry</h4>
+              <p class="small text-gray-600">
+                Complex, mesh with $N$ segments. Direct evaluation requires $\mathcal{O}(NM)$ operations for $M$ query points.
+              </p>
+            </div>
+
+            <!-- Stage 1: Quadtree Construction -->
+            <div id="fwn-step-1" class="fragment p-3 bg-white rounded-lg border border-gray-200 shadow-sm transition-all duration-300" data-fragment-index="1">
+              <h4 class="font-bold text-gray-800 mb-1">2. Hierarchical Spatial Acceleration Structure</h4>
+              <p class="small text-gray-600">
+                Build some kind of BVH.
+              </p>
+            </div>
+
+            <!-- Stage 2: Precomputed  Coefficients -->
+            <div id="fwn-step-2" class="fragment p-3 bg-white rounded-lg border border-gray-200 shadow-sm transition-all duration-300" data-fragment-index="2">
+              <h4 class="font-bold text-gray-800 mb-1">3. Tailor Series Precomputation</h4>
+              <p class="small text-gray-600 mb-2">
+              Each node $K$ stores <span class="text-ut-red">geometry dependent taylor coefficients</span> centered at centroid <span style="color: var(--ut-blue-mid);">$\tilde{p}$</span>:
+              </p>
+              <div class="text-[0.45em] bg-gray-50 p-2 rounded border border-gray-200 overflow-x-auto">
+                $$\begin{align*}
+                \tilde{w}(q) \approx & \textcolor{a51e37}{\left( \sum_{i \in K} a_i \hat{n}_i \right)} \cdot \nabla G(q, \textcolor{0069aa}{\tilde{p}}) +
+                \textcolor{a51e37}{\left( \sum_{i \in K} a_i (p_i - \textcolor{0069aa}{\tilde{p}}) \otimes \hat{n}_i \right)} \cdot \nabla^2 G(q, \textcolor{0069aa}{\tilde{p}}) +
+                \textcolor{a51e37}{\frac{1}{2} \left( \sum_{i \in K} a_i (p_i - \textcolor{0069aa}{\tilde{p}})^{\otimes 2} \otimes \hat{n}_i \right)} \cdot \nabla^3 G(q, \textcolor{0069aa}{\tilde{p}})
+                \end{align*}$$
+              </div>
+            </div>
+
+            <!-- Stage 3: Fast Tree Traversal & Pruning -->
+            <div id="fwn-step-3" class="fragment p-3 bg-white rounded-lg border border-gray-200 shadow-sm transition-all duration-300" data-fragment-index="3">
+              <h4 class="font-bold text-gray-800 mb-1">4. Traversal & Far-Field Pruning</h4>
+              <p class="small text-gray-600">
+                For query point $q$, evaluate Acceptance Criterion of node:
+                $\|q-\tilde{r}\|_2 < \beta\cdot\tilde{r}$.
+                <br>
+                <span class="inline-block w-3 h-3 rounded-full align-middle ml-2 mr-1" style="background-color: var(--ut-red);"></span>
+                <strong class="text-ut-red">Near-field (keep going)</strong>
+                <span class="inline-block w-3 h-3 rounded-full align-middle mr-1" style="background-color: var(--ut-green-mid);"></span>
+                <strong class="text-ut-green">Far-field (Approximate)</strong>
+                <span class="inline-block w-3 h-3 rounded-full align-middle ml-2 mr-1" style="background-color: var(--ut-blue-light);"></span>
+                <strong class="text-ut-blue">Not visited at all</strong>
+              </p>
+            </div>
+
+            <!-- Stage 4: Evaluated Field -->
+            <div id="fwn-step-4" class="fragment p-3 bg-white rounded-lg border border-gray-200 shadow-sm transition-all duration-300" data-fragment-index="4">
+              <h4 class="font-bold text-gray-800 mb-1">5. $\mathcal{O}(M \log N)$ Continuous Field</h4>
+              <p class="small text-gray-600">
+                Fast, highly accurate, smooth winding field with open/closed surface robustness.
+              </p>
+            </div>
+
+          </div>
+
+          <!-- Right Column: Dual Interactive Visualizations -->
+          <div class="w-5/12 flex flex-col items-center gap-3">
+
+            <!-- Top Canvas: Spatial Quadtree & Geometry -->
+            <div class="relative w-full bg-white rounded-lg border border-gray-200 shadow-sm p-2 flex justify-center items-center">
+              <canvas id="fwnSpatialCanvas" width="520" height="420" class="rounded border border-gray-100 cursor-crosshair"></canvas>
+            </div>
+
+            <!-- Bottom Canvas: Synchronized Quadtree Structure Graph -->
+            <div class="w-full bg-white rounded-lg border border-gray-200 shadow-sm p-2 flex justify-center items-center">
+              <canvas id="fwnTreeCanvas" width="750" height="256" class="rounded border border-gray-100"></canvas>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Standardized Citation Footer -->
+        <footer class="slide-footer">
+          <span class="cite-author">Barill et al. (2018)</span> — Fast Winding Numbers for Soups and Clouds. <em>ACM Transactions on Graphics (TOG)</em>.
+        </footer>
+      </section>
+
+      <!-- Related Work - Forward Evaluation & Reconstruction -->
+      <section id="related-work-slide-1">
+        <h2>Related Work</h2>
+
+        <div class="grid grid-cols-3 gap-6 items-start text-left mt-6">
+
+          <!-- 1. Xu et al. (2023) -->
+          <div class="fragment fade-in-then-semi-out bg-white p-4 rounded-lg border border-gray-200 shadow-sm" data-fragment-index="1">
+            <div class="bg-gray-50 rounded mb-3 flex items-center justify-center p-2 border border-gray-200" style="height:20rem">
+              <img src="images/related_GloballyConsistentNormalOrientation.png" alt="Globally Consistent Normal Orientation" class="max-h-full max-w-full object-contain">
+            </div>
+            <h4>Normal Orientation</h4>
+            <p class="small text-ut-gold font-medium">Xu et al. (2023)</p>
+            <ul class="text-[0.5em] text-gray-600 mt-2">
+              <li>
+                Find Normals for unoriented Point Clouds.
+              </li>
+              <li>Uses objective function built on Voronoi cell poles and Winding Number regularizations.</li>
+              <li>Optimization implemented in C++.</li>
+            </ul>
+          </div>
+
+          <!-- 2. Chen et al. (2024) -->
+          <div class="fragment fade-in-then-semi-out bg-white p-4 rounded-lg border border-gray-200 shadow-sm" data-fragment-index="2">
+            <div class="bg-gray-50 rounded mb-3 flex items-center justify-center p-2 border border-gray-200" style="height:20rem">
+              <img src="images/related_3dReconstructionWithFastDipoleSums.png" alt="Fast Dipole Sums" class="max-h-full max-w-full object-contain">
+            </div>
+            <h4>Fast Dipole Sums</h4>
+            <p class="small text-ut-gold font-medium">Chen et al. (2024)</p>
+            <ul class="text-[0.5em] text-gray-600 mt-2">
+              <li>Represent a Radiance Field as per-point-attribute of dense Point Cloud.</li>
+              <li>Uses Fast Winding Numbers for feature interpolation.</li>
+              <li>Differentiable w.r.t Normals; First Order Taylor; Implemented in CUDA.</li>
+            </ul>
+          </div>
+
+          <!-- 3. Martens & Bessmeltsev (2025) -->
+          <div class="fragment fade-in-then-semi-out bg-white p-4 rounded-lg border border-gray-200 shadow-sm" data-fragment-index="3">
+            <div class="bg-gray-50 rounded mb-3 flex items-center justify-center p-2 border border-gray-200" style="height:20rem">
+              <img src="images/related_OneShotMethodForComputingGeneralizedWindingNumbers.png" alt="One-Shot GWN" class="max-h-full max-w-full object-contain">
+            </div>
+            <h4>One-Shot GWN</h4>
+            <p class="small text-ut-gold font-medium">Martens & Bessmeltsev (2025)</p>
+            <ul class="text-[0.5em] text-gray-600 mt-2">
+              <li>Formulation of Generalized Winding Numbers for Meshes and parametric surfaces that uses boundaries and ray-intersection tests.</li>
+              <li>Complexity depends mostly on Boundaries. Very cheap for static query grid.</li>
+              <li>No Gradients; Implemented in C++.</li>
+            </ul>
+          </div>
+
+        </div>
+
+        <footer class="slide-footer mt-6">
+          <div class="space-y-1">
+            <p><span class="cite-author">Xu et al. (2023)</span> — Globally Consistent Normal Orientation for Point Clouds by Regularizing the Winding-Number Field. <em>ACM Transactions on Graphics (TOG)</em>.</p>
+            <p><span class="cite-author">Chen et al. (2024)</span> — 3D Reconstruction with Fast Dipole Sums. <em>ACM Transactions on Graphics (TOG)</em>.</p>
+            <p><span class="cite-author">Martens & Bessmeltsev (2025)</span> — One-Shot Method for Computing Generalized Winding Numbers. <em>Computer Graphics Forum (CGF)</em>.</p>
+          </div>
+        </footer>
+      </section>
+
+
+      <!-- Related Work - Differentiability & Robustness -->
+      <section id="related-work-slide-2">
+        <h2>Related Work</h2>
+
+        <div class="grid grid-cols-3 gap-6 items-start text-left mt-6">
+
+          <!-- 4. Xiao et al. (2025) -->
+          <div class="fragment fade-in-then-semi-out bg-white p-4 rounded-lg border border-gray-200 shadow-sm " data-fragment-index="1">
+            <div class="bg-gray-50 rounded mb-3 flex items-center justify-center p-2 border border-gray-200" style="height:20rem">
+              <img src="images/related_WindingClearnessForDifferentiablePointCloudOptimization.png" alt="Winding Clearness" class="max-h-full max-w-full object-contain">
+            </div>
+            <h4>Winding Clearness</h4>
+            <p class="small text-ut-gold font-medium">Xiao et al. (2025)</p>
+            <ul class="text-[0.5em] text-gray-600 mt-2">
+              <li>Formulate "Winding Clearness" as residual of a linear optimization of $\mathbf{n}$ and $a$ of a point cloud.</li>
+              <li>Minimize "Winding Clearness" to denoise Point Clouds.</li>
+              <li>Implemented in pytorch.</li>
+            </ul>
+          </div>
+
+          <!-- 5. Martens et al. (2026) -->
+          <div class="fragment fade-in-then-semi-out bg-white p-4 rounded-lg border border-gray-200 shadow-sm" data-fragment-index="2">
+            <div class="bg-gray-50 rounded mb-3 flex items-center justify-center p-2 border border-gray-200" style="height:20rem">
+              <img src="images/related_TheAntipodalMethod.png" alt="The Antipodal Method" class="max-h-full max-w-full object-contain">
+            </div>
+            <h4>Antipodal Method</h4>
+            <p class="small text-ut-gold font-medium">Martens et al. (2026)</p>
+            <ul class="text-[0.5em] text-gray-600 mt-2">
+              <li>Followup to One-Shot GWN. Same idea, just faster.</li>
+              <li>Complexity grows linearly with boundary count. </li>
+              <li>Exact Winding Numbers for meshes, but on average still faster than Fast Winding Numbers</li>
+              <li>Implemented in C++ and OpenGL</li>
+            </ul>
+          </div>
+
+          <!-- 6. Djuren et al. (2026) -->
+          <div class="fragment fade-in-then-semi-out bg-white p-4 rounded-lg border border-gray-200 shadow-sm" data-fragment-index="3">
+            <div class="bg-gray-50 rounded mb-3 flex items-center justify-center p-2 border border-gray-200" style="height:20rem">
+              <img src="images/related_DifferenitableVoxelizationOfSurfaceRepresentations.png" alt="Differentiable Voxelization" class="max-h-full max-w-full object-contain">
+            </div>
+            <h4>Diff. Voxelization</h4>
+            <p class="small font-medium text-ut-gold">Djuren et al. (2026)</p>
+            <ul class="text-[0.5em] text-gray-600 mt-2">
+              <li>Differentiable Voxelization of closed (manifold) triangle meshes.</li>
+              <li>Applies specialized box filter to winding number voxel grid. Derive partial derivatives of filtered grid w.r.t Mesh.</li>
+              <li>Implemented in C++/pytorch</li>
+            </ul>
+          </div>
+
+        </div>
+
+        <!-- Trajectory Hook / Bridge to Winder -->
+        <div class="absolute fragment fade-in mt-6 p-4 rounded-lg  text-center z-50 shadow-xl" style="top:5em; background-color: var(--ut-gold-light);" data-fragment-index="4">
+          <p class="font-bold text-ut-red">
+            The Gap: No straight forward Fast Winding Numbers with backpropagation kernels for generic real-time 3D optimization.
+          </p>
+        </div>
+
+        <footer class="slide-footer mt-4">
+          <div class="space-y-1">
+            <p><span class="cite-author">Xiao et al. (2025)</span> — Winding clearness for differentiable point cloud optimization. <em>Computer-Aided Design</em>.</p>
+            <p><span class="cite-author">Martens et al. (2026)</span> — The Antipodal Method: Fast, Accurate, and Robust 3D Generalized Winding Numbers. <em>ACM Transactions on Graphics (TOG)</em>.</p>
+            <p><span class="cite-author">Djuren et al. (2026)</span> — Differentiable Voxelization of Surface Representations. <em>ACM SIGGRAPH 2026 Conference Papers</em>.</p>
+          </div>
+        </footer>
+      </section>
+
+      <!-- Winder: Fast Winding Numbers on GPU -->
+      <section id="winder-overview">
+        <h2>Winder: Fast Winding Numbers on GPU</h2>
+
+        <div class="grid grid-cols-4 gap-4 items-start text-left mt-6">
+
+          <!-- 1. GPU Forward Pass (BVH8) -->
+          <div class="fragment fade-in bg-white p-3 rounded-lg border border-gray-200 shadow-sm" data-fragment-index="1">
+            <div class="bg-white rounded mb-3 overflow-hidden border border-gray-200 aspect-square flex items-center justify-center">
+              <video src="videos/bvh8.mp4" autoplay loop muted playsinline class="w-full h-full object-cover"></video>
+            </div>
+            <h4 class="text-base font-bold">GPU Forward Pass</h4>
+            <p class="small text-ut-gold font-medium text-xs">Linear BVH8 Engine</p>
+            <ul class="text-[0.45em] text-gray-600 mt-2 space-y-1">
+              <li>Highly optimized GPU Fast Winding Numbers implementation.</li>
+              <li>Linear BVH8 built in <strong>14 ms</strong> for 5M triangles.</li>
+              <li>Optimized cooperative CUDA traversal.</li>
+            </ul>
+          </div>
+
+          <!-- 2. Flexible Primitives -->
+          <div class="fragment fade-in bg-white p-3 rounded-lg border border-gray-200 shadow-sm" data-fragment-index="2">
+            <div class="bg-white rounded mb-3 overflow-hidden border border-gray-200 aspect-square flex items-center justify-center">
+              <video src="videos/geometry_types.mp4" autoplay loop muted playsinline class="w-full h-full object-cover"></video>
+            </div>
+            <h4 class="text-base font-bold">Flexible Geometry</h4>
+            <p class="small text-ut-gold font-medium text-xs">Clouds, Soups & Meshes</p>
+            <ul class="text-[0.45em] text-gray-600 mt-2 space-y-1">
+              <li>Supports <strong>Point Clouds / Dipoles</strong> ($\mathbf{p}, \mathbf{n}\cdot a$).</li>
+              <li>Handles unorganized <strong>Triangle Soups</strong>.</li>
+              <li>Direct support for indexed <strong>Meshes</strong> with shared vertices.</li>
+            </ul>
+          </div>
+
+          <!-- 3. Analytic & Novel Barnes-Hut Gradients -->
+          <div class="fragment fade-in bg-white p-3 rounded-lg border border-gray-200 shadow-sm" data-fragment-index="3">
+            <div class="bg-white rounded mb-3 overflow-hidden border border-gray-200 aspect-square flex items-center justify-center">
+              <video src="videos/bvh8_backward.mp4" autoplay loop muted playsinline class="w-full h-full object-cover"></video>
+            </div>
+            <h4 class="text-base font-bold">Gradient Engine</h4>
+            <p class="small text-ut-gold font-medium text-xs">Novel Barnes-Hut Scheme</p>
+            <ul class="text-[0.45em] text-gray-600 mt-2 space-y-1">
+              <li>Analytic gradients for PointNormals & Triangles.</li>
+              <li>Derived novel Taylor expansions for gradient fields.</li>
+              <li>Accelerated via GPU BVH8 for real-time backprop.</li>
+            </ul>
+          </div>
+
+          <!-- 4. Integration & PyTorch Support -->
+          <div class="fragment fade-in bg-white p-3 rounded-lg border border-gray-200 shadow-sm" data-fragment-index="4">
+            <div class="bg-white rounded mb-3 overflow-hidden border border-gray-200 aspect-square flex items-center justify-center">
+              <video src="videos/terminal.mp4" autoplay loop muted playsinline class="w-full h-full object-cover"></video>
+            </div>
+            <h4 class="text-base font-bold">PyTorch Ready</h4>
+            <p class="small text-ut-gold font-medium text-xs">nanobind integration</p>
+            <ul class="text-[0.45em] text-gray-600 mt-2 space-y-1">
+              <li>Seamless Python bindings using <code>nanobind</code>.</li>
+              <li>Asynchronous exact (brute-force) & fast tree implementations.</li>
+              <li>Full autograd support for optimization pipelines.</li>
+            </ul>
+          </div>
+
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/reveal.js@4.5.0/dist/reveal.js"></script>
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      const dateEl = document.getElementById("footer-date");
+      if (dateEl) {
+        dateEl.textContent = new Date().toLocaleDateString("en-US", {
+          month: "long",
+          day: "numeric",
+          year: "numeric"
+        });
+      }
+    });
+  const UT_COLORS = {
+    primary: {
+      red: [165, 30, 55],
+      gold: [180, 160, 105],
+      dark: [50, 65, 75]
+    },
+    secondary: {
+      blueDark: [65, 90, 140],
+      blueMid: [0, 105, 170],
+      blueLight: [80, 170, 200],
+      greenDark: [50, 110, 30],
+      greenMid: [125, 165, 75],
+      greenLight: [130, 185, 160],
+      taupe: [180, 160, 150],
+      mauve: [175, 110, 150],
+      orange: [200, 80, 60],
+      brown: [145, 105, 70],
+      yellow: [210, 150, 0],
+      goldLight: [215, 180, 105]
+    }
+  };
+
+  Reveal.initialize({
+    width: 1920,
+    height: 1080,
+    margin: 0.05,
+    minScale: 0.2,
+    maxScale: 2.0,
+    controls: true,
+    progress: true,
+    center: false,
+    hash: true
+  });
+
+  document.addEventListener("DOMContentLoaded", () => {
+    renderMathInElement(document.body, {
+      delimiters: [
+        { left: '$$', right: '$$', display: true },
+        { left: '$', right: '$', display: false }
+      ],
+      throwOnError: false
+    });
+  });
+
+  /**
+   * Represents a directed 2D line segment in world coordinates.
+   */
+  class LineSegment {
+    constructor(x1, y1, x2, y2, show_direction = false, style = { color: '#000000', width: 3 }) {
+      this.x1 = x1;
+      this.y1 = y1;
+      this.x2 = x2;
+      this.y2 = y2;
+      this.show_direction = show_direction;
+      this.style = style;
+    }
+
+    /**
+     * Computes exact winding number contribution at point (x, y).
+     */
+    computeWindingNumber(x, y) {
+      const v1x = this.x1 - x;
+      const v1y = this.y1 - y;
+      const v2x = this.x2 - x;
+      const v2y = this.y2 - y;
+
+      const cross = v1x * v2y - v1y * v2x;
+      const dot = v1x * v2x + v1y * v2y;
+
+      return Math.atan2(cross, dot) / (2 * Math.PI);
+    }
+
+    /**
+     * Draws segment and arrow tip onto canvas context.
+     */
+    draw(ctx, toPixelX, toPixelY) {
+      const px1 = toPixelX(this.x1);
+      const py1 = toPixelY(this.y1);
+      const px2 = toPixelX(this.x2);
+      const py2 = toPixelY(this.y2);
+
+      ctx.beginPath();
+      ctx.moveTo(px1, py1);
+      ctx.lineTo(px2, py2);
+      ctx.lineWidth = this.style.width || 3;
+      ctx.strokeStyle = this.style.color || '#000000';
+      ctx.stroke();
+
+      if (this.show_direction) {
+        const angle = Math.atan2(py2 - py1, px2 - px1);
+        const headLen = 14;
+
+        ctx.beginPath();
+        ctx.moveTo(px2, py2);
+        ctx.lineTo(
+          px2 - headLen * Math.cos(angle - Math.PI / 6),
+          py2 - headLen * Math.sin(angle - Math.PI / 6)
+        );
+        ctx.lineTo(
+          px2 - headLen * Math.cos(angle + Math.PI / 6),
+          py2 - headLen * Math.sin(angle + Math.PI / 6)
+        );
+        ctx.closePath();
+        ctx.fillStyle = this.style.color || '#000000';
+        ctx.fill();
+      }
+    }
+  }
+
+  /**
+   * Generic Jet Colormap supporting dynamic value ranges.
+   */
+  function getJetColorMap(val, minVal = -0.5, maxVal = 1.0) {
+    let t = (val - minVal) / (maxVal - minVal);
+    t = Math.max(0, Math.min(1, t));
+
+    const r = Math.max(0, Math.min(1, 1.5 - Math.abs(t * 4 - 3)));
+    const g = Math.max(0, Math.min(1, 1.5 - Math.abs(t * 4 - 2)));
+    const b = Math.max(0, Math.min(1, 1.5 - Math.abs(t * 4 - 1)));
+
+    return [
+      Math.round(r * 255),
+      Math.round(g * 255),
+      Math.round(b * 255)
+    ];
+  }
+
+  /**
+   * Draws a colorbar widget with custom ticks and bounds.
+   */
+  function drawColorbar(canvasId, minVal, maxVal, ticks) {
+    const cb = document.getElementById(canvasId);
+    const cctx = cb.getContext('2d');
+    const w = cb.width, h = cb.height;
+    const barX = 10, barW = 18;
+    const padTop = 15, padBot = 15;
+    const barH = h - padTop - padBot;
+
+    const imgData = cctx.createImageData(barW, barH);
+    for (let py = 0; py < barH; py++) {
+      const norm = py / (barH - 1);
+      const val = maxVal - norm * (maxVal - minVal);
+      const [r, g, b] = getJetColorMap(val, minVal, maxVal);
+
+      for (let px = 0; px < barW; px++) {
+        const index = (py * barW + px) * 4;
+        imgData.data[index]     = r;
+        imgData.data[index + 1] = g;
+        imgData.data[index + 2] = b;
+        imgData.data[index + 3] = 255;
+      }
+    }
+    cctx.putImageData(imgData, barX, padTop);
+
+    cctx.strokeStyle = '#32414b';
+    cctx.lineWidth = 1;
+    cctx.strokeRect(barX, padTop, barW, barH);
+
+    cctx.fillStyle = '#32414b';
+    cctx.font = '24px "Fira Sans", sans-serif';
+    cctx.textAlign = 'left';
+    cctx.textBaseline = 'middle';
+
+    ticks.forEach(t => {
+      const norm = (maxVal - t.val) / (maxVal - minVal);
+      const y = padTop + norm * (barH - 1);
+      cctx.beginPath();
+      cctx.moveTo(barX + barW, y);
+      cctx.lineTo(barX + barW + 5, y);
+      cctx.strokeStyle = '#32414b';
+      cctx.stroke();
+      cctx.fillText(t.label, barX + barW + 8, y);
+    });
+  }
+
+  /**
+   * Evaluates and renders a collection of line segments onto a target canvas.
+   */
+  function renderField(canvas, segments, minVal = -0.5, maxVal = 1.0) {
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    const imgData = ctx.createImageData(w, h);
+
+    const toPixelX = (x) => w / 2 + x * (w / 3);
+    const toPixelY = (y) => h / 2 - y * (h / 3);
+
+    for (let py = 0; py < h; py++) {
+      for (let px = 0; px < w; px++) {
+        const x = (px - w / 2) / (w / 3);
+        const y = (h / 2 - py) / (h / 3);
+
+        let windingVal = 0;
+        for (let i = 0; i < segments.length; i++) {
+          windingVal += segments[i].computeWindingNumber(x, y);
+        }
+
+        const [r, g, b] = getJetColorMap(windingVal, minVal, maxVal);
+        const index = (py * w + px) * 4;
+        imgData.data[index]     = r;
+        imgData.data[index + 1] = g;
+        imgData.data[index + 2] = b;
+        imgData.data[index + 3] = 255;
+      }
+    }
+    ctx.putImageData(imgData, 0, 0);
+
+    for (let i = 0; i < segments.length; i++) {
+      segments[i].draw(ctx, toPixelX, toPixelY);
+    }
+  }
+
+  // --- Slide 1: Animated Introduction to Winding Numbers ---
+  (function initIntroWindingSlide() {
+    const canvas = document.getElementById('introWindingCanvas');
+    const floatReadout = document.getElementById('introFloatReadout');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+
+    let animationFrameId = null;
+    let isPlaying = false;
+    let progress = 0; // Ranges from 0 to 1
+    const duration = 10000; // 10-second draw duration
+    const holdTime = 1500;   // 1.5-second pause at 100% completion before looping
+    let lastTimestamp = null;
+    let pauseElapsed = 0;
+
+    // Waypoints defining the exact Wikipedia curve topology relative to origin (0,0)
+    const WAYPOINTS = [
+      { x: -65, y: 0 },     // Inner loop (left)
+      { x: 0,   y: -65 },   // Inner loop (top)
+      { x: 75,  y: 0 },     // Inner loop (right)
+      { x: 0,   y: 135 },   // Outer loop (bottom)
+      { x: -140, y: 0 },    // Outer loop (left)
+      { x: 0,   y: -140 },  // Outer loop (top)
+      { x: 110, y: 0 },     // Start at black dot (right of observer)
+      { x: 125, y: -70 },   // Ascending up-right
+      { x: 140, y: -190 },  // Going up into tall right loop
+      { x: 110, y: -255 },  // Top apex of right loop
+      { x: 75,  y: -210 },  // Loop top-left turn
+      { x: 95,  y: -70 },   // Crossing down
+      { x: 165, y: 90 },    // Descending to bottom-right of loop
+      { x: 150, y: 175 },   // Bottom apex of right loop
+      { x: 85,  y: 125 },   // Sweeping left into inner wrap around x
+      { x: 0,   y: 65 },    // Inner loop (bottom)
+    ];
+
+    function catmullRom(p0, p1, p2, p3, t) {
+      const v0 = (p2 - p0) * 0.5;
+      const v1 = (p3 - p1) * 0.5;
+      const t2 = t * t;
+      const t3 = t2 * t;
+      return (2 * p1 - 2 * p2 + v0 + v1) * t3 +
+             (-3 * p1 + 3 * p2 - 2 * v0 - v1) * t2 +
+             v0 * t + p1;
+    }
+
+    function getRawCurvePoint(t) {
+      const M = WAYPOINTS.length;
+      // Handle t = 1.0 cleanly by wrapping to 0
+      const normT = (t >= 1.0) ? 0 : t;
+      const scaledT = normT * M;
+      const i = Math.floor(scaledT);
+      const localT = scaledT - i;
+
+      // Wrap indices modulo M for smooth C1 periodic continuity
+      const p0 = WAYPOINTS[(i - 1 + M) % M];
+      const p1 = WAYPOINTS[i % M];
+      const p2 = WAYPOINTS[(i + 1) % M];
+      const p3 = WAYPOINTS[(i + 2) % M];
+
+      return {
+        x: catmullRom(p0.x, p1.x, p2.x, p3.x, localT),
+        y: catmullRom(p0.y, p1.y, p2.y, p3.y, localT)
+      };
+    }
+
+    // Pre-sample trajectory and calculate continuous unwrapped angles
+    const PATH_SAMPLES = 1000;
+    const pathData = [];
+    let cumulativeAngle = 0;
+
+    for (let i = 0; i <= PATH_SAMPLES; i++) {
+      const t = i / PATH_SAMPLES;
+      const pt = getRawCurvePoint(t);
+
+      if (i > 0) {
+        const prev = pathData[i - 1];
+        const dTheta = Math.atan2(
+          prev.x * pt.y - prev.y * pt.x,
+          prev.x * pt.x + prev.y * pt.y
+        );
+        cumulativeAngle += dTheta;
+      }
+
+      pathData.push({
+        t: t,
+        x: pt.x,
+        y: pt.y,
+        angle: cumulativeAngle
+      });
+    }
+
+    function getInterpolatedPoint(t) {
+      const indexFloat = t * PATH_SAMPLES;
+      const idx = Math.min(Math.floor(indexFloat), PATH_SAMPLES - 1);
+      const frac = indexFloat - idx;
+
+      const p1 = pathData[idx];
+      const p2 = pathData[Math.min(idx + 1, PATH_SAMPLES)];
+
+      return {
+        x: p1.x + (p2.x - p1.x) * frac,
+        y: p1.y + (p2.y - p1.y) * frac,
+        angle: p1.angle + (p2.angle - p1.angle) * frac
+      };
+    }
+
+    function drawFrame() {
+      const w = canvas.width;
+      const h = canvas.height;
+      const centerX = w / 2 - 25;
+      const centerY = h / 2 + 25;
+
+      ctx.clearRect(0, 0, w, h);
+
+      // 1. Central observer point x
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, 7, 0, 2 * Math.PI);
+      ctx.fillStyle = '#A51E37';
+      ctx.fill();
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.fillStyle = '#32414B';
+      ctx.font = 'bold 16px sans-serif';
+      ctx.fillText('x', centerX - 18, centerY - 12);
+
+      // 2. Full curve preview (dashed line)
+      ctx.beginPath();
+      for (let i = 0; i <= PATH_SAMPLES; i++) {
+        const pt = pathData[i];
+        const px = centerX + pt.x;
+        const py = centerY + pt.y;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.strokeStyle = 'rgba(165, 30, 55, 0.3)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 5]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      if (progress <= 0) {
+        if (floatReadout) floatReadout.innerText = '0.00';
+        return;
+      }
+
+      const currentSampleCount = Math.floor(progress * PATH_SAMPLES);
+      const headPoint = getInterpolatedPoint(progress);
+
+      // 3. Blue continuous angle-tracking spiral at origin
+      ctx.beginPath();
+      const spiralStartR = 16;
+      const spiralSpacing = 5.5;
+      const currentAngle = headPoint.angle;
+
+      const step = 0.04;
+      if (currentAngle > 0) {
+        for (let a = 0; a <= currentAngle; a += step) {
+          const rSpiral = spiralStartR + (a / (2 * Math.PI)) * spiralSpacing;
+          const sx = centerX + rSpiral * Math.cos(a);
+          const sy = centerY + rSpiral * Math.sin(a);
+          if (a === 0) ctx.moveTo(sx, sy);
+          else ctx.lineTo(sx, sy);
+        }
+      }
+      ctx.strokeStyle = '#00A0E0';
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+
+      // 4. Active animated curve trajectory
+      ctx.beginPath();
+      for (let i = 0; i <= currentSampleCount; i++) {
+        const pt = pathData[i];
+        const px = centerX + pt.x;
+        const py = centerY + pt.y;
+
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.strokeStyle = '#A51E37';
+      ctx.lineWidth = 3.5;
+      ctx.stroke();
+
+      // 5. Directional arrows
+      for (let i = 40; i <= currentSampleCount; i += 70) {
+        const p1 = pathData[i - 1];
+        const p2 = pathData[i];
+
+        const px1 = centerX + p1.x, py1 = centerY + p1.y;
+        const px2 = centerX + p2.x, py2 = centerY + p2.y;
+        const dirAngle = Math.atan2(py2 - py1, px2 - px1);
+
+        ctx.save();
+        ctx.translate(px2, py2);
+        ctx.rotate(dirAngle);
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(-10, -5);
+        ctx.lineTo(-10, 5);
+        ctx.closePath();
+        ctx.fillStyle = '#A51E37';
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // 6. Line-of-sight ray
+      const headX = centerX + headPoint.x;
+      const headY = centerY + headPoint.y;
+
+      ctx.beginPath();
+      ctx.moveTo(centerX, centerY);
+      ctx.lineTo(headX, headY);
+      ctx.strokeStyle = '#32414B';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // 7. Curve tip marker
+      ctx.beginPath();
+      ctx.arc(headX, headY, 5.5, 0, 2 * Math.PI);
+      ctx.fillStyle = '#32414B';
+      ctx.fill();
+
+      // 8. Update Live Floating-Point Readout
+      if (floatReadout) {
+        const floatVal = headPoint.angle / (2 * Math.PI);
+        floatReadout.innerText = floatVal.toFixed(2);
+      }
+    }
+
+    function animate(timestamp) {
+      if (!lastTimestamp) lastTimestamp = timestamp;
+      const delta = timestamp - lastTimestamp;
+      lastTimestamp = timestamp;
+
+      if (isPlaying) {
+        if (progress < 1.0) {
+          progress += delta / duration;
+          if (progress >= 1.0) {
+            progress = 1.0;
+            pauseElapsed = 0;
+          }
+        } else {
+          pauseElapsed += delta;
+          if (pauseElapsed >= holdTime) {
+            progress = 0;
+            pauseElapsed = 0;
+          }
+        }
+        drawFrame();
+        animationFrameId = requestAnimationFrame(animate);
+      }
+    }
+
+    function startLoop() {
+      if (!isPlaying) {
+        isPlaying = true;
+        lastTimestamp = null;
+        animationFrameId = requestAnimationFrame(animate);
+      }
+    }
+
+    function stopLoop() {
+      isPlaying = false;
+      if (animationFrameId) cancelAnimationFrame(animationFrameId);
+    }
+
+    Reveal.on('slidechanged', e => {
+      if (e.currentSlide.id === 'intro-winding-slide') {
+        progress = 0;
+        startLoop();
+      } else {
+        stopLoop();
+      }
+    });
+
+    if (Reveal.getCurrentSlide() && Reveal.getCurrentSlide().id === 'intro-winding-slide') {
+      startLoop();
+    } else {
+      drawFrame();
+    }
+  })();
+
+
+  // --- Slide 2: Winding Number Arc Demo ---
+  (function initArcSlide() {
+    const canvas = document.getElementById('windingCanvas');
+    const slider = document.getElementById('angleSlider');
+
+    function update() {
+      const maxAngleDeg = parseFloat(slider.value);
+      const radius = 1.0;
+      const totalCircleSegments = 30;
+      const numSegments = Math.max(1, Math.round((maxAngleDeg / 360) * totalCircleSegments));
+      const totalRad = (maxAngleDeg * Math.PI) / 180;
+      const dTheta = totalRad / numSegments;
+
+      const segments = [];
+      for (let i = 0; i < numSegments; i++) {
+        const t1 = i * dTheta, t2 = (i + 1) * dTheta;
+        const isLast = (i === numSegments - 1);
+        segments.push(new LineSegment(
+          radius * Math.cos(t1), radius * Math.sin(t1),
+          radius * Math.cos(t2), radius * Math.sin(t2),
+          isLast, { color: '#000000', width: 3 }
+        ));
+      }
+      renderField(canvas, segments, -0.5, 1.0);
+    }
+
+    slider.addEventListener('input', update);
+    Reveal.on('slidechanged', e => {
+      if (e.currentSlide.id === 'what-is-winding-number') {
+        drawColorbar('colorbarCanvas', -0.5, 1.0, [
+          { val: 1.0, label: '1' }, { val: 0.5, label: '½' },
+          { val: 0.0, label: '0' }, { val: -0.5, label: '-½' }
+        ]);
+        update();
+      }
+    });
+
+    drawColorbar('colorbarCanvas', -0.5, 1.0, [
+      { val: 1.0, label: '1' }, { val: 0.5, label: '½' },
+      { val: 0.0, label: '0' }, { val: -0.5, label: '-½' }
+    ]);
+    update();
+  })();
+
+
+  // --- Slide 3 Combined Properties & Superposition Slide Controller ---
+  (function initPropertiesSlide() {
+    // --- Panel 0: Interactive Free Drawing ---
+    const canvas0 = document.getElementById('propCanvas0');
+    const resetBtn = document.getElementById('resetLinesBtn');
+
+    let userSegments = [];
+    let activeDragSegment = null;
+    let isDragging = false;
+    let startPos = { x: 0, y: 0 };
+    let renderRequested = false;
+
+    function getWorldCoords(e, canvasTarget) {
+      const rect = canvasTarget.getBoundingClientRect();
+      const px = (e.clientX - rect.left) * (canvasTarget.width / rect.width);
+      const py = (e.clientY - rect.top) * (canvasTarget.height / rect.height);
+      const x = (px - canvasTarget.width / 2) / (canvasTarget.width / 3);
+      const y = (canvasTarget.height / 2 - py) / (canvasTarget.height / 3);
+      return { x, y };
+    }
+
+    function redrawPanel0() {
+      const allSegments = [...userSegments];
+      if (activeDragSegment) allSegments.push(activeDragSegment);
+      renderField(canvas0, allSegments, -0.5, 2.0);
+      renderRequested = false;
+    }
+
+    function requestRedraw0() {
+      if (!renderRequested) {
+        renderRequested = true;
+        requestAnimationFrame(redrawPanel0);
+      }
+    }
+
+    canvas0.addEventListener('mousedown', (e) => {
+      isDragging = true;
+      startPos = getWorldCoords(e, canvas0);
+      activeDragSegment = new LineSegment(
+        startPos.x, startPos.y, startPos.x, startPos.y,
+        true, { color: '#333333', width: 4 }
+      );
+      requestRedraw0();
+    });
+
+    canvas0.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      const cur = getWorldCoords(e, canvas0);
+      activeDragSegment.x2 = cur.x;
+      activeDragSegment.y2 = cur.y;
+      requestRedraw0();
+    });
+
+    const finishDrag = (e) => {
+      if (!isDragging) return;
+      isDragging = false;
+      const cur = getWorldCoords(e, canvas0);
+      if (Math.hypot(cur.x - startPos.x, cur.y - startPos.y) > 0.02) {
+        userSegments.push(new LineSegment(
+          startPos.x, startPos.y, cur.x, cur.y,
+          true, { color: '#000000', width: 4 }
+        ));
+      }
+      activeDragSegment = null;
+      requestRedraw0();
+    };
+
+    canvas0.addEventListener('mouseup', finishDrag);
+    canvas0.addEventListener('mouseleave', finishDrag);
+    resetBtn.addEventListener('click', () => {
+      userSegments = [];
+      activeDragSegment = null;
+      requestRedraw0();
+    });
+
+    // --- Panel 1: Superposition Setup (Figure 9) ---
+    const supSquareSegs = [
+      new LineSegment(-0.7, -0.7,  0.7, -0.7, true, { color: '#000000', width: 3 }), // Bottom
+      new LineSegment( 0.7, -0.7,  0.7,  0.7, true, { color: '#000000', width: 3 }), // Right
+      new LineSegment( 0.7,  0.7, -0.7,  0.7, true, { color: '#000000', width: 3 }), // Top
+      new LineSegment(-0.7,  0.7, -0.7, -0.7, true, { color: '#000000', width: 3 })  // Left
+    ];
+
+    function setupPanel1() {
+      // Render individual segment mini previews
+      supSquareSegs.forEach((seg, idx) => {
+        const miniCanvas = document.getElementById(`supMini${idx}`);
+        if (miniCanvas) {
+          renderField(miniCanvas, [seg], -0.5, 1.0);
+        }
+      });
+
+      // Render combined main canvas
+      const mainCanvas = document.getElementById('supMainCanvas');
+      renderField(mainCanvas, supSquareSegs, -0.5, 1.0);
+
+      // Inspector readout
+      const inspectorBox = document.getElementById('supInspectorBox');
+      mainCanvas.addEventListener('mousemove', (e) => {
+        const pos = getWorldCoords(e, mainCanvas);
+        let sum = 0;
+        const terms = supSquareSegs.map((s, i) => {
+          const val = s.computeWindingNumber(pos.x, pos.y);
+          sum += val;
+          return `w_${i+1}:${val >= 0 ? '+' : ''}${val.toFixed(2)}`;
+        });
+
+        inspectorBox.innerHTML = `
+          <strong>Point (${pos.x.toFixed(2)}, ${pos.y.toFixed(2)})</strong><br>
+          Sum: <span class="text-ut-red font-bold">${sum.toFixed(3)}</span><br>
+          <span class="small text-gray-500">(${terms.join(', ')})</span>
+        `;
+      });
+    }
+
+    // --- Panel 2: Open Boundaries Setup ---
+    function setupPanel2() {
+      const openBoxSegs = [
+        new LineSegment(-0.7, -0.7,  0.7, -0.7, true, { color: '#000000', width: 4 }),
+        new LineSegment( 0.7, -0.7,  0.7,  0.7, true, { color: '#000000', width: 4 }),
+        new LineSegment(-0.7,  0.7, -0.7, -0.7, true, { color: '#000000', width: 4 })
+        // Top segment omitted -> open gap
+      ];
+      renderField(document.getElementById('propCanvas2'), openBoxSegs, -0.5, 1.0);
+    }
+
+    // --- Panel 3: Cancellation Setup ---
+    function setupPanel3() {
+      const cancelingSegs = [
+        new LineSegment(-0.6, 0.0, 0.6,  0.0, true, { color: '#000000', width: 4 }),
+        new LineSegment( 0.6, 0.0, -0.6, 0.0, true, { color: '#888888', width: 3 })
+      ];
+      renderField(document.getElementById('propCanvas3'), cancelingSegs, -0.5, 1.0);
+    }
+
+    // --- Fragment & Panel Switcher ---
+    function showPanel(index) {
+      document.querySelectorAll('.prop-panel').forEach((panel, i) => {
+        if (i === index) {
+          panel.classList.remove('hidden');
+        } else {
+          panel.classList.add('hidden');
+        }
+      });
+
+      // Highlight left list items
+      for (let i = 0; i <= 3; i++) {
+        const item = document.getElementById(`frag-prop-${i}`);
+        if (item) {
+          if (i === index) {
+            item.classList.add('bg-gray-100', 'border-ut-red');
+          } else {
+            item.classList.remove('bg-gray-100', 'border-ut-red');
+          }
+        }
+      }
+
+      // Toggle reset button visibility (only needed for panel 0)
+      const resetBtnContainer = document.getElementById('resetContainer');
+      if (resetBtnContainer) {
+        resetBtnContainer.style.display = (index === 0) ? 'block' : 'none';
+      }
+    }
+
+    function renderActivePanel(index) {
+      showPanel(index);
+      if (index === 0) {
+        drawColorbar('propColorbarCanvas0', -0.5, 2.0, [
+          { val: 2.0, label: '2' }, { val: 1.0, label: '1' },
+          { val: 0.0, label: '0' }, { val: -0.5, label: '-½' }
+        ]);
+        redrawPanel0();
+      } else if (index === 1) {
+        drawColorbar('supColorbarCanvas', -0.5, 1.0, [
+          { val: 1.0, label: '1' }, { val: 0.5, label: '½' },
+          { val: 0.0, label: '0' }, { val: -0.5, label: '-½' }
+        ]);
+        setupPanel1();
+      } else if (index === 2) {
+        drawColorbar('propColorbarCanvas2', -0.5, 1.0, [
+          { val: 1.0, label: '1' }, { val: 0.5, label: '½' },
+          { val: 0.0, label: '0' }, { val: -0.5, label: '-½' }
+        ]);
+        setupPanel2();
+      } else if (index === 3) {
+        drawColorbar('propColorbarCanvas3', -0.5, 1.0, [
+          { val: 1.0, label: '1' }, { val: 0.5, label: '½' },
+          { val: 0.0, label: '0' }, { val: -0.5, label: '-½' }
+        ]);
+        setupPanel3();
+      }
+    }
+
+    // --- Reveal Event Hooks ---
+    function getCurrentFragmentIndex(slide) {
+      const activeFragments = slide.querySelectorAll('.fragment.visible');
+      return activeFragments.length; // 0 when none visible, 1 for frag 1, etc.
+    }
+
+    Reveal.on('slidechanged', e => {
+      if (e.currentSlide.id === 'properties-slide') {
+        const idx = getCurrentFragmentIndex(e.currentSlide);
+        renderActivePanel(idx);
+      }
+    });
+
+    Reveal.on('fragmentshown', e => {
+      if (Reveal.getCurrentSlide().id === 'properties-slide') {
+        const idx = getCurrentFragmentIndex(Reveal.getCurrentSlide());
+        renderActivePanel(idx);
+      }
+    });
+
+    Reveal.on('fragmenthidden', e => {
+      if (Reveal.getCurrentSlide().id === 'properties-slide') {
+        const idx = getCurrentFragmentIndex(Reveal.getCurrentSlide());
+        renderActivePanel(idx);
+      }
+    });
+
+    // Initial load setup
+    renderActivePanel(0);
+  })();
+
+
+  (function initFastWindingNumbersSlide() {
+    const spatialCanvas = document.getElementById('fwnSpatialCanvas');
+    const treeCanvas = document.getElementById('fwnTreeCanvas');
+    if (!spatialCanvas || !treeCanvas) return;
+
+    const sCtx = spatialCanvas.getContext('2d');
+    const tCtx = treeCanvas.getContext('2d');
+
+    const fieldCanvas = document.createElement('canvas');
+    fieldCanvas.width = spatialCanvas.width;
+    fieldCanvas.height = spatialCanvas.height;
+    let fieldCacheDirty = true;
+
+    let hoveredNode = null;
+    let selectedNode = null;
+    let fieldMode = 'approx'; // 'approx' (multipole) | 'true' (exact)
+    let centroidBadges = [];
+    let treeNodeBadges = [];
+    let clearHoverTimeout = null;
+
+    // --- 1. Duck Geometry ---
+    const DUCK_VERTICES = [
+      { x: -0.06148, y: 0.71311 }, { x: -0.12295, y: 0.51639 },
+      { x: -0.30738, y: 0.27049 }, { x: -0.61475, y: 0.14754 },
+      { x: -0.92213, y: 0.12295 }, { x: -0.79918, y: -0.18443 },
+      { x: -0.55328, y: -0.46721 }, { x: -0.12295, y: -0.55328 },
+      { x:  0.36885, y: -0.49180 }, { x:  0.55328, y: -0.12295 },
+      { x:  0.46721, y:  0.24590 }, { x:  0.34426, y:  0.46721 },
+      { x:  0.51639, y:  0.51639 }, { x:  0.73770, y:  0.63934 },
+      { x:  0.43033, y:  0.67623 }, { x:  0.27049, y:  0.76230 },
+      { x:  0.12295, y:  0.79918 }
+    ];
+    const EYE_HOLE_VERTICES  = [
+      { x: 0.32, y: 0.66 }, { x: 0.38, y: 0.63 },
+      { x: 0.36, y: 0.57 }, { x: 0.30, y: 0.60 }
+    ];
+    const WING_HOLE_VERTICES = [
+      { x: -0.10, y:  0.15 }, { x: 0.15, y: -0.05 },
+      { x: -0.05, y: -0.25 }, { x: -0.35, y: -0.10 }
+    ];
+
+    function createLoopSegments(vertices, styleOptions = {}) {
+      const segments = [];
+      for (let i = 0; i < vertices.length; i++) {
+        const p1 = vertices[i];
+        const p2 = vertices[(i + 1) % vertices.length];
+        segments.push(new LineSegment(p1.x, p1.y, p2.x, p2.y, false, styleOptions));
+      }
+      return segments;
+    }
+
+    const duckSegments = [
+      ...createLoopSegments(DUCK_VERTICES,      { color: '#32414B', width: 2.5 }),
+      ...createLoopSegments(EYE_HOLE_VERTICES,  { color: '#32414B', width: 2.0 }),
+      ...createLoopSegments(WING_HOLE_VERTICES, { color: '#32414B', width: 2.0 })
+    ];
+
+    function subdivideSegment(seg) {
+      const mx = (seg.x1 + seg.x2) / 2;
+      const my = (seg.y1 + seg.y2) / 2;
+      const opts = { color: seg.color || '#32414b', width: seg.width || 2.5 };
+      return [
+        new LineSegment(seg.x1, seg.y1, mx, my, false, opts),
+        new LineSegment(mx, my, seg.x2, seg.y2, false, opts)
+      ];
+    }
+
+    let denseDuckSegments = [];
+    duckSegments.forEach(seg => {
+      const len = Math.hypot(seg.x2 - seg.x1, seg.y2 - seg.y1);
+      if (len > 0.15) {
+        const sub1 = subdivideSegment(seg);
+        sub1.forEach(s => denseDuckSegments.push(...subdivideSegment(s)));
+      } else {
+        denseDuckSegments.push(seg);
+      }
+    });
+
+    const GAP_PROBABILITY = 0.08;
+    denseDuckSegments = denseDuckSegments.filter(() => Math.random() > GAP_PROBABILITY);
+
+    // --- 2. Quadtree ---
+    class QuadNode {
+      constructor(x, y, size, depth = 0) {
+        this.x = x; this.y = y; this.size = size; this.depth = depth;
+        this.children = []; this.segments = [];
+        this.centerOfMass = { x, y };
+        this.rtilde = 0;
+        this.status = 'normal';
+        // Multipole moments (complex: re/im pairs)
+        this.multipole = { M1r: 0, M1i: 0, M2r: 0, M2i: 0, M3r: 0, M3i: 0 };
+        this.w0 = 0; // exact winding number of node's segments at the centroid
+      }
+      isLeaf() { return this.children.length === 0; }
+
+      computeProperties() {
+        if (this.segments.length === 0) {
+          this.centerOfMass = { x: this.x, y: this.y };
+          this.rtilde = 0;
+          this.computeMoments();
+          return;
+        }
+        let totalLen = 0, sumX = 0, sumY = 0;
+        this.segments.forEach(seg => {
+          const len = Math.hypot(seg.x2 - seg.x1, seg.y2 - seg.y1);
+          const mx = (seg.x1 + seg.x2) / 2;
+          const my = (seg.y1 + seg.y2) / 2;
+          totalLen += len; sumX += mx * len; sumY += my * len;
+        });
+        this.centerOfMass = { x: sumX / totalLen, y: sumY / totalLen };
+
+        let maxR = 0;
+        this.segments.forEach(seg => {
+          const d1 = Math.hypot(seg.x1 - this.centerOfMass.x, seg.y1 - this.centerOfMass.y);
+          const d2 = Math.hypot(seg.x2 - this.centerOfMass.x, seg.y2 - this.centerOfMass.y);
+          maxR = Math.max(maxR, d1, d2);
+        });
+        this.rtilde = maxR;
+        this.computeMoments();
+      }
+
+      /**
+       * Precomputes the complex multipole moments:
+       *   M_k = sum_segments [ (B - c)^k - (A - c)^k ]
+       * These feed the far-field expansion
+       *   w_K(x) ~ -(1/2pi) Im[ M1/zeta + M2/(2 zeta^2) + M3/(3 zeta^3) ]
+       * with zeta = x - c.
+       */
+      computeMoments() {
+        const cx = this.centerOfMass.x;
+        const cy = this.centerOfMass.y;
+        let M1r = 0, M1i = 0, M2r = 0, M2i = 0, M3r = 0, M3i = 0;
+        let w0 = 0;
+
+        this.segments.forEach(seg => {
+          const ar = seg.x1 - cx, ai = seg.y1 - cy;
+          const br = seg.x2 - cx, bi = seg.y2 - cy;
+
+          // b - a
+          M1r += br - ar;
+          M1i += bi - ai;
+
+          // b^2 - a^2
+          const a2r = ar * ar - ai * ai, a2i = 2 * ar * ai;
+          const b2r = br * br - bi * bi, b2i = 2 * br * bi;
+          M2r += b2r - a2r;
+          M2i += b2i - a2i;
+
+          // b^3 - a^3
+          const a3r = a2r * ar - a2i * ai, a3i = a2r * ai + a2i * ar;
+          const b3r = b2r * br - b2i * bi, b3i = b2r * bi + b2i * br;
+          M3r += b3r - a3r;
+          M3i += b3i - a3i;
+
+          // Exact value at centroid (for the singular fallback + visualization range)
+          w0 += seg.computeWindingNumber(cx, cy);
+        });
+
+        this.multipole = { M1r, M1i, M2r, M2i, M3r, M3i };
+        this.w0 = w0;
+      }
+
+      subdivide(maxDepth = 4, maxSegs = 3) {
+        this.computeProperties();
+        if (this.depth >= maxDepth || this.segments.length <= maxSegs) return;
+
+        const half = this.size / 4;
+        const quarter = this.size / 2;
+        const candidates = [
+          new QuadNode(this.x - half, this.y + half, quarter, this.depth + 1),
+          new QuadNode(this.x + half, this.y + half, quarter, this.depth + 1),
+          new QuadNode(this.x - half, this.y - half, quarter, this.depth + 1),
+          new QuadNode(this.x + half, this.y - half, quarter, this.depth + 1)
+        ];
+        candidates.forEach(child => {
+          child.segments = this.segments.filter(seg => child.intersectsSegment(seg));
+        });
+        this.children = candidates.filter(child => child.segments.length > 0);
+        this.children.forEach(child => child.subdivide(maxDepth, maxSegs));
+      }
+
+      intersectsSegment(seg) {
+        const minX = this.x - this.size / 2, maxX = this.x + this.size / 2;
+        const minY = this.y - this.size / 2, maxY = this.y + this.size / 2;
+        return !(seg.x1 < minX && seg.x2 < minX || seg.x1 > maxX && seg.x2 > maxX ||
+                 seg.y1 < minY && seg.y2 < minY || seg.y1 > maxY && seg.y2 > maxY);
+      }
+    }
+
+    const quadtreeRoot = new QuadNode(0.0, 0.0, 2.2, 0);
+    quadtreeRoot.segments = denseDuckSegments;
+    quadtreeRoot.subdivide(4, 3);
+
+    // --- 3. Coord helpers ---
+    const toSpatX = (x) => spatialCanvas.width  / 2 + x * (spatialCanvas.width  / 3);
+    const toSpatY = (y) => spatialCanvas.height / 2 - y * (spatialCanvas.height / 3);
+
+    let queryPoint = { x: 0.65, y: -0.45 };
+    let activeStage = 0;
+
+    // --- 4. Far-field multipole evaluation ---
+    // Returns the exact w(c) very near the centroid (multipole is undefined there).
+    const CENTROID_BALL = 4e-3; // in world coords
+
+    function evaluateMultipoleNode(node, x, y) {
+      const m = node.multipole;
+      if (!m) return 0;
+
+      const cx = node.centerOfMass.x;
+      const cy = node.centerOfMass.y;
+      const zr = x - cx, zi = y - cy;
+      const r2 = zr * zr + zi * zi;
+
+      if (r2 < CENTROID_BALL * CENTROID_BALL) return node.w0;
+
+      // 1/zeta  (complex reciprocal)
+      const invr =  zr / r2;
+      const invi = -zi / r2;
+
+      // 1/zeta^2 = (1/zeta)^2
+      const inv2r = invr * invr - invi * invi;
+      const inv2i = 2 * invr * invi;
+
+      // 1/zeta^3 = 1/zeta^2 * 1/zeta
+      const inv3r = inv2r * invr - inv2i * invi;
+      const inv3i = inv2r * invi + inv2i * invr;
+
+      // M1/zeta
+      const t1i = m.M1r * invi + m.M1i * invr;
+      // M2/(2 zeta^2)
+      const t2i = (m.M2r * inv2i + m.M2i * inv2r) * 0.5;
+      // M3/(3 zeta^3)
+      const t3i = (m.M3r * inv3i + m.M3i * inv3r) / 3;
+
+      return -(t1i + t2i + t3i) / (2 * Math.PI);
+    }
+
+    function renderMultipoleField(canvas, node, minVal, maxVal) {
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width, h = canvas.height;
+      const imgData = ctx.createImageData(w, h);
+      for (let py = 0; py < h; py++) {
+        for (let px = 0; px < w; px++) {
+          const x = (px - w / 2) / (w / 3);
+          const y = (h / 2 - py) / (h / 3);
+          const val = evaluateMultipoleNode(node, x, y);
+          const [r, g, b] = getJetColorMap(val, minVal, maxVal);
+          const idx = (py * w + px) * 4;
+          imgData.data[idx]     = r;
+          imgData.data[idx + 1] = g;
+          imgData.data[idx + 2] = b;
+          imgData.data[idx + 3] = 255;
+        }
+      }
+      ctx.putImageData(imgData, 0, 0);
+    }
+
+    function renderExactField(canvas, segments, minVal, maxVal) {
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width, h = canvas.height;
+      const imgData = ctx.createImageData(w, h);
+      for (let py = 0; py < h; py++) {
+        for (let px = 0; px < w; px++) {
+          const x = (px - w / 2) / (w / 3);
+          const y = (h / 2 - py) / (h / 3);
+          let val = 0;
+          for (let i = 0; i < segments.length; i++) val += segments[i].computeWindingNumber(x, y);
+          const [r, g, b] = getJetColorMap(val, minVal, maxVal);
+          const idx = (py * w + px) * 4;
+          imgData.data[idx]     = r;
+          imgData.data[idx + 1] = g;
+          imgData.data[idx + 2] = b;
+          imgData.data[idx + 3] = 255;
+        }
+      }
+      ctx.putImageData(imgData, 0, 0);
+    }
+
+    function getFieldRange(node) {
+      return Math.max(0.5, Math.abs(node.w0) * 2 + 0.3);
+    }
+
+    function invalidateFieldCache() { fieldCacheDirty = true; }
+
+    function updateFieldCache() {
+      if (!selectedNode || activeStage < 2 || activeStage > 3) {
+        fieldCacheDirty = false; return;
+      }
+      const range = getFieldRange(selectedNode);
+      if (fieldMode === 'true') {
+        renderExactField(fieldCanvas, selectedNode.segments, -range, range);
+      } else {
+        renderMultipoleField(fieldCanvas, selectedNode, -range, range);
+      }
+      fieldCacheDirty = false;
+    }
+
+    function drawSegmentStyled(seg, color, width) {
+      sCtx.beginPath();
+      sCtx.moveTo(toSpatX(seg.x1), toSpatY(seg.y1));
+      sCtx.lineTo(toSpatX(seg.x2), toSpatY(seg.y2));
+      sCtx.lineWidth = width;
+      sCtx.strokeStyle = color;
+      sCtx.stroke();
+    }
+
+    // --- 5. Spatial rendering ---
+    function renderSpatialCanvas() {
+      const w = spatialCanvas.width, h = spatialCanvas.height;
+      sCtx.clearRect(0, 0, w, h);
+      sCtx.fillStyle = '#ffffff';
+      sCtx.fillRect(0, 0, w, h);
+
+      if (selectedNode && activeStage >= 2 && activeStage <= 3) {
+        if (fieldCacheDirty) updateFieldCache();
+        sCtx.drawImage(fieldCanvas, 0, 0);
+      }
+
+      if (activeStage === 4) {
+        renderField(spatialCanvas, denseDuckSegments, -0.5, 1.0);
+      }
+
+      if (activeStage >= 1 && activeStage <= 3) drawQuadNode(quadtreeRoot);
+
+      // Segments with hover/selection highlight
+      const hoveredSet  = hoveredNode  ? new Set(hoveredNode.segments)  : null;
+      const selectedSet = selectedNode ? new Set(selectedNode.segments) : null;
+      const selectedColor = fieldMode === 'true' ? '#7da54b' : '#0069aa';
+
+      for (let i = 0; i < denseDuckSegments.length; i++) {
+        const seg = denseDuckSegments[i];
+        let color = '#32414B', width = 2.5;
+        if (selectedSet && selectedSet.has(seg))    { color = selectedColor; width = 4.5; }
+        else if (hoveredSet && hoveredSet.has(seg)) { color = '#c8503c';      width = 3.5; }
+        drawSegmentStyled(seg, color, width);
+      }
+
+      // Centroids (all nodes now)
+      centroidBadges = [];
+      if (activeStage >= 2 && activeStage <= 3) drawMultipoleBadges(quadtreeRoot);
+
+      // Query point at stage 3
+      if (activeStage === 3) {
+        const qx = toSpatX(queryPoint.x), qy = toSpatY(queryPoint.y);
+        sCtx.beginPath();
+        sCtx.arc(qx, qy, 7, 0, 2 * Math.PI);
+        sCtx.fillStyle = '#a51e37'; sCtx.fill();
+        sCtx.strokeStyle = '#FFFFFF'; sCtx.lineWidth = 2; sCtx.stroke();
+        sCtx.fillStyle = '#111827';
+        sCtx.font = 'bold 14px sans-serif';
+        sCtx.fillText('q', qx + 10, qy - 10);
+
+        resetNodeStatus(quadtreeRoot);
+        evaluateTraversal(quadtreeRoot, queryPoint, 1.8);
+      }
+
+      // Hint text
+      if (activeStage >= 2 && activeStage <= 3) {
+        sCtx.font = '11px sans-serif';
+        sCtx.fillStyle = 'rgba(50,65,75,0.65)';
+        if (fieldMode === 'true' && selectedNode) {
+          sCtx.fillText('Showing EXACT field of selected node (right-click to toggle)', 10, h - 10);
+        } else if (selectedNode) {
+          sCtx.fillText('Showing FAR-FIELD MULTIPOLE of selected node (left-click to toggle)', 10, h - 10);
+        } else {
+          sCtx.fillText('Hover centroid or tree node · Left-click: far-field multipole · Right-click: exact field', 10, h - 10);
+        }
+      }
+    }
+
+    function drawQuadNode(node) {
+      const px = toSpatX(node.x - node.size / 2);
+      const py = toSpatY(node.y + node.size / 2);
+      const pw = node.size * (spatialCanvas.width / 3);
+      const ph = node.size * (spatialCanvas.height / 3);
+      sCtx.strokeStyle =
+        node.status === 'pruned'    ? 'rgba(125, 165, 75, 0.85)' :
+        node.status === 'traversed' ? 'rgba(165, 30, 55, 0.7)'   :
+                                      'rgba(210, 150, 0, 0.5)';
+      sCtx.lineWidth = node.status !== 'normal' ? 2 : 1;
+      sCtx.strokeRect(px, py, pw, ph);
+      if (node.status === 'pruned') {
+        sCtx.fillStyle = 'rgba(125, 165, 75, 0.12)';
+        sCtx.fillRect(px, py, pw, ph);
+      }
+      node.children.forEach(child => drawQuadNode(child));
+    }
+
+    function drawMultipoleBadges(node) {
+      // Draw for every node that has segments (root, depth 1, ..., leaves).
+      if (node.segments.length > 0) {
+        const cx = toSpatX(node.centerOfMass.x);
+        const cy = toSpatY(node.centerOfMass.y);
+        const rPx = node.rtilde * (spatialCanvas.width / 3);
+        centroidBadges.push({ node, x: cx, y: cy });
+
+        const isHover    = node === hoveredNode;
+        const isSelected = node === selectedNode;
+        const selectedColor = fieldMode === 'true' ? '#7da54b' : '#0069aa';
+
+        // Shallow nodes get slightly larger badges so they don't disappear under deeper rings
+        const baseRadius = node.depth <= 1 ? 5 : 3.5;
+        const baseRing   = node.depth <= 1 ? 1.3 : 1.0;
+
+        let fillColor = '#50aac8', ringColor = 'rgba(80,170,200,0.45)', dotRadius = baseRadius;
+        if (isHover) {
+          fillColor = '#c8503c'; ringColor = 'rgba(200,80,60,0.85)'; dotRadius = baseRadius + 2.5;
+        } else if (isSelected) {
+          fillColor = selectedColor;
+          ringColor = fieldMode === 'true' ? 'rgba(125,165,75,0.9)' : 'rgba(0,105,170,0.9)';
+          dotRadius = baseRadius + 1.5;
+        }
+
+        // \tilde{r} bounding circle
+        sCtx.beginPath();
+        sCtx.arc(cx, cy, Math.max(rPx, 2), 0, 2 * Math.PI);
+        sCtx.strokeStyle = ringColor;
+        sCtx.lineWidth = (isHover || isSelected ? 2 : baseRing);
+        sCtx.setLineDash([2, 2]);
+        sCtx.stroke();
+        sCtx.setLineDash([]);
+
+        // Center-of-mass dot
+        sCtx.beginPath();
+        sCtx.arc(cx, cy, dotRadius, 0, 2 * Math.PI);
+        sCtx.fillStyle = fillColor;
+        sCtx.fill();
+        if (isSelected) { sCtx.strokeStyle = '#ffffff'; sCtx.lineWidth = 2; sCtx.stroke(); }
+      }
+      node.children.forEach(child => drawMultipoleBadges(child));
+    }
+
+    function resetNodeStatus(node) {
+      node.status = 'normal';
+      node.children.forEach(resetNodeStatus);
+    }
+
+    function evaluateTraversal(node, q, beta = 1.8) {
+      const distToCoM = Math.hypot(q.x - node.centerOfMass.x, q.y - node.centerOfMass.y);
+      const isFarField = distToCoM > beta * node.rtilde;
+      if (isFarField && node.depth > 0) {
+        node.status = 'pruned';
+        sCtx.beginPath();
+        sCtx.moveTo(toSpatX(q.x), toSpatY(q.y));
+        sCtx.lineTo(toSpatX(node.centerOfMass.x), toSpatY(node.centerOfMass.y));
+        sCtx.strokeStyle = 'rgba(34, 197, 94, 0.8)';
+        sCtx.setLineDash([3, 3]); sCtx.lineWidth = 1.2; sCtx.stroke(); sCtx.setLineDash([]);
+      } else {
+        node.status = 'traversed';
+        if (!node.isLeaf()) node.children.forEach(child => evaluateTraversal(child, q, beta));
+      }
+    }
+
+    // --- 6. Tree rendering ---
+    function renderTreeCanvas() {
+      const w = treeCanvas.width, h = treeCanvas.height;
+      tCtx.clearRect(0, 0, w, h);
+      treeNodeBadges = [];
+
+      if (activeStage === 0) {
+        tCtx.fillStyle = '#9CA3AF';
+        tCtx.font = '13px sans-serif';
+        tCtx.textAlign = 'center';
+        tCtx.fillText('Quadtree graph inactive (Stage 1+)', w / 2, h / 2);
+        return;
+      }
+      drawTreeNode(quadtreeRoot, w / 2, 25, w / 2.6);
+    }
+
+    function drawTreeNode(node, x, y, xSpread) {
+      const nextY = y + 50;
+      const numChildren = node.children.length;
+
+      node.children.forEach((child, i) => {
+        const step = numChildren > 1 ? (xSpread * 2) / (numChildren - 1) : 0;
+        const childX = numChildren > 1 ? (x - xSpread) + i * step : x;
+
+        tCtx.beginPath();
+        tCtx.moveTo(x, y);
+        tCtx.lineTo(childX, nextY);
+        tCtx.strokeStyle =
+          child.status === 'pruned'    ? '#7da54b' :
+          child.status === 'traversed' ? '#a51e37' : '#d7b469';
+        tCtx.lineWidth = child.status !== 'normal' ? 1.8 : 1;
+        tCtx.stroke();
+
+        drawTreeNode(child, childX, nextY, xSpread * 0.25);
+      });
+
+      treeNodeBadges.push({ node, x, y });
+
+      tCtx.beginPath();
+      tCtx.arc(x, y, 4.5, 0, 2 * Math.PI);
+
+      let fill;
+      if (node === hoveredNode)              fill = '#c8503c';
+      else if (node === selectedNode)        fill = fieldMode === 'true' ? '#7da54b' : '#0069aa';
+      else if (node.status === 'pruned')     fill = '#7da54b';
+      else if (node.status === 'traversed')  fill = '#a51e37';
+      else                                    fill = '#50aac8';
+
+      tCtx.fillStyle = fill;
+      tCtx.fill();
+      tCtx.strokeStyle = '#FFFFFF';
+      tCtx.lineWidth = 1;
+      tCtx.stroke();
+
+      if (node === selectedNode) {
+        tCtx.beginPath();
+        tCtx.arc(x, y, 8, 0, 2 * Math.PI);
+        tCtx.strokeStyle = fieldMode === 'true' ? '#7da54b' : '#0069aa';
+        tCtx.lineWidth = 1.5;
+        tCtx.stroke();
+      }
+    }
+
+    // --- 7. Hover management ---
+    function hitTestBadges(badges, mx, my, radius) {
+      let best = null, bestDist = radius;
+      for (const b of badges) {
+        const d = Math.hypot(mx - b.x, my - b.y);
+        if (d < bestDist) { bestDist = d; best = b.node; }
+      }
+      return best;
+    }
+
+    function applyHover(newNode) {
+      if (newNode === hoveredNode) return;
+      hoveredNode = newNode;
+      spatialCanvas.style.cursor = hoveredNode ? 'pointer' : (activeStage === 3 ? 'crosshair' : 'default');
+      treeCanvas.style.cursor    = hoveredNode ? 'pointer' : 'default';
+      renderSpatialCanvas();
+      renderTreeCanvas();
+    }
+
+    function scheduleClearHover() {
+      if (clearHoverTimeout) clearTimeout(clearHoverTimeout);
+      clearHoverTimeout = setTimeout(() => { clearHoverTimeout = null; applyHover(null); }, 80);
+    }
+    function cancelClearHover() {
+      if (clearHoverTimeout) { clearTimeout(clearHoverTimeout); clearHoverTimeout = null; }
+    }
+
+    function getLocalMouse(e, canvas) {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        mx: (e.clientX - rect.left) * (canvas.width  / rect.width),
+        my: (e.clientY - rect.top)  * (canvas.height / rect.height)
+      };
+    }
+
+    // --- 8. Selection ---
+    function setSelection(node, mode) {
+      if (selectedNode === node && fieldMode === mode) {
+        selectedNode = null;
+      } else {
+        selectedNode = node;
+        fieldMode = mode;
+      }
+      invalidateFieldCache();
+      renderSpatialCanvas();
+      renderTreeCanvas();
+    }
+
+    // --- 9. Spatial canvas events ---
+    spatialCanvas.addEventListener('mousemove', (e) => {
+      cancelClearHover();
+      const { mx, my } = getLocalMouse(e, spatialCanvas);
+
+      let newHover = null;
+      if (activeStage >= 2) newHover = hitTestBadges(centroidBadges, mx, my, 12);
+
+      const movedQuery = (activeStage === 3 && !newHover);
+      if (movedQuery) {
+        queryPoint.x = (mx - spatialCanvas.width / 2) / (spatialCanvas.width / 3);
+        queryPoint.y = (spatialCanvas.height / 2 - my) / (spatialCanvas.height / 3);
+      }
+
+      const hoverChanged = newHover !== hoveredNode;
+      if (hoverChanged || movedQuery) {
+        if (hoverChanged) {
+          hoveredNode = newHover;
+          spatialCanvas.style.cursor = hoveredNode ? 'pointer' : (activeStage === 3 ? 'crosshair' : 'default');
+          treeCanvas.style.cursor    = hoveredNode ? 'pointer' : 'default';
+        }
+        renderSpatialCanvas();
+        if (hoverChanged) renderTreeCanvas();
+      }
+    });
+
+    spatialCanvas.addEventListener('mouseleave', scheduleClearHover);
+
+    spatialCanvas.addEventListener('click', () => {
+      if (activeStage < 2 || activeStage > 3) return;
+      if (hoveredNode) setSelection(hoveredNode, 'approx');
+      else if (selectedNode) { selectedNode = null; invalidateFieldCache(); renderSpatialCanvas(); renderTreeCanvas(); }
+    });
+
+    spatialCanvas.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      if (activeStage < 2 || activeStage > 3) return;
+      if (hoveredNode) setSelection(hoveredNode, 'true');
+    });
+
+    spatialCanvas.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      if (activeStage < 2 || activeStage > 3) return;
+      if (hoveredNode) setSelection(hoveredNode, 'true');
+    });
+
+    // --- 10. Tree canvas events ---
+    treeCanvas.style.cursor = 'default';
+
+    treeCanvas.addEventListener('mousemove', (e) => {
+      cancelClearHover();
+      if (activeStage < 2 || activeStage > 3) {
+        if (hoveredNode) applyHover(null);
+        return;
+      }
+      const { mx, my } = getLocalMouse(e, treeCanvas);
+      applyHover(hitTestBadges(treeNodeBadges, mx, my, 10));
+    });
+
+    treeCanvas.addEventListener('mouseleave', scheduleClearHover);
+
+    treeCanvas.addEventListener('click', () => {
+      if (activeStage < 2 || activeStage > 3) return;
+      if (hoveredNode) setSelection(hoveredNode, 'approx');
+    });
+
+    treeCanvas.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      if (activeStage < 2 || activeStage > 3) return;
+      if (hoveredNode) setSelection(hoveredNode, 'true');
+    });
+
+    treeCanvas.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      if (activeStage < 2 || activeStage > 3) return;
+      if (hoveredNode) setSelection(hoveredNode, 'true');
+    });
+
+    // --- 11. Stage management ---
+    function updateActiveStage(stage) {
+      activeStage = stage;
+      if (stage < 2 || stage > 3) { hoveredNode = null; selectedNode = null; }
+      invalidateFieldCache();
+
+      for (let i = 0; i <= 4; i++) {
+        const stepEl = document.getElementById(`fwn-step-${i}`);
+        if (stepEl) {
+          if (i === stage) {
+            stepEl.classList.add('border-ut-red', 'bg-red-50/30');
+            stepEl.classList.remove('border-gray-200');
+          } else {
+            stepEl.classList.remove('border-ut-red', 'bg-red-50/30');
+            stepEl.classList.add('border-gray-200');
+          }
+        }
+      }
+      renderSpatialCanvas();
+      renderTreeCanvas();
+    }
+
+    function getFragmentStage(slide) { return slide.querySelectorAll('.fragment.visible').length; }
+
+    Reveal.on('slidechanged', e => {
+      if (e.currentSlide.id === 'fast-winding-numbers-slide') updateActiveStage(getFragmentStage(e.currentSlide));
+    });
+    Reveal.on('fragmentshown', () => {
+      if (Reveal.getCurrentSlide().id === 'fast-winding-numbers-slide') updateActiveStage(getFragmentStage(Reveal.getCurrentSlide()));
+    });
+    Reveal.on('fragmenthidden', () => {
+      if (Reveal.getCurrentSlide().id === 'fast-winding-numbers-slide') updateActiveStage(getFragmentStage(Reveal.getCurrentSlide()));
+    });
+
+    updateActiveStage(0);
+  })();
+
+</script>
+</body>
+</html>

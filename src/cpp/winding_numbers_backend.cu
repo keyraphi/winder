@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <cooperative_groups.h>
 #include <cooperative_groups/scan.h>
@@ -8,6 +9,7 @@
 #include <cub/util_type.cuh>
 #include <cuda.h>
 #include <cuda_device_runtime_api.h>
+#include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
 #include <device_atomic_functions.h>
@@ -36,68 +38,92 @@
 #include <thrust/sort.h>
 #include <thrust/system/cuda/detail/execution_policy.h>
 #include <thrust/transform.h>
+#include <vector>
 #include <vector_functions.h>
 #include <vector_types.h>
 
 #include "aabb.h"
 #include "binary_node.h"
 #include "bvh8.h"
+#include "cuda/__functional/maximum.h"
 #include "geometry.h"
 #include "kernels/binary2bvh8.cuh"
-#include "kernels/brute_force.cuh"
 #include "kernels/build_binary_tree.cuh"
 #include "kernels/bvh8_m2m.cuh"
 #include "kernels/common.cuh"
 #include "kernels/mesh.cuh"
 #include "kernels/traversal.cuh"
+#include "scene_normalization.h"
+#include "soa.h"
 #include "taylor_coefficients.h"
+#include "tensor3.h"
+#include "thrust/detail/copy.inl"
+#include "thrust/detail/fill.inl"
+#include "thrust/detail/reduce.inl"
+#include "thrust/detail/sequence.inl"
+#include "thrust/detail/sort.inl"
+#include "thrust/execution_policy.h"
+#include "thrust/functional.h"
 #include "utils.h"
 #include "vec3.h"
 #include "winding_numbers_backend.h"
 
 namespace cg = cooperative_groups;
 
-#define CUDA_CHECK(expr_to_check)                                              \
-  do {                                                                         \
-    cudaError_t result = expr_to_check;                                        \
-    if (result != cudaSuccess) {                                               \
-      fprintf(stderr, "CUDA Runtime Error: %s:%i:%d = %s\n", __FILE__,         \
-              __LINE__, result, cudaGetErrorString(result));                   \
-    }                                                                          \
-  } while (0)
-
 __constant__ SceneParams d_scene_params;
 
 template <IsGeometry Geometry>
 WindingNumbersBackend<Geometry>::~WindingNumbersBackend() {
+  int device = -1;
+  if (cudaGetDevice(&device) != cudaSuccess) {
+    // Context is already destroyed or invalid
+    return;
+  }
+  ScopedCudaDevice device_scope(m_device);
+
   CUDA_CHECK(cudaStreamSynchronize(m_build_stream));
+  cudaGetLastError();
 
-  CUDA_CHECK(cudaEventDestroy(m_start_tree_construction_event));
-  CUDA_CHECK(cudaEventDestroy(m_tree_construction_finished_event));
+  if (m_start_tree_construction_event != nullptr) {
+    CUDA_CHECK(cudaEventDestroy(m_start_tree_construction_event));
+    m_start_tree_construction_event = nullptr;
+  }
+  if (m_tree_construction_finished_event != nullptr) {
+    CUDA_CHECK(cudaEventDestroy(m_tree_construction_finished_event));
+    m_tree_construction_finished_event = nullptr;
+  }
 
-  if (m_to_internal) {
+  if (m_to_internal != nullptr) {
     CUDA_CHECK(cudaFreeAsync(m_to_internal, m_build_stream));
+    m_to_internal = nullptr;
   }
-  if (m_sorted_geometry) {
+  if (m_sorted_geometry != nullptr) {
     CUDA_CHECK(cudaFreeAsync(m_sorted_geometry, m_build_stream));
+    m_sorted_geometry = nullptr;
   }
-  if (m_binary_aabbs) {
+  if (m_binary_aabbs != nullptr) {
     CUDA_CHECK(cudaFreeAsync(m_binary_aabbs, m_build_stream));
+    m_binary_aabbs = nullptr;
   }
-  if (m_bvh8_node_count) {
+  if (m_bvh8_node_count != nullptr) {
     CUDA_CHECK(cudaFreeAsync(m_bvh8_node_count, m_build_stream));
+    m_bvh8_node_count = nullptr;
   }
-  if (m_bvh8_nodes) {
+  if (m_bvh8_nodes != nullptr) {
     CUDA_CHECK(cudaFreeAsync(m_bvh8_nodes, m_build_stream));
+    m_bvh8_nodes = nullptr;
   }
-  if (m_tailor_coefficients) {
+  if (m_tailor_coefficients != nullptr) {
     CUDA_CHECK(cudaFreeAsync(m_tailor_coefficients, m_build_stream));
+    m_tailor_coefficients = nullptr;
   }
-  if (m_leaf_coefficients) {
+  if (m_leaf_coefficients != nullptr) {
     CUDA_CHECK(cudaFreeAsync(m_leaf_coefficients, m_build_stream));
+    m_leaf_coefficients = nullptr;
   }
-  if (m_bvh8_leaf_pointers) {
+  if (m_bvh8_leaf_pointers != nullptr) {
     CUDA_CHECK(cudaFreeAsync(m_bvh8_leaf_pointers, m_build_stream));
+    m_bvh8_leaf_pointers = nullptr;
   }
 }
 
@@ -105,7 +131,7 @@ template <IsGeometry Geometry>
 WindingNumbersBackend<Geometry>::WindingNumbersBackend(size_t size,
                                                        int device_id,
                                                        uint64_t stream)
-    : m_count{size}, m_device{device_id} {
+    : m_device{device_id}, m_count{size} {
 
   // Setup streams
   m_build_stream = reinterpret_cast<cudaStream_t>(stream);
@@ -186,18 +212,20 @@ void WindingNumbersBackend<Triangle>::initialize_triangle_data(
   uint64_t *geometry_morton_codes;
   CUDA_CHECK(cudaMallocAsync(&geometry_morton_codes, m_count * sizeof(uint64_t),
                              m_build_stream));
+  SceneBounds scene_bounds;
   initializeMortonCodes(triangles_tri, geometry_morton_codes, m_count,
-                        m_build_stream);
+                        m_build_stream, &scene_bounds);
+  m_norm = SceneNormalization::from_scene_bounds(scene_bounds);
 
   // sort by morton codes
   thrust::sequence(m_build_stream_policy, m_to_internal,
                    m_to_internal + m_count);
   // sorts both morton_codes and m_to_internal
-  thrust::sort_by_key(m_build_stream_policy, geometry_morton_codes,
+  thrust::stable_sort_by_key(m_build_stream_policy, geometry_morton_codes,
                       geometry_morton_codes + m_count, m_to_internal);
   // sort triangles using m_to_internal
   gather_triangles_soa(triangles, m_to_internal, m_sorted_geometry, m_count,
-                       m_build_stream);
+                       m_norm, m_build_stream);
 
   // each leaf contains 32 (LEAF_SIZE) elements
   uint32_t leaf_count = (m_count + LEAF_SIZE - 1) / LEAF_SIZE;
@@ -333,18 +361,20 @@ void WindingNumbersBackend<PointNormal>::initialize_point_data(
   uint64_t *geometry_morton_codes;
   CUDA_CHECK(cudaMallocAsync(&geometry_morton_codes, m_count * sizeof(uint64_t),
                              m_build_stream));
+  SceneBounds scene_bounds;
   initializeMortonCodes(points_v3, geometry_morton_codes, m_count,
-                        m_build_stream);
+                        m_build_stream, &scene_bounds);
+  m_norm = SceneNormalization::from_scene_bounds(scene_bounds);
 
   // sort by morton codes
   thrust::sequence(m_build_stream_policy, m_to_internal,
                    m_to_internal + m_count);
   // sorts both morton_codes and m_to_internal
-  thrust::sort_by_key(m_build_stream_policy, geometry_morton_codes,
+  thrust::stable_sort_by_key(m_build_stream_policy, geometry_morton_codes,
                       geometry_morton_codes + m_count, m_to_internal);
 
   gather_point_normals_soa(points, normals, m_to_internal, m_sorted_geometry,
-                           m_count, m_build_stream);
+                           m_count, m_norm, m_build_stream);
 
   // each leaf contains 32 (LEAF_SIZE) elements
   uint32_t leaf_count = (m_count + LEAF_SIZE - 1) / LEAF_SIZE;
@@ -475,8 +505,10 @@ auto WindingNumbersBackend<Geometry>::compute(const float *queries,
                                               size_t query_count,
                                               float *winding_numbers,
                                               float beta, float epsilon,
-                                              size_t stream) const
-    -> void {
+                                              size_t stream) const -> void {
+  if (m_count == 0) {
+    return;
+  }
   cudaEvent_t start, finish;
   CUDA_CHECK(cudaEventCreate(&start));
   CUDA_CHECK(cudaEventCreate(&finish));
@@ -503,7 +535,7 @@ auto WindingNumbersBackend<Geometry>::compute(const float *queries,
 
   thrust::sequence(compute_stream_policy, queries_to_internal,
                    queries_to_internal + query_count);
-  thrust::sort_by_key(compute_stream_policy, queries_morton,
+  thrust::stable_sort_by_key(compute_stream_policy, queries_morton,
                       queries_morton + query_count, queries_to_internal);
 
   // free morton code memory
@@ -517,10 +549,8 @@ auto WindingNumbersBackend<Geometry>::compute(const float *queries,
     // defaults from Fast Winding Numbers paper
     beta = GeometryTraits<Geometry>::default_beta;
   }
-  if (epsilon < 0.F) {
-    // default from 3D Reconstruction with Fast Dipole Sums
-    epsilon = 1.F / 250.F;
-  }
+  epsilon = std::max(0.F, epsilon);
+  float scene_scale = 1.F;
   uint32_t leaf_count = (m_count + LEAF_SIZE - 1) / LEAF_SIZE;
   uint32_t *global_counter;
   CUDA_CHECK(
@@ -539,7 +569,9 @@ auto WindingNumbersBackend<Geometry>::compute(const float *queries,
       winding_numbers,
       global_counter,
       beta,
-      epsilon};
+      epsilon,
+      scene_scale,
+      m_norm};
   compute_winding_numbers<Geometry>(params, m_device, compute_stream);
   // free temporary memory
   CUDA_CHECK(cudaFreeAsync(queries_to_internal, compute_stream));
@@ -555,7 +587,8 @@ template <>
 auto WindingNumbersBackend<PointNormal>::CreateFromPoints(const float *points,
                                                           const float *normals,
                                                           size_t point_count,
-                                                          int device_id, uint64_t stream)
+                                                          int device_id,
+                                                          uint64_t stream)
     -> std::unique_ptr<WindingNumbersBackend<PointNormal>> {
   ScopedCudaDevice device_scope(device_id);
 
@@ -567,8 +600,8 @@ auto WindingNumbersBackend<PointNormal>::CreateFromPoints(const float *points,
 
 template <>
 auto WindingNumbersBackend<Triangle>::CreateFromTriangles(
-    const float *triangles, size_t triangle_count, int device_id, uint64_t stream)
-    -> std::unique_ptr<WindingNumbersBackend<Triangle>> {
+    const float *triangles, size_t triangle_count, int device_id,
+    uint64_t stream) -> std::unique_ptr<WindingNumbersBackend<Triangle>> {
   ScopedCudaDevice device_scope(device_id);
   auto self = std::unique_ptr<WindingNumbersBackend>{
       new WindingNumbersBackend<Triangle>(triangle_count, device_id, stream)};
@@ -580,16 +613,20 @@ auto WindingNumbersBackend<Triangle>::CreateFromTriangles(
 template <>
 auto WindingNumbersBackend<Triangle>::CreateFromMesh(
     const float *vertices, size_t vertex_count,
-    const uint32_t *triangle_indices, size_t triangle_count, int device_id, uint64_t stream)
-    -> std::unique_ptr<WindingNumbersBackend<Triangle>> {
+    const uint32_t *triangle_indices, size_t triangle_count, int device_id,
+    uint64_t stream) -> std::unique_ptr<WindingNumbersBackend<Triangle>> {
   ScopedCudaDevice device_scope(device_id);
   auto self = std::unique_ptr<WindingNumbersBackend>{
       new WindingNumbersBackend<Triangle>(triangle_count, device_id, stream)};
 
+  if (triangle_count == 0) {
+    return self;
+  }
+
   // Verify that index range does not exceed vertex size
   uint32_t max_index = thrust::reduce(thrust::device, triangle_indices,
                                       triangle_indices + 3 * triangle_count, 0,
-                                      thrust::maximum<uint32_t>());
+                                      cuda::maximum<uint32_t>());
   if (max_index >= vertex_count) {
     throw std::runtime_error(
         std::format("The triangle indices are not allowed to exceed the number "
@@ -748,8 +785,9 @@ auto WindingNumbersBackend<Geometry>::dump() const -> std::string {
     result += "      <TR><TD ROWSPAN=\"3\" BGCOLOR=\"#bbdefb\"><B>1st "
               "Order</B></TD>\n";
     for (int r = 0; r < 3; ++r) {
-      if (r > 0)
+      if (r > 0) {
         result += "      <TR>\n";
+      }
       result += std::format(
           "        <TD>{:.4f}</TD><TD>{:.4f}</TD><TD>{:.4f}</TD></TR>\n",
           node_coeff.first_order.data[r * 3 + 0],
@@ -763,8 +801,9 @@ auto WindingNumbersBackend<Geometry>::dump() const -> std::string {
     for (int s = 0; s < 3; ++s) {
       result += std::format("      <TR><TD ROWSPAN=\"3\">Slice {}</TD>\n", s);
       for (int r = 0; r < 3; ++r) {
-        if (r > 0)
+        if (r > 0) {
           result += "      <TR>\n";
+        }
         int b = (s * 9) + (r * 3);
         result += std::format(
             "        <TD>{:.4f}</TD><TD>{:.4f}</TD><TD>{:.4f}</TD></TR>\n",
@@ -829,8 +868,9 @@ auto WindingNumbersBackend<Geometry>::dump() const -> std::string {
         result += "      <TR><TD ROWSPAN=\"3\" BGCOLOR=\"#c8e6c9\"><B>1st "
                   "Order</B></TD>\n";
         for (int r = 0; r < 3; ++r) {
-          if (r > 0)
+          if (r > 0) {
             result += "      <TR>\n";
+          }
           result += std::format(
               "        <TD>{:.4f}</TD><TD>{:.4f}</TD><TD>{:.4f}</TD></TR>\n",
               coeff.first_order.data[r * 3 + 0],
@@ -846,8 +886,9 @@ auto WindingNumbersBackend<Geometry>::dump() const -> std::string {
         size_t g_off = l_id * LEAF_SIZE;
         for (size_t g_id = 0; g_id < LEAF_SIZE; g_id++) {
           size_t global_idx = g_off + g_id;
-          if (global_idx >= m_count)
+          if (global_idx >= m_count) {
             break;
+          }
 
           const Geometry &g =
               Geometry::load(geometry_view, global_idx, m_count);

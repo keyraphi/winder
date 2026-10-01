@@ -3,6 +3,7 @@
 #include "common.cuh"
 #include "geometry.h"
 #include "mat3x3.h"
+#include "scene_normalization.h"
 #include "taylor_coefficients.h"
 #include "tensor3.h"
 #include "vec3.h"
@@ -27,7 +28,8 @@ __global__ void __launch_bounds__(256)
         const float *__restrict__ grad_outputs_aos,
         const uint32_t *__restrict__ indices,
         float *__restrict__ out_queries_soa,
-        float *__restrict__ sorted_grad_outputs, const uint32_t count) {
+        float *__restrict__ sorted_grad_outputs, const uint32_t count,
+        const SceneNormalization norm) {
   const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= count) {
     return;
@@ -36,12 +38,11 @@ __global__ void __launch_bounds__(256)
   const uint32_t src_idx = indices[idx];
   const float *query_src_ptr = queries_aos + static_cast<size_t>(src_idx) * 3;
 
-  constexpr size_t float_count = 3; // Vec3 has 3 floats
+  const Vec3 query = norm.to_normalized(*reinterpret_cast<const Vec3*>(query_src_ptr));
 
-#pragma unroll
-  for (uint32_t i = 0; i < float_count; ++i) {
-    out_queries_soa[i * count + idx] = query_src_ptr[i];
-  }
+  out_queries_soa[0*count + idx] = query.x;
+  out_queries_soa[1*count + idx] = query.y;
+  out_queries_soa[2*count + idx] = query.z;
 
   sorted_grad_outputs[idx] = grad_outputs_aos[src_idx];
 }
@@ -51,7 +52,7 @@ void gather_queries_and_grad_outputs_soa(
     const uint32_t *__restrict__ indices,
     float *__restrict__ sorted_queries_soa,
     float *__restrict__ sorted_grad_outputs, const uint32_t count,
-    const cudaStream_t &stream) {
+    const cudaStream_t &stream, const SceneNormalization &norm) {
   if (count < 1) {
     return;
   }
@@ -60,7 +61,7 @@ void gather_queries_and_grad_outputs_soa(
   const uint32_t blocks = (count + threads - 1) / threads;
   gather_queries_and_grad_outputs_soa_kernel<<<blocks, threads, 0, stream>>>(
       queries, grad_outputs, indices, sorted_queries_soa, sorted_grad_outputs,
-      count);
+      count, norm);
   CUDA_CHECK(cudaGetLastError());
 }
 
@@ -69,7 +70,8 @@ __global__ void __launch_bounds__(256)
                                     const float *__restrict__ normals_aos,
                                     const uint32_t *__restrict__ indices,
                                     float *__restrict__ out_point_normals_soa,
-                                    const uint32_t count) {
+                                    const uint32_t count,
+                                    const SceneNormalization norm) {
   const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= count) {
     return;
@@ -80,20 +82,23 @@ __global__ void __launch_bounds__(256)
   const float *normal_src_ptr = normals_aos + static_cast<size_t>(src_idx) * 3;
 
   // batch reads together
-  const size_t float_count = 6; // PointNormal has 6 floats
-  float values[float_count];
+  PointNormal pn;
+  auto *pn_ptr = reinterpret_cast<float *>(&pn);
 #pragma unroll
   for (uint32_t i = 0; i < 3; ++i) {
-    values[i] = point_src_ptr[i];
+    pn_ptr[i] = point_src_ptr[i];
   }
 #pragma unroll
   for (uint32_t i = 0; i < 3; ++i) {
-    values[i + 3] = normal_src_ptr[i];
+    pn_ptr[i + 3] = normal_src_ptr[i];
   }
+  // normalize
+  pn = norm.to_normalized(pn);
 
-// write into the SoA coalesced
+  // write into the SoA coalesced
+  const auto *values = reinterpret_cast<const float *>(&pn);
 #pragma unroll
-  for (uint32_t i = 0; i < float_count; ++i) {
+  for (uint32_t i = 0; i < 6; ++i) {
     out_point_normals_soa[i * count + idx] = values[i];
   }
 }
@@ -103,6 +108,7 @@ void gather_point_normals_soa(const float *__restrict__ points,
                               const uint32_t *__restrict__ indices,
                               float *__restrict__ out_geometry,
                               const uint32_t count,
+                              const SceneNormalization &norm,
                               const cudaStream_t &stream) {
   if (count < 1) {
     return;
@@ -111,34 +117,29 @@ void gather_point_normals_soa(const float *__restrict__ points,
   const uint32_t threads = 256;
   const uint32_t blocks = (count + threads - 1) / threads;
   gather_point_normals_soa_kernel<<<blocks, threads, 0, stream>>>(
-      points, normals, indices, out_geometry, count);
+      points, normals, indices, out_geometry, count, norm);
   CUDA_CHECK(cudaGetLastError());
 }
 
 __global__ void __launch_bounds__(256) gather_triangles_aos_to_soa_kernel(
     const float *__restrict__ input_triangles_aos,
     const uint32_t *__restrict__ src_idxs,
-    float *__restrict__ output_triangle_soa, uint32_t count) {
+    float *__restrict__ output_triangle_soa, uint32_t count,
+    const SceneNormalization norm) {
   uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= count) {
     return;
   }
   uint32_t src_idx = src_idxs[idx];
 
-  const size_t float_count = 9; // Triangle has 9 floats
+  const float *src_ptr = input_triangles_aos + (src_idx * 9);
+  const auto *t = reinterpret_cast<const Triangle *>(src_ptr);
+  Triangle triangle = norm.to_normalized(*t);
 
-  float value[float_count];
-  const float *src_ptr = input_triangles_aos + (src_idx * float_count);
-
-  // batch reads together
+  // write into the SoA coalesced
+  const auto *value = reinterpret_cast<const float *>(&triangle);
 #pragma unroll
-  for (uint32_t i = 0; i < float_count; ++i) {
-    value[i] = src_ptr[i];
-  }
-
-// write into the SoA coalesced
-#pragma unroll
-  for (uint32_t i = 0; i < float_count; ++i) {
+  for (uint32_t i = 0; i < 9; ++i) {
     output_triangle_soa[i * count + idx] = value[i];
   }
 }
@@ -146,7 +147,8 @@ __global__ void __launch_bounds__(256) gather_triangles_aos_to_soa_kernel(
 void gather_triangles_soa(const float *__restrict__ input_triangles,
                           const uint32_t *__restrict__ to_internal_map,
                           float *__restrict__ output_triangles_soa,
-                          uint32_t count, const cudaStream_t &stream) {
+                          uint32_t count, const SceneNormalization &norm,
+                          const cudaStream_t &stream) {
   if (count < 1) {
     return;
   }
@@ -155,7 +157,7 @@ void gather_triangles_soa(const float *__restrict__ input_triangles,
   uint32_t blocks = (count + threads - 1) / threads;
 
   gather_triangles_aos_to_soa_kernel<<<blocks, threads, 0, stream>>>(
-      input_triangles, to_internal_map, output_triangles_soa, count);
+      input_triangles, to_internal_map, output_triangles_soa, count, norm);
 
   CUDA_CHECK(cudaGetLastError());
 }

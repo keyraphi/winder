@@ -4,6 +4,7 @@
 #include "geometry.h"
 #include "mat3x3.h"
 #include "node_approx.cuh"
+#include "scene_normalization.h"
 #include "soa.h"
 #include "taylor_coefficients.h"
 #include "tensor3.h"
@@ -71,7 +72,7 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
     const SoAView<Geometry> sorted_geometry, const uint32_t query_count,
     const uint32_t geometry_count, float *__restrict__ winding_numbers,
     uint32_t *__restrict__ global_device_counter, const float beta_2,
-    const float inv_epsilon) {
+    const typename Geometry::Context ctx, const SceneNormalization norm) {
 
   const uint32_t warp_id = threadIdx.x / 32;
   const uint32_t lane_id = threadIdx.x % 32;
@@ -113,9 +114,10 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
     } else {
       // load query with sort indirections
       original_query_idx = sort_indirections[my_query_idx];
-      my_query = queries[original_query_idx];
+      my_query = norm.to_normalized(queries[original_query_idx]);
     }
     float my_winding_number = 0.F;
+    float my_wn_comp = 0.F; // for kahan add
 
     // Always start traversal on root
     int stack_ptr = 0;
@@ -189,7 +191,7 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
         float approx_contribution = compute_node_approximation(
             my_query, parent_aabb.center_of_mass, zero_order_coeff,
             first_order_coeff, second_order_coeff);
-        my_winding_number += approx_contribution;
+        kahan_add(my_winding_number, approx_contribution, my_wn_comp);
 
         // Remember that I have the full contribution of this node already.
         my_required_stack_depth = stack_ptr;
@@ -243,7 +245,7 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
                 current_leaf_coefficients.zero_order,
                 current_leaf_coefficients.first_order,
                 current_leaf_coefficients.second_order);
-            my_winding_number += approx_contribution;
+            kahan_add(my_winding_number, approx_contribution, my_wn_comp);
             is_detail_eval_needed = false;
           }
           uint32_t detailed_leaf_evaluation_mask = __ballot_sync(
@@ -279,13 +281,14 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
             float my_contribution = 0.F;
             if (is_my_geometry_in_bounds) {
               my_contribution =
-                  my_geometry.contributionToQuery(shared_query, inv_epsilon);
+                  my_geometry.contributionToQuery(shared_query, ctx);
             }
             // sum up all contributions in warp
             float total_contribution = warp_reduce_add_xor(my_contribution);
             // only leader adds that contribution
             if ((int)lane_id == current_leader) {
               my_winding_number += total_contribution;
+              kahan_add(my_winding_number, total_contribution, my_wn_comp);
             }
           }
         } else {
@@ -312,7 +315,7 @@ __global__ void compute_winding_numbers_single_leaf_kernel(
     const Vec3 *queries, const uint32_t *sort_indirections,
     const SoAView<Geometry> sorted_geometry, const uint32_t query_count,
     const uint32_t geometry_count, float *winding_numbers,
-    const float inv_epsilon) {
+    const typename Geometry::Context ctx, const SceneNormalization norm) {
   // Global index of the query this thread is responsible for
   uint32_t my_query_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -328,7 +331,7 @@ __global__ void compute_winding_numbers_single_leaf_kernel(
 
   // Load query
   uint32_t original_idx = sort_indirections[my_query_idx];
-  Vec3 my_query = queries[original_idx];
+  Vec3 my_query = norm.to_normalized(queries[original_idx]);
   float my_winding_number = 0.0f;
 
   // Since there is only one leaf, all geometry (1-32 elements)
@@ -336,8 +339,7 @@ __global__ void compute_winding_numbers_single_leaf_kernel(
   // Every thread iterates through all available geometry for its specific
   // query.
   for (uint32_t i = 0; i < geometry_count; ++i) {
-    my_winding_number +=
-        shared_geometry[i].contributionToQuery(my_query, inv_epsilon);
+    my_winding_number += shared_geometry[i].contributionToQuery(my_query, ctx);
   }
 
   // Write out results
@@ -352,7 +354,7 @@ void compute_winding_numbers(
     return;
   }
 
-  float inv_epsilon = 1.F / params.epsilon;
+  auto ctx = Geometry::Context::make(params.epsilon, params.scene_scale);
   // There i no tree if there is only one leaf
   if (params.geometry_count <= 32) {
     uint32_t threads = 256;
@@ -361,7 +363,7 @@ void compute_winding_numbers(
         <<<blocks, threads, 0, stream>>>(
             params.queries, params.sort_indirections, params.sorted_geometry,
             params.query_count, params.geometry_count, params.winding_numbers,
-            inv_epsilon);
+            ctx, params.norm);
     CUDA_CHECK(cudaGetLastError());
     return;
   }
@@ -389,7 +391,7 @@ void compute_winding_numbers(
       params.bvh8_leaf_pointers, params.node_coefficients,
       params.leaf_coefficients, params.leaf_aabbs, params.sorted_geometry,
       params.query_count, params.geometry_count, params.winding_numbers,
-      params.global_device_counter, beta_2, inv_epsilon);
+      params.global_device_counter, beta_2, ctx, params.norm);
   CUDA_CHECK(cudaGetLastError());
 }
 
@@ -399,7 +401,7 @@ __global__ void compute_point_normal_gradient_single_leaf_kernel(
     const SoAView<Vec3> sorted_queries,
     const float *__restrict__ sorted_grad_outputs, const uint32_t query_count,
     const uint32_t geometry_count, float *__restrict__ gradients,
-    const float inv_epsilon) {
+    const PointNormalContext ctx, const SceneNormalization norm) {
   // Global index of the geometry this thread is responsible for
   uint32_t my_geometry_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -418,14 +420,9 @@ __global__ void compute_point_normal_gradient_single_leaf_kernel(
 
   // Load geometry
   uint32_t original_idx = sort_indirections[my_geometry_idx];
-  const auto my_geometry =
-      PointNormal{.p = points[original_idx], .n = normals[original_idx]};
+  const auto my_geometry = norm.to_normalized(
+      PointNormal{.p = points[original_idx], .n = normals[original_idx]});
   PointNormal my_grad{.p = Vec3::zero(), .n = Vec3::zero()};
-
-  constexpr float INV_PI_1_5 = 0.179587122F; // 1.0 / (pi^1.5)
-  const float inv_epsilon3 = inv_epsilon * inv_epsilon * inv_epsilon;
-  const float reg_term_const = inv_epsilon3 * INV_PI_1_5;
-  const float near_field_g_denum = (INV_PI_1_5 / 3.F) * inv_epsilon3;
 
   // Since there is only one leaf, all queries (1-32 elements)
   // are stored at the beginning of sorted_queries.
@@ -433,18 +430,17 @@ __global__ void compute_point_normal_gradient_single_leaf_kernel(
   // PointNormal.
   for (uint32_t i = 0; i < query_count; ++i) {
     PointNormal contrib = my_geometry.gradContributionOfQuery(
-        shared_query[i], shared_grad_output[i], inv_epsilon, reg_term_const,
-        near_field_g_denum);
+        shared_query[i], shared_grad_output[i], ctx);
     my_grad += contrib;
   }
 
   // Write out results
-  gradients[original_idx * 6] = my_grad.n.x;
-  gradients[original_idx * 6 + 1] = my_grad.n.y;
-  gradients[original_idx * 6 + 2] = my_grad.n.z;
-  gradients[original_idx * 6 + 3] = my_grad.p.x;
-  gradients[original_idx * 6 + 4] = my_grad.p.y;
-  gradients[original_idx * 6 + 5] = my_grad.p.z;
+  gradients[original_idx * 6] = my_grad.n.x * norm.scale2;
+  gradients[original_idx * 6 + 1] = my_grad.n.y * norm.scale2;
+  gradients[original_idx * 6 + 2] = my_grad.n.z * norm.scale2;
+  gradients[original_idx * 6 + 3] = my_grad.p.x * norm.scale;
+  gradients[original_idx * 6 + 4] = my_grad.p.y * norm.scale;
+  gradients[original_idx * 6 + 5] = my_grad.p.z * norm.scale;
 }
 
 // Parameter struct to save registers
@@ -462,8 +458,9 @@ struct PointNormalGradientKernelParams {
   SoAView<Vec3> sorted_queries;
   uint32_t query_count;
   uint32_t geometry_count;
-  float beta_2;
-  float inv_epsilon;
+  float beta;
+  PointNormalContext reg_context;
+  SceneNormalization norm;
 };
 
 __global__ void __launch_bounds__(128) compute_point_normal_gradient_kernel(
@@ -509,10 +506,13 @@ __global__ void __launch_bounds__(128) compute_point_normal_gradient_kernel(
     } else {
       // load geometry with sort indirections
       original_geometry_idx = params.sort_indirections[my_geometry_idx];
-      my_geometry = PointNormal{.p = params.points[original_geometry_idx],
-                                .n = params.normals[original_geometry_idx]};
+      my_geometry = params.norm.to_normalized(
+          PointNormal{.p = params.points[original_geometry_idx],
+                      .n = params.normals[original_geometry_idx]});
     }
     PointNormal my_gradient{.p = Vec3::zero(), .n = Vec3::zero()};
+    PointNormal compensation{.p = Vec3::zero(),
+                             .n = Vec3::zero()}; // for Kahn summation
 
     // Always start traversal on root
     int stack_ptr = 0;
@@ -558,9 +558,9 @@ __global__ void __launch_bounds__(128) compute_point_normal_gradient_kernel(
       // Check the nodes parent_aabb. If it is too far away approximate using
       // taylor coefficients
       bool need_taylor_coefficients =
-          is_active &&
-          should_node_be_approximated(my_geometry, current_node.getAABB(),
-                                      params.beta_2, params.inv_epsilon);
+          is_active && should_node_be_approximated(
+                           my_geometry, current_node.getAABB(), params.beta,
+                           params.reg_context);
 
       uint32_t load_taylor_coefficients_mask =
           __ballot_sync(0xFFFFFFFF, need_taylor_coefficients);
@@ -581,7 +581,7 @@ __global__ void __launch_bounds__(128) compute_point_normal_gradient_kernel(
                 current_node_coefficients.zero_order,
                 current_node_coefficients.first_order,
                 current_node_coefficients.second_order);
-        my_gradient += approx_grad_contribution;
+        kahan_add(my_gradient, approx_grad_contribution, compensation);
 
         // Remember that I have the full contribution of this node already.
         my_required_stack_depth = stack_ptr;
@@ -615,13 +615,6 @@ __global__ void __launch_bounds__(128) compute_point_normal_gradient_kernel(
           uint32_t leaf_idx = shared_leaf_ptrs[warp_id].indices[child_idx];
 
           if (is_still_active) {
-            constexpr float INV_PI_1_5 = 0.179587122F;
-            const float inv_epsilon3 =
-                params.inv_epsilon * params.inv_epsilon * params.inv_epsilon;
-            const float reg_term_const = inv_epsilon3 * INV_PI_1_5;
-            const float near_field_g_denum =
-                (INV_PI_1_5 * (1.F / 3.F)) * inv_epsilon3;
-
             for (uint32_t query_counter = 0; query_counter < LEAF_SIZE;
                  ++query_counter) {
               uint32_t query_idx = query_counter + leaf_idx * LEAF_SIZE;
@@ -631,9 +624,10 @@ __global__ void __launch_bounds__(128) compute_point_normal_gradient_kernel(
               Vec3 query = Vec3::load(params.sorted_queries, query_idx,
                                       params.query_count);
               float grad_output = params.sorted_grad_outputs[query_idx];
-              my_gradient += my_geometry.gradContributionOfQuery(
-                  query, grad_output, params.inv_epsilon, reg_term_const,
-                  near_field_g_denum);
+              kahan_add(my_gradient,
+                        my_geometry.gradContributionOfQuery(query, grad_output,
+                                                            params.reg_context),
+                        compensation);
             }
           }
         }
@@ -652,12 +646,18 @@ __global__ void __launch_bounds__(128) compute_point_normal_gradient_kernel(
     } // traversal while
     // winding number computation is complete
     if (my_required_stack_depth >= 0) {
-      params.gradients[original_geometry_idx * 6] = my_gradient.n.x;
-      params.gradients[original_geometry_idx * 6 + 1] = my_gradient.n.y;
-      params.gradients[original_geometry_idx * 6 + 2] = my_gradient.n.z;
-      params.gradients[original_geometry_idx * 6 + 3] = my_gradient.p.x;
-      params.gradients[original_geometry_idx * 6 + 4] = my_gradient.p.y;
-      params.gradients[original_geometry_idx * 6 + 5] = my_gradient.p.z;
+      params.gradients[original_geometry_idx * 6] =
+          my_gradient.n.x * params.norm.scale2;
+      params.gradients[original_geometry_idx * 6 + 1] =
+          my_gradient.n.y * params.norm.scale2;
+      params.gradients[original_geometry_idx * 6 + 2] =
+          my_gradient.n.z * params.norm.scale2;
+      params.gradients[original_geometry_idx * 6 + 3] =
+          my_gradient.p.x * params.norm.scale;
+      params.gradients[original_geometry_idx * 6 + 4] =
+          my_gradient.p.y * params.norm.scale;
+      params.gradients[original_geometry_idx * 6 + 5] =
+          my_gradient.p.z * params.norm.scale;
     }
   } // grid while
 }
@@ -669,7 +669,7 @@ void compute_point_normal_gradients(
     return;
   }
 
-  float inv_epsilon = 1.F / params.epsilon;
+  const auto ctx = PointNormalContext::make(params.epsilon, params.scene_scale);
   // There is no tree if there is only one leaf
   if (params.query_count <= 32) {
     uint32_t threads = 256;
@@ -678,12 +678,10 @@ void compute_point_normal_gradients(
                                                        stream>>>(
         params.points, params.normals, params.sort_indirections,
         params.sorted_queries, params.sorted_grad_outputs, params.query_count,
-        params.geometry_count, params.gradients, inv_epsilon);
+        params.geometry_count, params.gradients, ctx, params.norm);
     CUDA_CHECK(cudaGetLastError());
     return;
   }
-
-  float beta_2 = params.beta * params.beta;
 
   int threads = 128;
   int blocks_per_sm = 0;
@@ -715,8 +713,9 @@ void compute_point_normal_gradients(
       .sorted_queries = params.sorted_queries,
       .query_count = params.query_count,
       .geometry_count = params.geometry_count,
-      .beta_2 = beta_2,
-      .inv_epsilon = inv_epsilon};
+      .beta = params.beta,
+      .reg_context = ctx,
+      .norm = params.norm};
   compute_point_normal_gradient_kernel<<<blocks, threads, 0, stream>>>(
       kernel_params);
   CUDA_CHECK(cudaGetLastError());
@@ -727,7 +726,8 @@ __global__ void compute_triangle_gradient_single_leaf_kernel(
     const uint32_t *__restrict__ sort_indirections,
     const SoAView<Vec3> sorted_queries,
     const float *__restrict__ sorted_grad_outputs, const uint32_t query_count,
-    const uint32_t geometry_count, float *__restrict__ gradients) {
+    const uint32_t geometry_count, float *__restrict__ gradients,
+    const typename Triangle::Context ctx, const SceneNormalization norm) {
   // Global index of the geometry this thread is responsible for
   uint32_t my_geometry_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -746,7 +746,7 @@ __global__ void compute_triangle_gradient_single_leaf_kernel(
 
   // Load geometry
   uint32_t original_idx = sort_indirections[my_geometry_idx];
-  const Triangle my_geometry = triangles[original_idx];
+  const Triangle my_geometry = norm.to_normalized(triangles[original_idx]);
   Triangle my_grad{.v0 = Vec3::zero(), .v1 = Vec3::zero(), .v2 = Vec3::zero()};
 
   // Since there is only one leaf, all queries (1-32 elements)
@@ -755,20 +755,20 @@ __global__ void compute_triangle_gradient_single_leaf_kernel(
   // PointNormal.
   for (uint32_t i = 0; i < query_count; ++i) {
     Triangle contrib = my_geometry.gradContributionOfQuery(
-        shared_query[i], shared_grad_output[i]);
+        shared_query[i], shared_grad_output[i], ctx);
     my_grad += contrib;
   }
 
   // Write out results
-  gradients[original_idx * 9] = my_grad.v0.x;
-  gradients[original_idx * 9 + 1] = my_grad.v0.y;
-  gradients[original_idx * 9 + 2] = my_grad.v0.z;
-  gradients[original_idx * 9 + 3] = my_grad.v1.x;
-  gradients[original_idx * 9 + 4] = my_grad.v1.y;
-  gradients[original_idx * 9 + 5] = my_grad.v1.z;
-  gradients[original_idx * 9 + 6] = my_grad.v2.x;
-  gradients[original_idx * 9 + 7] = my_grad.v2.y;
-  gradients[original_idx * 9 + 8] = my_grad.v2.z;
+  gradients[original_idx * 9] = my_grad.v0.x * norm.scale;
+  gradients[original_idx * 9 + 1] = my_grad.v0.y * norm.scale;
+  gradients[original_idx * 9 + 2] = my_grad.v0.z * norm.scale;
+  gradients[original_idx * 9 + 3] = my_grad.v1.x * norm.scale;
+  gradients[original_idx * 9 + 4] = my_grad.v1.y * norm.scale;
+  gradients[original_idx * 9 + 5] = my_grad.v1.z * norm.scale;
+  gradients[original_idx * 9 + 6] = my_grad.v2.x * norm.scale;
+  gradients[original_idx * 9 + 7] = my_grad.v2.y * norm.scale;
+  gradients[original_idx * 9 + 8] = my_grad.v2.z * norm.scale;
 }
 
 // Parameter struct to save registers
@@ -785,8 +785,11 @@ struct TriangleGradientKernelParams {
   SoAView<Vec3> sorted_queries;
   uint32_t query_count;
   uint32_t geometry_count;
-  float beta_2;
+  float beta;
+  typename Triangle::Context reg_context;
+  SceneNormalization norm;
 };
+
 // Kernel signature using __grid_constant__
 __global__ void __launch_bounds__(128) compute_triangle_gradient_kernel(
     __grid_constant__ const TriangleGradientKernelParams params) {
@@ -834,9 +837,11 @@ __global__ void __launch_bounds__(128) compute_triangle_gradient_kernel(
       uint32_t original_geometry_idx =
           params.sort_indirections[my_geometry_idx];
       shared_warp_geometry[warp_id][lane_id] =
-          params.triangles[original_geometry_idx];
+          params.norm.to_normalized(params.triangles[original_geometry_idx]);
     }
     Triangle my_gradient{
+        .v0 = Vec3::zero(), .v1 = Vec3::zero(), .v2 = Vec3::zero()};
+    Triangle compensation{
         .v0 = Vec3::zero(), .v1 = Vec3::zero(), .v2 = Vec3::zero()};
 
     __syncwarp();
@@ -887,7 +892,8 @@ __global__ void __launch_bounds__(128) compute_triangle_gradient_kernel(
       bool need_taylor_coefficients =
           is_active &&
           should_node_be_approximated(shared_warp_geometry[warp_id][lane_id],
-                                      current_node.getAABB(), params.beta_2);
+                                      current_node.getAABB(), params.beta,
+                                      params.reg_context);
 
       uint32_t load_taylor_coefficients_mask =
           __ballot_sync(0xFFFFFFFF, need_taylor_coefficients);
@@ -907,7 +913,7 @@ __global__ void __launch_bounds__(128) compute_triangle_gradient_kernel(
             current_node_coefficients.zero_order,
             current_node_coefficients.first_order,
             current_node_coefficients.second_order);
-        my_gradient += approx_grad_contribution;
+        kahan_add(my_gradient, approx_grad_contribution, compensation);
 
         // Remember that I have the full contribution of this node already.
         my_required_stack_depth = stack_ptr;
@@ -950,8 +956,11 @@ __global__ void __launch_bounds__(128) compute_triangle_gradient_kernel(
               Vec3 query = Vec3::load(params.sorted_queries, query_idx,
                                       params.query_count);
               float grad_output = params.sorted_grad_outputs[query_idx];
-              my_gradient += shared_warp_geometry[warp_id][lane_id]
-                                 .gradContributionOfQuery(query, grad_output);
+              kahan_add(my_gradient,
+                        shared_warp_geometry[warp_id][lane_id]
+                            .gradContributionOfQuery(query, grad_output,
+                                                     params.reg_context),
+                        compensation);
             }
           }
         } else {
@@ -974,18 +983,19 @@ __global__ void __launch_bounds__(128) compute_triangle_gradient_kernel(
       const auto *grad_ptr = reinterpret_cast<const float *>(&my_gradient);
 #pragma unroll
       for (int i = 0; i < 9; ++i) {
-        out_ptr[i] = grad_ptr[i];
+        out_ptr[i] = grad_ptr[i] * params.norm.scale;
       }
     }
   } // grid while
 }
-
 
 void compute_triangle_gradients(const ComputeGradientsTriangleParams &params,
                                 int device_id, const cudaStream_t &stream) {
   if (params.geometry_count == 0) {
     return;
   }
+
+  const auto ctx = Triangle::Context::make(params.epsilon, params.scene_scale);
 
   // There is no tree if there is only one leaf
   if (params.query_count <= 32) {
@@ -995,11 +1005,10 @@ void compute_triangle_gradients(const ComputeGradientsTriangleParams &params,
                                                    stream>>>(
         params.triangles, params.sort_indirections, params.sorted_queries,
         params.sorted_grad_outputs, params.query_count, params.geometry_count,
-        params.gradients);
+        params.gradients, ctx, params.norm);
     return;
   }
 
-  float beta_2 = params.beta * params.beta;
 
   int threads = 128;
   int blocks_per_sm = 0;
@@ -1030,7 +1039,9 @@ void compute_triangle_gradients(const ComputeGradientsTriangleParams &params,
       .sorted_queries = params.sorted_queries,
       .query_count = params.query_count,
       .geometry_count = params.geometry_count,
-      .beta_2 = beta_2};
+      .beta = params.beta,
+      .reg_context = ctx,
+      .norm = params.norm};
   compute_triangle_gradient_kernel<<<blocks, threads, 0, stream>>>(
       kernel_params);
   CUDA_CHECK(cudaGetLastError());

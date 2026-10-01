@@ -2,31 +2,34 @@
 #include "aabb.h"
 #include "binary_node.h"
 #include "geometry.h"
+#include "scene_normalization.h"
 #include "taylor_coefficients.h"
 #include <cstdint>
 #include <driver_types.h>
 
 // Gather kernel to read queries into SoA format
-void gather_queries_and_grad_outputs_soa(const float *__restrict__ queries,
-                                       const float *__restrict__ grad_outputs,
-                                       const uint32_t *__restrict__ indices,
-                                       float *__restrict__ sorted_queries_soa,
-                                       float *__restrict__ sorted_grad_outputs,
-                                       uint32_t count,
-                                       const cudaStream_t &stream);
+void gather_queries_and_grad_outputs_soa(
+    const float *__restrict__ queries, const float *__restrict__ grad_outputs,
+    const uint32_t *__restrict__ indices,
+    float *__restrict__ sorted_queries_soa,
+    float *__restrict__ sorted_grad_outputs, uint32_t count,
+    const cudaStream_t &stream, const SceneNormalization &norm);
 
 // Gather kernel to read PointNormals into SoA format
 void gather_point_normals_soa(const float *__restrict__ points,
                               const float *__restrict__ normals,
                               const uint32_t *__restrict__ indices,
                               float *__restrict__ out_geometry, uint32_t count,
+                              const SceneNormalization &norm = SceneNormalization::identity(),
                               const cudaStream_t &stream = 0);
 
 // Gather kernel to read Triangles into SoA format
-void gather_triangles_soa(const float *__restrict__ input_triangles,
-                          const uint32_t *__restrict__ to_internal_map,
-                          float *__restrict__ output_triangles_soa,
-                          uint32_t count, const cudaStream_t &stream = 0);
+void gather_triangles_soa(
+    const float *__restrict__ input_triangles,
+    const uint32_t *__restrict__ to_internal_map,
+    float *__restrict__ output_triangles_soa, uint32_t count,
+    const SceneNormalization &norm = SceneNormalization::identity(),
+    const cudaStream_t &stream = 0);
 
 void build_binary_topology(const uint64_t *__restrict__ morton_codes,
                            BinaryNode *nodes, uint32_t *parents,

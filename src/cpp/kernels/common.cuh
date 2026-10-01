@@ -9,6 +9,7 @@
     if (result != cudaSuccess) {                                               \
       fprintf(stderr, "CUDA Runtime Error: %s:%i:%d = %s\n", __FILE__,         \
               __LINE__, result, cudaGetErrorString(result));                   \
+      std::abort();                                                            \
     }                                                                          \
   } while (0)
 
@@ -54,7 +55,6 @@ __host__ __device__ __forceinline__ uint64_t morton3D_63bit(uint32_t x, uint32_t
   // https://www.forceflow.be/2013/10/07/morton-encodingdecoding-through-bit-interleaving-implementations/
   uint64_t answer = 0;
   answer |= splitBy3(x) | splitBy3(y) << 1 | splitBy3(z) << 2;
-  // printf(" -- %u, %u, %u -> %lu\n", x, y, z, answer);
   return answer;
 }
 

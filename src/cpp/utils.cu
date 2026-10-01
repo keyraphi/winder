@@ -10,6 +10,8 @@
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
 #include <driver_types.h>
+#include <stdexcept>
+#include <string>
 #include <thrust/device_ptr.h>
 #include <thrust/fill.h>
 #include <thrust/iterator/transform_iterator.h>
@@ -17,20 +19,27 @@
 #include <thrust/system/cuda/detail/execution_policy.h>
 #include <vector_functions.h>
 
-#define CUDA_CHECK(expr_to_check)                                              \
-  do {                                                                         \
-    cudaError_t result = expr_to_check;                                        \
-    if (result != cudaSuccess) {                                               \
-      fprintf(stderr, "CUDA Runtime Error: %s:%i:%d = %s\n", __FILE__,         \
-              __LINE__, result, cudaGetErrorString(result));                   \
-    }                                                                          \
-  } while (0)
-
 ScopedCudaDevice::ScopedCudaDevice(int new_device) {
-  cudaGetDevice(&original_device_);
-  cudaSetDevice(new_device);
+  cudaGetLastError();
+  if (cudaGetDevice(&original_device_) != cudaSuccess) {
+    cudaGetLastError();
+    original_device_ = -1;
+  }
+  if (new_device >= 0) {
+    cudaError_t err = cudaSetDevice(new_device);
+    if (err != cudaSuccess) {
+      cudaGetLastError();
+      throw std::runtime_error("Invalid CUDA device_id: " +
+                               std::to_string(new_device));
+    }
+  }
 }
-ScopedCudaDevice::~ScopedCudaDevice() { cudaSetDevice(original_device_); }
+ScopedCudaDevice::~ScopedCudaDevice() {
+  if (original_device_ >= 0) {
+    cudaSetDevice(original_device_);
+    cudaGetLastError();
+  }
+}
 
 namespace winder_cuda {
 // Helper to get CUDA device from nanobind ndarray
@@ -66,15 +75,15 @@ void thrust_fill_float(float *ptr, size_t count, float value) {
 
 } // namespace winder_cuda
 
-template <IsPrimitiveGeometry PrimitiveGeometry> struct GeometryToAABB {
-  __device__ auto operator()(const PrimitiveGeometry &g) const -> AABB {
-    return g.get_aabb();
+template <IsPrimitiveGeometry PrimitiveGeometry> struct GeometryToSceneBounds {
+  __device__ auto operator()(const PrimitiveGeometry &g) const -> SceneBounds {
+    return g.get_bounds();
   }
 };
 
-struct MergeAABB {
-  __device__ auto operator()(const AABB &a, const AABB &b) const -> AABB {
-    return AABB::merge(a, b);
+struct MergeSceneBounds {
+  __device__ auto operator()(const SceneBounds &a, const SceneBounds &b) const -> SceneBounds {
+    return SceneBounds::merge(a, b);
   }
 };
 
@@ -100,7 +109,6 @@ template <IsPrimitiveGeometry PrimitiveGeometry> struct GeometryToMorton {
 
     // Expand bits (interleave x, y, z)
     uint64_t result = morton3D_63bit(x, y, z);
-    printf("### %f, %f, %f; %u, %u, %u -> %llu\n", tx, ty, tz, x, y, z, result);
     return result;
   }
 };
@@ -133,35 +141,55 @@ __global__ void geometry_to_morton_kernel(
 }
 
 template <IsPrimitiveGeometry PrimitiveGeometry>
-auto initializeMortonCodes(const PrimitiveGeometry *geometry,
-                           uint64_t *geometry_morton_codes, const size_t count,
-                           cudaStream_t stream) -> void {
+auto computeSceneBounds(const PrimitiveGeometry *geometry, const size_t count,
+                        cudaStream_t stream) -> SceneBounds {
   auto build_stream_policy = thrust::cuda::par.on(stream);
 
   // compute scene bound
-  auto aabb_transform = thrust::make_transform_iterator(
-      geometry, GeometryToAABB<PrimitiveGeometry>{});
+  auto bounds_transform = thrust::make_transform_iterator(
+      geometry, GeometryToSceneBounds<PrimitiveGeometry>{});
 
-  AABB scene_bounds =
-      thrust::reduce(build_stream_policy, aabb_transform,
-                     aabb_transform + count, AABB::empty(), MergeAABB{});
+  SceneBounds scene_bounds =
+      thrust::reduce(build_stream_policy, bounds_transform,
+                     bounds_transform + count, SceneBounds::empty(), MergeSceneBounds{});
+  return scene_bounds;
+}
+
+template <IsPrimitiveGeometry PrimitiveGeometry>
+auto initializeMortonCodes(const PrimitiveGeometry *geometry,
+                           uint64_t *geometry_morton_codes, const size_t count,
+                           cudaStream_t stream, SceneBounds *out_scene_bounds)
+    -> void {
+  SceneBounds scene_bounds = computeSceneBounds(geometry, count, stream);
+  if (out_scene_bounds) {
+    *out_scene_bounds = scene_bounds;
+  }
   // create morton codes for each primitive
-  Vec3 extent = Vec3::from_f16(scene_bounds.diagonal());
+  Vec3 extent = scene_bounds.diagonal();
   float max_dim = fmaxf(extent.x, fmaxf(extent.y, extent.z));
   float scale = (max_dim > 1e-9F) ? 1.F / max_dim : 0.F;
-  Vec3 min_p = Vec3::from_f16(scene_bounds.min);
+  Vec3 min_p = scene_bounds.min;
 
   uint32_t threads = 256;
   uint32_t grid = (count + threads - 1) / threads;
   geometry_to_morton_kernel<<<grid, threads, 0, stream>>>(
       geometry, count, scale, min_p.x, min_p.y, min_p.z, geometry_morton_codes);
+  CUDA_CHECK(cudaGetLastError());
 }
 
 template void initializeMortonCodes<Vec3>(const Vec3 *geometry,
                                           uint64_t *geometry_morton_codes,
-                                          size_t count, cudaStream_t stream);
+                                          size_t count, cudaStream_t stream,
+                                          SceneBounds *out_scene_bounds);
 
 template void initializeMortonCodes<Triangle>(const Triangle *geometry,
                                               uint64_t *geometry_morton_codes,
-                                              size_t count,
-                                              cudaStream_t stream);
+                                              size_t count, cudaStream_t stream,
+                                              SceneBounds *out_scene_bounds);
+
+template SceneBounds computeSceneBounds<Vec3>(const Vec3 *geometry, const size_t count,
+                                       cudaStream_t stream);
+template SceneBounds computeSceneBounds<PointNormal>(const PointNormal *geometry, const size_t count,
+                                       cudaStream_t stream);
+template SceneBounds computeSceneBounds<Triangle>(const Triangle *geometry, const size_t count,
+                                       cudaStream_t stream);

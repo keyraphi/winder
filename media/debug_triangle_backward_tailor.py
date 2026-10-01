@@ -156,8 +156,7 @@ def compute_node_gradient_approximation(
     G2: np.ndarray,  # [3, 3] Mat3x3_bf16
     order: int = 2,  # 0, 1, or 2
 ) -> np.ndarray:
-    """Simulates CUDA __device__ gradient computation in pure float32.
-    """
+    """Simulates CUDA __device__ gradient computation in pure float32."""
     # -------------------------------------------------------------------------
     # 1. Inputs, Half-Precision Conversion & Non-Dimensionalization
     # -------------------------------------------------------------------------
@@ -296,7 +295,8 @@ def compute_node_gradient_approximation(
     # -------------------------------------------------------------------------
     def eval_dir_deriv_2(u: Vec3):
         d_du = [r_hat[p].dot(u) for p in range(3)]
-        d2_du2 = [(np.float32(1.0) - d_du[p] * d_du[p]) / d[p] for p in range(3)]
+        u_norm2 = u.dot(u)
+        d2_du2 = [(u_norm2 - d_du[p] * d_du[p]) / d[p] for p in range(3)]
 
         r_hat_du = [(u - d_du[p] * r_hat[p]) / d[p] for p in range(3)]
         r_hat2_du2 = [
@@ -320,7 +320,7 @@ def compute_node_gradient_approximation(
                 d2_du2[j] * d[m]
                 + np.float32(2.0) * d_du[j] * d_du[m]
                 + d[j] * d2_du2[m]
-                + np.float32(2.0)
+                + np.float32(2.0) * u_norm2
             )
 
             V_du[p] = (
@@ -1051,6 +1051,12 @@ def compute_taylor_gradient_v0(
 def generate_random_triangle(scale: float = 1.0) -> np.ndarray:
     return np.random.uniform(-scale, scale, size=(3, 3))
 
+def make_sliver(scale=1.0, aspect=100.0):
+    v0 = np.array([0.0, 0.0, 0.0])
+    v1 = np.array([0.0, scale / aspect, 0.0])
+    v2 = np.array([scale, 0.0, 0.0])
+    return np.array([v0, v1, v2])
+
 
 def generate_random_cluster(center: np.ndarray, radius: float, num_points: int = 50):
     # Uniform random distribution within a sphere
@@ -1083,6 +1089,9 @@ def run_convergence_suite():
     header = f"{'Distance':<9} | {'0th Rel Err':<12} {'(Halving)':<9} | {'1st Rel Err':<12} {'(Halving)':<9} | {'2nd Rel Err':<12} {'(Halving)':<9} | {'1st Gain':<9} | {'2nd Gain':<9}"
     print(header)
     print("-" * len(header))
+
+    EXPECTED_GROWTH = {0: 2.0, 1: 4.0, 2: 8.0}
+    TOL = 0.4
 
     for dist in distances:
         center = tri_centroid + direction * dist
@@ -1121,6 +1130,19 @@ def run_convergence_suite():
             f"{dist:<9.2f} | {err0:<12.3e} {growth0:<9} | {err1:<12.3e} {growth1:<9} | {err2:<12.3e} {growth2:<9} | {gain_1st:<9} | {gain_2nd:<9}"
         )
 
+        for order, err, prev in [
+            (0, err0, prev_err0),
+            (1, err1, prev_err1),
+            (2, err2, prev_err2),
+        ]:
+            if prev is not None and prev > 0:
+                observed = err / prev
+                expected = EXPECTED_GROWTH[order]
+                if not (TOL * expected < observed < (2 - TOL) * expected):
+                    print(
+                        f"ERROR: Order {order}: growth {observed:.2f}x vs expected ~{expected:.1f}x"
+                    )
+
         prev_err0, prev_err1, prev_err2 = err0, err1, err2
 
     print(
@@ -1142,6 +1164,7 @@ def run_random_monte_carlo_suite(num_trials: int = 1000):
 
     for trial in range(num_trials):
         triangle = generate_random_triangle(scale=2.0)
+        triangle = make_sliver()
         tri_centroid = np.mean(triangle, axis=0)
 
         dist = np.random.uniform(4.0, 10.0)
@@ -1181,9 +1204,15 @@ def run_random_monte_carlo_suite(num_trials: int = 1000):
         rel_err2 = np.linalg.norm(grad_gt - grad_t2) / norm_gt
 
         # Cosine Similarities (Frobenius inner product over full gradient matrix)
-        cos0 = np.sum(grad_gt * grad_t0) / (norm_gt * norm_t0) if norm_t0 > 1e-12 else 0.0
-        cos1 = np.sum(grad_gt * grad_t1) / (norm_gt * norm_t1) if norm_t1 > 1e-12 else 0.0
-        cos2 = np.sum(grad_gt * grad_t2) / (norm_gt * norm_t2) if norm_t2 > 1e-12 else 0.0
+        cos0 = (
+            np.sum(grad_gt * grad_t0) / (norm_gt * norm_t0) if norm_t0 > 1e-12 else 0.0
+        )
+        cos1 = (
+            np.sum(grad_gt * grad_t1) / (norm_gt * norm_t1) if norm_t1 > 1e-12 else 0.0
+        )
+        cos2 = (
+            np.sum(grad_gt * grad_t2) / (norm_gt * norm_t2) if norm_t2 > 1e-12 else 0.0
+        )
 
         cos0 = float(np.clip(cos0, -1.0, 1.0))
         cos1 = float(np.clip(cos1, -1.0, 1.0))
@@ -1223,9 +1252,15 @@ def run_random_monte_carlo_suite(num_trials: int = 1000):
     print(f"  2nd-Order (+ Quadrupole):   {np.mean(errs_2nd):.4e}")
 
     print("\n--- COSINE SIMILARITY (DIRECTIONAL ACCURACY) ---")
-    print(f"  0th-Order: Mean = {np.mean(cos_0th):.6f}, Variance = {np.var(cos_0th):.4e}")
-    print(f"  1st-Order: Mean = {np.mean(cos_1st):.6f}, Variance = {np.var(cos_1st):.4e}")
-    print(f"  2nd-Order: Mean = {np.mean(cos_2nd):.6f}, Variance = {np.var(cos_2nd):.4e}")
+    print(
+        f"  0th-Order: Mean = {np.mean(cos_0th):.6f}, Variance = {np.var(cos_0th):.4e}"
+    )
+    print(
+        f"  1st-Order: Mean = {np.mean(cos_1st):.6f}, Variance = {np.var(cos_1st):.4e}"
+    )
+    print(
+        f"  2nd-Order: Mean = {np.mean(cos_2nd):.6f}, Variance = {np.var(cos_2nd):.4e}"
+    )
 
     print("\n--- ORDER-BY-ORDER ERROR REDUCTION GAINS (GEOMETRIC MEAN) ---")
     print(f"  0th -> 1st Order Gain:     {geom_gain_0_to_1:.2f}x error reduction")
@@ -1237,6 +1272,7 @@ def run_random_monte_carlo_suite(num_trials: int = 1000):
         f"  Monotonicity (Err2 < Err1 < Err0): {monotonic_count} / {total_valid} trials ({100.0 * monotonic_count / total_valid:.1f}%)"
     )
     print("=" * 88)
+
 
 if __name__ == "__main__":
     run_convergence_suite()

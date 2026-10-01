@@ -1,6 +1,7 @@
 #pragma once
 #include "bvh8.h"
 #include "geometry.h"
+#include "scene_normalization.h"
 #include "soa.h"
 #include "taylor_coefficients.h"
 #include "vec3.h"
@@ -22,6 +23,8 @@ template <IsGeometry Geometry> struct ComputeWindingNumbersParams {
   uint32_t *global_device_counter;
   const float beta;
   const float epsilon;
+  const float scene_scale;
+  const SceneNormalization norm;
 };
 
 template <IsGeometry Geometry>
@@ -45,6 +48,8 @@ struct ComputeGradientsPointNormalParams {
   uint32_t *global_device_counter;
   const float beta;
   const float epsilon;
+  const float scene_scale;
+  const SceneNormalization norm;
 };
 
 void compute_point_normal_gradients(
@@ -65,6 +70,9 @@ struct ComputeGradientsTriangleParams {
   float *gradients;
   uint32_t *global_device_counter;
   const float beta;
+  const float epsilon;
+  const float scene_scale;
+  const SceneNormalization norm;
 };
 
 void compute_triangle_gradients(const ComputeGradientsTriangleParams &params,
