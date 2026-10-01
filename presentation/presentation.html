@@ -1628,40 +1628,37 @@
     const sCtx = spatialCanvas.getContext('2d');
     const tCtx = treeCanvas.getContext('2d');
 
-    // --- 1. Duck Geometry Definition (Outer Boundary + Interior Holes + Gaps) ---
+    const fieldCanvas = document.createElement('canvas');
+    fieldCanvas.width = spatialCanvas.width;
+    fieldCanvas.height = spatialCanvas.height;
+    let fieldCacheDirty = true;
+
+    let hoveredNode = null;
+    let selectedNode = null;
+    let fieldMode = 'approx'; // 'approx' (multipole) | 'true' (exact)
+    let centroidBadges = [];
+    let treeNodeBadges = [];
+    let clearHoverTimeout = null;
+
+    // --- 1. Duck Geometry ---
     const DUCK_VERTICES = [
-      { x: -0.06148, y: 0.71311 },
-      { x: -0.12295, y: 0.51639 },
-      { x: -0.30738, y: 0.27049 },
-      { x: -0.61475, y: 0.14754 },
-      { x: -0.92213, y: 0.12295 },
-      { x: -0.79918, y: -0.18443 },
-      { x: -0.55328, y: -0.46721 },
-      { x: -0.12295, y: -0.55328 },
-      { x: 0.36885, y: -0.49180 },
-      { x: 0.55328, y: -0.12295 },
-      { x: 0.46721, y: 0.24590 },
-      { x: 0.34426, y: 0.46721 },
-      { x: 0.51639, y: 0.51639 },
-      { x: 0.73770, y: 0.63934 },
-      { x: 0.43033, y: 0.67623 },
-      { x: 0.27049, y: 0.76230 },
-      { x: 0.12295, y: 0.79918 }
+      { x: -0.06148, y: 0.71311 }, { x: -0.12295, y: 0.51639 },
+      { x: -0.30738, y: 0.27049 }, { x: -0.61475, y: 0.14754 },
+      { x: -0.92213, y: 0.12295 }, { x: -0.79918, y: -0.18443 },
+      { x: -0.55328, y: -0.46721 }, { x: -0.12295, y: -0.55328 },
+      { x:  0.36885, y: -0.49180 }, { x:  0.55328, y: -0.12295 },
+      { x:  0.46721, y:  0.24590 }, { x:  0.34426, y:  0.46721 },
+      { x:  0.51639, y:  0.51639 }, { x:  0.73770, y:  0.63934 },
+      { x:  0.43033, y:  0.67623 }, { x:  0.27049, y:  0.76230 },
+      { x:  0.12295, y:  0.79918 }
     ];
-
-    // Clockwise orientation -> subtracts from winding number (W = 1 - 1 = 0 inside hole)
-    const EYE_HOLE_VERTICES = [
-      { x: 0.32, y: 0.66 },
-      { x: 0.38, y: 0.63 },
-      { x: 0.36, y: 0.57 },
-      { x: 0.30, y: 0.60 }
+    const EYE_HOLE_VERTICES  = [
+      { x: 0.32, y: 0.66 }, { x: 0.38, y: 0.63 },
+      { x: 0.36, y: 0.57 }, { x: 0.30, y: 0.60 }
     ];
-
     const WING_HOLE_VERTICES = [
-      { x: -0.10, y: 0.15 },
-      { x:  0.15, y: -0.05 },
-      { x: -0.05, y: -0.25 },
-      { x: -0.35, y: -0.10 }
+      { x: -0.10, y:  0.15 }, { x: 0.15, y: -0.05 },
+      { x: -0.05, y: -0.25 }, { x: -0.35, y: -0.10 }
     ];
 
     function createLoopSegments(vertices, styleOptions = {}) {
@@ -1675,8 +1672,8 @@
     }
 
     const duckSegments = [
-      ...createLoopSegments(DUCK_VERTICES, { color: '#32414B', width: 2.5 }),
-      ...createLoopSegments(EYE_HOLE_VERTICES, { color: '#32414B', width: 2.0 }),
+      ...createLoopSegments(DUCK_VERTICES,      { color: '#32414B', width: 2.5 }),
+      ...createLoopSegments(EYE_HOLE_VERTICES,  { color: '#32414B', width: 2.0 }),
       ...createLoopSegments(WING_HOLE_VERTICES, { color: '#32414B', width: 2.0 })
     ];
 
@@ -1692,7 +1689,6 @@
 
     let denseDuckSegments = [];
     duckSegments.forEach(seg => {
-      // Subdivide larger segments to maintain higher geometric resolution
       const len = Math.hypot(seg.x2 - seg.x1, seg.y2 - seg.y1);
       if (len > 0.15) {
         const sub1 = subdivideSegment(seg);
@@ -1702,53 +1698,39 @@
       }
     });
 
-    // Introduce random gaps (~8% segment dropout) for open/non-watertight geometry
     const GAP_PROBABILITY = 0.08;
     denseDuckSegments = denseDuckSegments.filter(() => Math.random() > GAP_PROBABILITY);
 
-    // --- 2. Quadtree Data Structure with Taylor Expansion Properties ---
+    // --- 2. Quadtree ---
     class QuadNode {
       constructor(x, y, size, depth = 0) {
-        this.x = x;           // Node box center X
-        this.y = y;           // Node box center Y
-        this.size = size;     // Node box side length
-        this.depth = depth;
-        this.children = [];
-        this.segments = [];
-        this.centerOfMass = { x: x, y: y }; // \tilde{p}
-        this.rtilde = 0;                     // \tilde{r} (max distance from \tilde{p} to geometry)
+        this.x = x; this.y = y; this.size = size; this.depth = depth;
+        this.children = []; this.segments = [];
+        this.centerOfMass = { x, y };
+        this.rtilde = 0;
         this.status = 'normal';
+        // Multipole moments (complex: re/im pairs)
+        this.multipole = { M1r: 0, M1i: 0, M2r: 0, M2i: 0, M3r: 0, M3i: 0 };
+        this.w0 = 0; // exact winding number of node's segments at the centroid
       }
+      isLeaf() { return this.children.length === 0; }
 
-      isLeaf() {
-        return this.children.length === 0;
-      }
-
-      // Precomputes Center of Mass \tilde{p} and Radius \tilde{r} from contained segments
       computeProperties() {
         if (this.segments.length === 0) {
           this.centerOfMass = { x: this.x, y: this.y };
           this.rtilde = 0;
+          this.computeMoments();
           return;
         }
-
-        let totalLen = 0;
-        let sumX = 0;
-        let sumY = 0;
-
+        let totalLen = 0, sumX = 0, sumY = 0;
         this.segments.forEach(seg => {
           const len = Math.hypot(seg.x2 - seg.x1, seg.y2 - seg.y1);
           const mx = (seg.x1 + seg.x2) / 2;
           const my = (seg.y1 + seg.y2) / 2;
-
-          totalLen += len;
-          sumX += mx * len;
-          sumY += my * len;
+          totalLen += len; sumX += mx * len; sumY += my * len;
         });
-
         this.centerOfMass = { x: sumX / totalLen, y: sumY / totalLen };
 
-        // \tilde{r} = max distance from \tilde{p} to any endpoint of contained segments
         let maxR = 0;
         this.segments.forEach(seg => {
           const d1 = Math.hypot(seg.x1 - this.centerOfMass.x, seg.y1 - this.centerOfMass.y);
@@ -1756,31 +1738,66 @@
           maxR = Math.max(maxR, d1, d2);
         });
         this.rtilde = maxR;
+        this.computeMoments();
+      }
+
+      /**
+       * Precomputes the complex multipole moments:
+       *   M_k = sum_segments [ (B - c)^k - (A - c)^k ]
+       * These feed the far-field expansion
+       *   w_K(x) ~ -(1/2pi) Im[ M1/zeta + M2/(2 zeta^2) + M3/(3 zeta^3) ]
+       * with zeta = x - c.
+       */
+      computeMoments() {
+        const cx = this.centerOfMass.x;
+        const cy = this.centerOfMass.y;
+        let M1r = 0, M1i = 0, M2r = 0, M2i = 0, M3r = 0, M3i = 0;
+        let w0 = 0;
+
+        this.segments.forEach(seg => {
+          const ar = seg.x1 - cx, ai = seg.y1 - cy;
+          const br = seg.x2 - cx, bi = seg.y2 - cy;
+
+          // b - a
+          M1r += br - ar;
+          M1i += bi - ai;
+
+          // b^2 - a^2
+          const a2r = ar * ar - ai * ai, a2i = 2 * ar * ai;
+          const b2r = br * br - bi * bi, b2i = 2 * br * bi;
+          M2r += b2r - a2r;
+          M2i += b2i - a2i;
+
+          // b^3 - a^3
+          const a3r = a2r * ar - a2i * ai, a3i = a2r * ai + a2i * ar;
+          const b3r = b2r * br - b2i * bi, b3i = b2r * bi + b2i * br;
+          M3r += b3r - a3r;
+          M3i += b3i - a3i;
+
+          // Exact value at centroid (for the singular fallback + visualization range)
+          w0 += seg.computeWindingNumber(cx, cy);
+        });
+
+        this.multipole = { M1r, M1i, M2r, M2i, M3r, M3i };
+        this.w0 = w0;
       }
 
       subdivide(maxDepth = 4, maxSegs = 3) {
         this.computeProperties();
-
         if (this.depth >= maxDepth || this.segments.length <= maxSegs) return;
 
         const half = this.size / 4;
         const quarter = this.size / 2;
-
         const candidates = [
-          new QuadNode(this.x - half, this.y + half, quarter, this.depth + 1), // NW
-          new QuadNode(this.x + half, this.y + half, quarter, this.depth + 1), // NE
-          new QuadNode(this.x - half, this.y - half, quarter, this.depth + 1), // SW
-          new QuadNode(this.x + half, this.y - half, quarter, this.depth + 1)  // SE
+          new QuadNode(this.x - half, this.y + half, quarter, this.depth + 1),
+          new QuadNode(this.x + half, this.y + half, quarter, this.depth + 1),
+          new QuadNode(this.x - half, this.y - half, quarter, this.depth + 1),
+          new QuadNode(this.x + half, this.y - half, quarter, this.depth + 1)
         ];
-
         candidates.forEach(child => {
           child.segments = this.segments.filter(seg => child.intersectsSegment(seg));
         });
-
-        // Filter out completely empty nodes
         this.children = candidates.filter(child => child.segments.length > 0);
-
-        // Recurse on non-empty child nodes
         this.children.forEach(child => child.subdivide(maxDepth, maxSegs));
       }
 
@@ -1792,52 +1809,184 @@
       }
     }
 
-    // Construct tree & compute \tilde{p} and \tilde{r} for all non-empty nodes
     const quadtreeRoot = new QuadNode(0.0, 0.0, 2.2, 0);
     quadtreeRoot.segments = denseDuckSegments;
     quadtreeRoot.subdivide(4, 3);
 
-    // --- 3. Coordinate Helpers & Traversal ---
-    const toSpatX = (x) => spatialCanvas.width / 2 + x * (spatialCanvas.width / 3);
+    // --- 3. Coord helpers ---
+    const toSpatX = (x) => spatialCanvas.width  / 2 + x * (spatialCanvas.width  / 3);
     const toSpatY = (y) => spatialCanvas.height / 2 - y * (spatialCanvas.height / 3);
 
     let queryPoint = { x: 0.65, y: -0.45 };
     let activeStage = 0;
 
+    // --- 4. Far-field multipole evaluation ---
+    // Returns the exact w(c) very near the centroid (multipole is undefined there).
+    const CENTROID_BALL = 4e-3; // in world coords
+
+    function evaluateMultipoleNode(node, x, y) {
+      const m = node.multipole;
+      if (!m) return 0;
+
+      const cx = node.centerOfMass.x;
+      const cy = node.centerOfMass.y;
+      const zr = x - cx, zi = y - cy;
+      const r2 = zr * zr + zi * zi;
+
+      if (r2 < CENTROID_BALL * CENTROID_BALL) return node.w0;
+
+      // 1/zeta  (complex reciprocal)
+      const invr =  zr / r2;
+      const invi = -zi / r2;
+
+      // 1/zeta^2 = (1/zeta)^2
+      const inv2r = invr * invr - invi * invi;
+      const inv2i = 2 * invr * invi;
+
+      // 1/zeta^3 = 1/zeta^2 * 1/zeta
+      const inv3r = inv2r * invr - inv2i * invi;
+      const inv3i = inv2r * invi + inv2i * invr;
+
+      // M1/zeta
+      const t1i = m.M1r * invi + m.M1i * invr;
+      // M2/(2 zeta^2)
+      const t2i = (m.M2r * inv2i + m.M2i * inv2r) * 0.5;
+      // M3/(3 zeta^3)
+      const t3i = (m.M3r * inv3i + m.M3i * inv3r) / 3;
+
+      return -(t1i + t2i + t3i) / (2 * Math.PI);
+    }
+
+    function renderMultipoleField(canvas, node, minVal, maxVal) {
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width, h = canvas.height;
+      const imgData = ctx.createImageData(w, h);
+      for (let py = 0; py < h; py++) {
+        for (let px = 0; px < w; px++) {
+          const x = (px - w / 2) / (w / 3);
+          const y = (h / 2 - py) / (h / 3);
+          const val = evaluateMultipoleNode(node, x, y);
+          const [r, g, b] = getJetColorMap(val, minVal, maxVal);
+          const idx = (py * w + px) * 4;
+          imgData.data[idx]     = r;
+          imgData.data[idx + 1] = g;
+          imgData.data[idx + 2] = b;
+          imgData.data[idx + 3] = 255;
+        }
+      }
+      ctx.putImageData(imgData, 0, 0);
+    }
+
+    function renderExactField(canvas, segments, minVal, maxVal) {
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width, h = canvas.height;
+      const imgData = ctx.createImageData(w, h);
+      for (let py = 0; py < h; py++) {
+        for (let px = 0; px < w; px++) {
+          const x = (px - w / 2) / (w / 3);
+          const y = (h / 2 - py) / (h / 3);
+          let val = 0;
+          for (let i = 0; i < segments.length; i++) val += segments[i].computeWindingNumber(x, y);
+          const [r, g, b] = getJetColorMap(val, minVal, maxVal);
+          const idx = (py * w + px) * 4;
+          imgData.data[idx]     = r;
+          imgData.data[idx + 1] = g;
+          imgData.data[idx + 2] = b;
+          imgData.data[idx + 3] = 255;
+        }
+      }
+      ctx.putImageData(imgData, 0, 0);
+    }
+
+    function getFieldRange(node) {
+      return Math.max(0.5, Math.abs(node.w0) * 2 + 0.3);
+    }
+
+    function invalidateFieldCache() { fieldCacheDirty = true; }
+
+    function updateFieldCache() {
+      if (!selectedNode || activeStage < 2 || activeStage > 3) {
+        fieldCacheDirty = false; return;
+      }
+      const range = getFieldRange(selectedNode);
+      if (fieldMode === 'true') {
+        renderExactField(fieldCanvas, selectedNode.segments, -range, range);
+      } else {
+        renderMultipoleField(fieldCanvas, selectedNode, -range, range);
+      }
+      fieldCacheDirty = false;
+    }
+
+    function drawSegmentStyled(seg, color, width) {
+      sCtx.beginPath();
+      sCtx.moveTo(toSpatX(seg.x1), toSpatY(seg.y1));
+      sCtx.lineTo(toSpatX(seg.x2), toSpatY(seg.y2));
+      sCtx.lineWidth = width;
+      sCtx.strokeStyle = color;
+      sCtx.stroke();
+    }
+
+    // --- 5. Spatial rendering ---
     function renderSpatialCanvas() {
       const w = spatialCanvas.width, h = spatialCanvas.height;
       sCtx.clearRect(0, 0, w, h);
+      sCtx.fillStyle = '#ffffff';
+      sCtx.fillRect(0, 0, w, h);
+
+      if (selectedNode && activeStage >= 2 && activeStage <= 3) {
+        if (fieldCacheDirty) updateFieldCache();
+        sCtx.drawImage(fieldCanvas, 0, 0);
+      }
 
       if (activeStage === 4) {
         renderField(spatialCanvas, denseDuckSegments, -0.5, 1.0);
       }
 
-      if (activeStage >= 1 && activeStage <= 3) {
-        drawQuadNode(quadtreeRoot);
+      if (activeStage >= 1 && activeStage <= 3) drawQuadNode(quadtreeRoot);
+
+      // Segments with hover/selection highlight
+      const hoveredSet  = hoveredNode  ? new Set(hoveredNode.segments)  : null;
+      const selectedSet = selectedNode ? new Set(selectedNode.segments) : null;
+      const selectedColor = fieldMode === 'true' ? '#7da54b' : '#0069aa';
+
+      for (let i = 0; i < denseDuckSegments.length; i++) {
+        const seg = denseDuckSegments[i];
+        let color = '#32414B', width = 2.5;
+        if (selectedSet && selectedSet.has(seg))    { color = selectedColor; width = 4.5; }
+        else if (hoveredSet && hoveredSet.has(seg)) { color = '#c8503c';      width = 3.5; }
+        drawSegmentStyled(seg, color, width);
       }
 
-      denseDuckSegments.forEach(seg => seg.draw(sCtx, toSpatX, toSpatY));
+      // Centroids (all nodes now)
+      centroidBadges = [];
+      if (activeStage >= 2 && activeStage <= 3) drawMultipoleBadges(quadtreeRoot);
 
-      if (activeStage >= 2 && activeStage <= 3 ) {
-        drawMultipoleBadges(quadtreeRoot);
-      }
-
+      // Query point at stage 3
       if (activeStage === 3) {
         const qx = toSpatX(queryPoint.x), qy = toSpatY(queryPoint.y);
         sCtx.beginPath();
         sCtx.arc(qx, qy, 7, 0, 2 * Math.PI);
-        sCtx.fillStyle = '#a51e37';
-        sCtx.fill();
-        sCtx.strokeStyle = '#FFFFFF';
-        sCtx.lineWidth = 2;
-        sCtx.stroke();
-
+        sCtx.fillStyle = '#a51e37'; sCtx.fill();
+        sCtx.strokeStyle = '#FFFFFF'; sCtx.lineWidth = 2; sCtx.stroke();
         sCtx.fillStyle = '#111827';
         sCtx.font = 'bold 14px sans-serif';
         sCtx.fillText('q', qx + 10, qy - 10);
 
         resetNodeStatus(quadtreeRoot);
-        evaluateTraversal(quadtreeRoot, queryPoint, 1.8); // \beta = 1.8
+        evaluateTraversal(quadtreeRoot, queryPoint, 1.8);
+      }
+
+      // Hint text
+      if (activeStage >= 2 && activeStage <= 3) {
+        sCtx.font = '11px sans-serif';
+        sCtx.fillStyle = 'rgba(50,65,75,0.65)';
+        if (fieldMode === 'true' && selectedNode) {
+          sCtx.fillText('Showing EXACT field of selected node (right-click to toggle)', 10, h - 10);
+        } else if (selectedNode) {
+          sCtx.fillText('Showing FAR-FIELD MULTIPOLE of selected node (left-click to toggle)', 10, h - 10);
+        } else {
+          sCtx.fillText('Hover centroid or tree node · Left-click: far-field multipole · Right-click: exact field', 10, h - 10);
+        }
       }
     }
 
@@ -1846,41 +1995,59 @@
       const py = toSpatY(node.y + node.size / 2);
       const pw = node.size * (spatialCanvas.width / 3);
       const ph = node.size * (spatialCanvas.height / 3);
-
-      sCtx.strokeStyle = node.status === 'pruned' ? 'rgba(125, 165, 75, 0.85)' :
-                         node.status === 'traversed' ? 'rgba(165, 30, 55, 0.7)' :
-                         'rgba(210, 150, 0, 0.5)';
+      sCtx.strokeStyle =
+        node.status === 'pruned'    ? 'rgba(125, 165, 75, 0.85)' :
+        node.status === 'traversed' ? 'rgba(165, 30, 55, 0.7)'   :
+                                      'rgba(210, 150, 0, 0.5)';
       sCtx.lineWidth = node.status !== 'normal' ? 2 : 1;
       sCtx.strokeRect(px, py, pw, ph);
-
       if (node.status === 'pruned') {
         sCtx.fillStyle = 'rgba(125, 165, 75, 0.12)';
         sCtx.fillRect(px, py, pw, ph);
       }
-
       node.children.forEach(child => drawQuadNode(child));
     }
 
     function drawMultipoleBadges(node) {
-      if (node.isLeaf() || node.depth >= 2) {
+      // Draw for every node that has segments (root, depth 1, ..., leaves).
+      if (node.segments.length > 0) {
         const cx = toSpatX(node.centerOfMass.x);
         const cy = toSpatY(node.centerOfMass.y);
         const rPx = node.rtilde * (spatialCanvas.width / 3);
+        centroidBadges.push({ node, x: cx, y: cy });
 
-        // Draw \tilde{r} bounding radius circle
+        const isHover    = node === hoveredNode;
+        const isSelected = node === selectedNode;
+        const selectedColor = fieldMode === 'true' ? '#7da54b' : '#0069aa';
+
+        // Shallow nodes get slightly larger badges so they don't disappear under deeper rings
+        const baseRadius = node.depth <= 1 ? 5 : 3.5;
+        const baseRing   = node.depth <= 1 ? 1.3 : 1.0;
+
+        let fillColor = '#50aac8', ringColor = 'rgba(80,170,200,0.45)', dotRadius = baseRadius;
+        if (isHover) {
+          fillColor = '#c8503c'; ringColor = 'rgba(200,80,60,0.85)'; dotRadius = baseRadius + 2.5;
+        } else if (isSelected) {
+          fillColor = selectedColor;
+          ringColor = fieldMode === 'true' ? 'rgba(125,165,75,0.9)' : 'rgba(0,105,170,0.9)';
+          dotRadius = baseRadius + 1.5;
+        }
+
+        // \tilde{r} bounding circle
         sCtx.beginPath();
         sCtx.arc(cx, cy, Math.max(rPx, 2), 0, 2 * Math.PI);
-        sCtx.strokeStyle = 'rgba(80, 170, 200, 0.45)';
-        sCtx.lineWidth = 1;
+        sCtx.strokeStyle = ringColor;
+        sCtx.lineWidth = (isHover || isSelected ? 2 : baseRing);
         sCtx.setLineDash([2, 2]);
         sCtx.stroke();
         sCtx.setLineDash([]);
 
-        // Draw Center of Mass \tilde{p}
+        // Center-of-mass dot
         sCtx.beginPath();
-        sCtx.arc(cx, cy, 3.5, 0, 2 * Math.PI);
-        sCtx.fillStyle = '#50aac8';
+        sCtx.arc(cx, cy, dotRadius, 0, 2 * Math.PI);
+        sCtx.fillStyle = fillColor;
         sCtx.fill();
+        if (isSelected) { sCtx.strokeStyle = '#ffffff'; sCtx.lineWidth = 2; sCtx.stroke(); }
       }
       node.children.forEach(child => drawMultipoleBadges(child));
     }
@@ -1890,35 +2057,27 @@
       node.children.forEach(resetNodeStatus);
     }
 
-    // Evaluates Taylor Expansion Far-Field criterion: ||q - \tilde{p}||_2 > \beta \cdot \tilde{r}
     function evaluateTraversal(node, q, beta = 1.8) {
       const distToCoM = Math.hypot(q.x - node.centerOfMass.x, q.y - node.centerOfMass.y);
       const isFarField = distToCoM > beta * node.rtilde;
-
       if (isFarField && node.depth > 0) {
         node.status = 'pruned';
-
-        // Ray connecting q directly to node Center of Mass \tilde{p}
         sCtx.beginPath();
         sCtx.moveTo(toSpatX(q.x), toSpatY(q.y));
         sCtx.lineTo(toSpatX(node.centerOfMass.x), toSpatY(node.centerOfMass.y));
         sCtx.strokeStyle = 'rgba(34, 197, 94, 0.8)';
-        sCtx.setLineDash([3, 3]);
-        sCtx.lineWidth = 1.2;
-        sCtx.stroke();
-        sCtx.setLineDash([]);
+        sCtx.setLineDash([3, 3]); sCtx.lineWidth = 1.2; sCtx.stroke(); sCtx.setLineDash([]);
       } else {
         node.status = 'traversed';
-        if (!node.isLeaf()) {
-          node.children.forEach(child => evaluateTraversal(child, q, beta));
-        }
+        if (!node.isLeaf()) node.children.forEach(child => evaluateTraversal(child, q, beta));
       }
     }
 
-    // --- 4. Render Expanded Tree Graph Canvas ---
+    // --- 6. Tree rendering ---
     function renderTreeCanvas() {
       const w = treeCanvas.width, h = treeCanvas.height;
       tCtx.clearRect(0, 0, w, h);
+      treeNodeBadges = [];
 
       if (activeStage === 0) {
         tCtx.fillStyle = '#9CA3AF';
@@ -1927,7 +2086,6 @@
         tCtx.fillText('Quadtree graph inactive (Stage 1+)', w / 2, h / 2);
         return;
       }
-
       drawTreeNode(quadtreeRoot, w / 2, 25, w / 2.6);
     }
 
@@ -1942,40 +2100,173 @@
         tCtx.beginPath();
         tCtx.moveTo(x, y);
         tCtx.lineTo(childX, nextY);
-        tCtx.strokeStyle = child.status === 'pruned' ? '#7da54b' :
-                           child.status === 'traversed' ? '#a51e37' : '#d7b469';
+        tCtx.strokeStyle =
+          child.status === 'pruned'    ? '#7da54b' :
+          child.status === 'traversed' ? '#a51e37' : '#d7b469';
         tCtx.lineWidth = child.status !== 'normal' ? 1.8 : 1;
         tCtx.stroke();
 
         drawTreeNode(child, childX, nextY, xSpread * 0.25);
       });
 
+      treeNodeBadges.push({ node, x, y });
+
       tCtx.beginPath();
       tCtx.arc(x, y, 4.5, 0, 2 * Math.PI);
-      tCtx.fillStyle = node.status === 'pruned' ? '#7da54b' :
-                       node.status === 'traversed' ? '#a51e37' : '#50aac8';
+
+      let fill;
+      if (node === hoveredNode)              fill = '#c8503c';
+      else if (node === selectedNode)        fill = fieldMode === 'true' ? '#7da54b' : '#0069aa';
+      else if (node.status === 'pruned')     fill = '#7da54b';
+      else if (node.status === 'traversed')  fill = '#a51e37';
+      else                                    fill = '#50aac8';
+
+      tCtx.fillStyle = fill;
       tCtx.fill();
       tCtx.strokeStyle = '#FFFFFF';
       tCtx.lineWidth = 1;
       tCtx.stroke();
+
+      if (node === selectedNode) {
+        tCtx.beginPath();
+        tCtx.arc(x, y, 8, 0, 2 * Math.PI);
+        tCtx.strokeStyle = fieldMode === 'true' ? '#7da54b' : '#0069aa';
+        tCtx.lineWidth = 1.5;
+        tCtx.stroke();
+      }
     }
 
-    // --- 5. Interactive Event Handlers ---
-    spatialCanvas.addEventListener('mousemove', (e) => {
-      if (activeStage !== 3) return;
-      const rect = spatialCanvas.getBoundingClientRect();
-      const px = (e.clientX - rect.left) * (spatialCanvas.width / rect.width);
-      const py = (e.clientY - rect.top) * (spatialCanvas.height / rect.height);
+    // --- 7. Hover management ---
+    function hitTestBadges(badges, mx, my, radius) {
+      let best = null, bestDist = radius;
+      for (const b of badges) {
+        const d = Math.hypot(mx - b.x, my - b.y);
+        if (d < bestDist) { bestDist = d; best = b.node; }
+      }
+      return best;
+    }
 
-      queryPoint.x = (px - spatialCanvas.width / 2) / (spatialCanvas.width / 3);
-      queryPoint.y = (spatialCanvas.height / 2 - py) / (spatialCanvas.height / 3);
-
+    function applyHover(newNode) {
+      if (newNode === hoveredNode) return;
+      hoveredNode = newNode;
+      spatialCanvas.style.cursor = hoveredNode ? 'pointer' : (activeStage === 3 ? 'crosshair' : 'default');
+      treeCanvas.style.cursor    = hoveredNode ? 'pointer' : 'default';
       renderSpatialCanvas();
       renderTreeCanvas();
+    }
+
+    function scheduleClearHover() {
+      if (clearHoverTimeout) clearTimeout(clearHoverTimeout);
+      clearHoverTimeout = setTimeout(() => { clearHoverTimeout = null; applyHover(null); }, 80);
+    }
+    function cancelClearHover() {
+      if (clearHoverTimeout) { clearTimeout(clearHoverTimeout); clearHoverTimeout = null; }
+    }
+
+    function getLocalMouse(e, canvas) {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        mx: (e.clientX - rect.left) * (canvas.width  / rect.width),
+        my: (e.clientY - rect.top)  * (canvas.height / rect.height)
+      };
+    }
+
+    // --- 8. Selection ---
+    function setSelection(node, mode) {
+      if (selectedNode === node && fieldMode === mode) {
+        selectedNode = null;
+      } else {
+        selectedNode = node;
+        fieldMode = mode;
+      }
+      invalidateFieldCache();
+      renderSpatialCanvas();
+      renderTreeCanvas();
+    }
+
+    // --- 9. Spatial canvas events ---
+    spatialCanvas.addEventListener('mousemove', (e) => {
+      cancelClearHover();
+      const { mx, my } = getLocalMouse(e, spatialCanvas);
+
+      let newHover = null;
+      if (activeStage >= 2) newHover = hitTestBadges(centroidBadges, mx, my, 12);
+
+      const movedQuery = (activeStage === 3 && !newHover);
+      if (movedQuery) {
+        queryPoint.x = (mx - spatialCanvas.width / 2) / (spatialCanvas.width / 3);
+        queryPoint.y = (spatialCanvas.height / 2 - my) / (spatialCanvas.height / 3);
+      }
+
+      const hoverChanged = newHover !== hoveredNode;
+      if (hoverChanged || movedQuery) {
+        if (hoverChanged) {
+          hoveredNode = newHover;
+          spatialCanvas.style.cursor = hoveredNode ? 'pointer' : (activeStage === 3 ? 'crosshair' : 'default');
+          treeCanvas.style.cursor    = hoveredNode ? 'pointer' : 'default';
+        }
+        renderSpatialCanvas();
+        if (hoverChanged) renderTreeCanvas();
+      }
     });
 
+    spatialCanvas.addEventListener('mouseleave', scheduleClearHover);
+
+    spatialCanvas.addEventListener('click', () => {
+      if (activeStage < 2 || activeStage > 3) return;
+      if (hoveredNode) setSelection(hoveredNode, 'approx');
+      else if (selectedNode) { selectedNode = null; invalidateFieldCache(); renderSpatialCanvas(); renderTreeCanvas(); }
+    });
+
+    spatialCanvas.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      if (activeStage < 2 || activeStage > 3) return;
+      if (hoveredNode) setSelection(hoveredNode, 'true');
+    });
+
+    spatialCanvas.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      if (activeStage < 2 || activeStage > 3) return;
+      if (hoveredNode) setSelection(hoveredNode, 'true');
+    });
+
+    // --- 10. Tree canvas events ---
+    treeCanvas.style.cursor = 'default';
+
+    treeCanvas.addEventListener('mousemove', (e) => {
+      cancelClearHover();
+      if (activeStage < 2 || activeStage > 3) {
+        if (hoveredNode) applyHover(null);
+        return;
+      }
+      const { mx, my } = getLocalMouse(e, treeCanvas);
+      applyHover(hitTestBadges(treeNodeBadges, mx, my, 10));
+    });
+
+    treeCanvas.addEventListener('mouseleave', scheduleClearHover);
+
+    treeCanvas.addEventListener('click', () => {
+      if (activeStage < 2 || activeStage > 3) return;
+      if (hoveredNode) setSelection(hoveredNode, 'approx');
+    });
+
+    treeCanvas.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      if (activeStage < 2 || activeStage > 3) return;
+      if (hoveredNode) setSelection(hoveredNode, 'true');
+    });
+
+    treeCanvas.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      if (activeStage < 2 || activeStage > 3) return;
+      if (hoveredNode) setSelection(hoveredNode, 'true');
+    });
+
+    // --- 11. Stage management ---
     function updateActiveStage(stage) {
       activeStage = stage;
+      if (stage < 2 || stage > 3) { hoveredNode = null; selectedNode = null; }
+      invalidateFieldCache();
 
       for (let i = 0; i <= 4; i++) {
         const stepEl = document.getElementById(`fwn-step-${i}`);
@@ -1989,36 +2280,25 @@
           }
         }
       }
-
       renderSpatialCanvas();
       renderTreeCanvas();
     }
 
-    function getFragmentStage(slide) {
-      const visibleFrags = slide.querySelectorAll('.fragment.visible');
-      return visibleFrags.length;
-    }
+    function getFragmentStage(slide) { return slide.querySelectorAll('.fragment.visible').length; }
 
     Reveal.on('slidechanged', e => {
-      if (e.currentSlide.id === 'fast-winding-numbers-slide') {
-        updateActiveStage(getFragmentStage(e.currentSlide));
-      }
+      if (e.currentSlide.id === 'fast-winding-numbers-slide') updateActiveStage(getFragmentStage(e.currentSlide));
     });
-
     Reveal.on('fragmentshown', () => {
-      if (Reveal.getCurrentSlide().id === 'fast-winding-numbers-slide') {
-        updateActiveStage(getFragmentStage(Reveal.getCurrentSlide()));
-      }
+      if (Reveal.getCurrentSlide().id === 'fast-winding-numbers-slide') updateActiveStage(getFragmentStage(Reveal.getCurrentSlide()));
     });
-
     Reveal.on('fragmenthidden', () => {
-      if (Reveal.getCurrentSlide().id === 'fast-winding-numbers-slide') {
-        updateActiveStage(getFragmentStage(Reveal.getCurrentSlide()));
-      }
+      if (Reveal.getCurrentSlide().id === 'fast-winding-numbers-slide') updateActiveStage(getFragmentStage(Reveal.getCurrentSlide()));
     });
 
     updateActiveStage(0);
   })();
+
 </script>
 </body>
 </html>
