@@ -70,7 +70,7 @@ class WinderProperties(bpy.types.PropertyGroup):
         min=0.0,
         max=1,
         precision=4,
-        description="Regularization size as fraction of diagonal.",
+        description="Regularization size as fraction of AABB diagonal.",
         update=update_all_winding_fields,
     )
     is_quiver_creation_active: bpy.props.BoolProperty(
@@ -122,7 +122,7 @@ class VIEW3D_PT_winder_panel(bpy.types.Panel):
 
         row = layout.row(align=True)
         row.prop(props, "grid_padding")
-        row.prop(props, "epsilon")
+        layout.prop(props, "epsilon")
 
         # Display Freeze / Unfreeze toggle button for active object
         if obj and obj.type == "MESH":
