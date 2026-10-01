@@ -153,6 +153,7 @@ template <> struct TriangleContext<RegCompact> {
 // PointNormal context -- precompute all derived scalars
 // =============================================================================
 struct PointNormalContext {
+  float eps_length;
   float inv_eps_length;
   float reg_term_const;
   float near_field_g_denum;
@@ -163,19 +164,22 @@ struct PointNormalContext {
     constexpr float INV_PI_1_5 = 0.179587122F;
     const float eps_length = eps_fraction * scene_scale;
     if (eps_length <= 0.F) {
-      return PointNormalContext{.inv_eps_length = 0.F,
+      return PointNormalContext{.eps_length = 0.F,
+                                .inv_eps_length = 0.F,
                                 .reg_term_const = 0.F,
                                 .near_field_g_denum = 0.F};
     }
     const float inv_eps = 1.F / eps_length;
     const float inv_eps3 = inv_eps * inv_eps * inv_eps;
     return PointNormalContext{
+        .eps_length = eps_length,
         .inv_eps_length = inv_eps,
         .reg_term_const = inv_eps3 * INV_PI_1_5,
         .near_field_g_denum = (INV_PI_1_5 / 3.F) * inv_eps3,
     };
   }
 };
+
 template <> struct TriangleContext<RegSharp> {
   __host__ __device__ __forceinline__ static auto make(float /*eps*/)
       -> TriangleContext {
@@ -427,6 +431,14 @@ struct Triangle {
     return result;
   }
 
+  __host__ __device__ __forceinline__ auto get_radius() const -> float {
+    const Vec3 c = centroid();
+    const float d0 = (v0-c).length2();
+    const float d1 = (v1-c).length2();
+    const float d2 = (v2-c).length2();
+    return sqrtf(fmaxf(d0, fmaxf(d1, d2)));
+  }
+
   __host__ __device__ __forceinline__ auto get_weight() const -> float {
     Vec3 e1 = v1 - v0;
     Vec3 e2 = v2 - v0;
@@ -475,7 +487,7 @@ struct Triangle {
 
     const float va = d3 * d6 - d5 * d4;
     if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0) {
-      const float w = (d4 - d3) / ((d5 - d3) + (d5 - d6));
+      const float w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
       return (pos - (v1 + w * (v2 - v1))).length2();
     }
 
@@ -506,6 +518,16 @@ struct Triangle {
   __host__ __device__ __forceinline__ auto
   max_distance_to(const Vec3 &pos) const -> float {
     return sqrtf(max_distance_to2(pos));
+  }
+  __host__ __device__ __forceinline__ auto max_edge_length2() const {
+    const Vec3 e01 = v0 - v1;
+    const Vec3 e02 = v0 - v2;
+    const Vec3 e12 = v1 - v2;
+    const float l01_2 = e01.length2();
+    const float l02_2 = e02.length2();
+    const float l12_2 = e12.length2();
+    const float result_2 = fmaxf(fmaxf(l01_2, l02_2), l12_2);
+    return result_2;
   }
   __host__ __device__ __forceinline__ auto centroid() const -> Vec3 {
     return (v0 + v1 + v2) / 3.F;

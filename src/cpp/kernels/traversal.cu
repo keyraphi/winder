@@ -458,7 +458,7 @@ struct PointNormalGradientKernelParams {
   SoAView<Vec3> sorted_queries;
   uint32_t query_count;
   uint32_t geometry_count;
-  float beta_2;
+  float beta;
   PointNormalContext reg_context;
   SceneNormalization norm;
 };
@@ -559,8 +559,8 @@ __global__ void __launch_bounds__(128) compute_point_normal_gradient_kernel(
       // taylor coefficients
       bool need_taylor_coefficients =
           is_active && should_node_be_approximated(
-                           my_geometry, current_node.getAABB(), params.beta_2,
-                           params.reg_context.inv_eps_length);
+                           my_geometry, current_node.getAABB(), params.beta,
+                           params.reg_context);
 
       uint32_t load_taylor_coefficients_mask =
           __ballot_sync(0xFFFFFFFF, need_taylor_coefficients);
@@ -683,8 +683,6 @@ void compute_point_normal_gradients(
     return;
   }
 
-  float beta_2 = params.beta * params.beta;
-
   int threads = 128;
   int blocks_per_sm = 0;
 
@@ -715,7 +713,7 @@ void compute_point_normal_gradients(
       .sorted_queries = params.sorted_queries,
       .query_count = params.query_count,
       .geometry_count = params.geometry_count,
-      .beta_2 = beta_2,
+      .beta = params.beta,
       .reg_context = ctx,
       .norm = params.norm};
   compute_point_normal_gradient_kernel<<<blocks, threads, 0, stream>>>(
@@ -787,7 +785,7 @@ struct TriangleGradientKernelParams {
   SoAView<Vec3> sorted_queries;
   uint32_t query_count;
   uint32_t geometry_count;
-  float beta_2;
+  float beta;
   typename Triangle::Context reg_context;
   SceneNormalization norm;
 };
@@ -894,7 +892,7 @@ __global__ void __launch_bounds__(128) compute_triangle_gradient_kernel(
       bool need_taylor_coefficients =
           is_active &&
           should_node_be_approximated(shared_warp_geometry[warp_id][lane_id],
-                                      current_node.getAABB(), params.beta_2,
+                                      current_node.getAABB(), params.beta,
                                       params.reg_context);
 
       uint32_t load_taylor_coefficients_mask =
@@ -1011,7 +1009,6 @@ void compute_triangle_gradients(const ComputeGradientsTriangleParams &params,
     return;
   }
 
-  float beta_2 = params.beta * params.beta;
 
   int threads = 128;
   int blocks_per_sm = 0;
@@ -1042,7 +1039,7 @@ void compute_triangle_gradients(const ComputeGradientsTriangleParams &params,
       .sorted_queries = params.sorted_queries,
       .query_count = params.query_count,
       .geometry_count = params.geometry_count,
-      .beta_2 = beta_2,
+      .beta = params.beta,
       .reg_context = ctx,
       .norm = params.norm};
   compute_triangle_gradient_kernel<<<blocks, threads, 0, stream>>>(

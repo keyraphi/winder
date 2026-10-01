@@ -1051,6 +1051,12 @@ def compute_taylor_gradient_v0(
 def generate_random_triangle(scale: float = 1.0) -> np.ndarray:
     return np.random.uniform(-scale, scale, size=(3, 3))
 
+def make_sliver(scale=1.0, aspect=100.0):
+    v0 = np.array([0.0, 0.0, 0.0])
+    v1 = np.array([0.0, scale / aspect, 0.0])
+    v2 = np.array([scale, 0.0, 0.0])
+    return np.array([v0, v1, v2])
+
 
 def generate_random_cluster(center: np.ndarray, radius: float, num_points: int = 50):
     # Uniform random distribution within a sphere
@@ -1158,6 +1164,7 @@ def run_random_monte_carlo_suite(num_trials: int = 1000):
 
     for trial in range(num_trials):
         triangle = generate_random_triangle(scale=2.0)
+        triangle = make_sliver()
         tri_centroid = np.mean(triangle, axis=0)
 
         dist = np.random.uniform(4.0, 10.0)

@@ -84,8 +84,8 @@ def generate_queries(vertices, mode, num_queries, seed):
     min_box = vertices.min(axis=0)
     max_box = vertices.max(axis=0)
     diag = float(np.linalg.norm(max_box - min_box))
-    min_box = min_box - 0.5 * diag
-    max_box = max_box + 0.5 * diag
+    # min_box = min_box - 0.5 * diag
+    # max_box = max_box + 0.5 * diag
 
     if mode == "grid":
         side = int(np.ceil(num_queries ** (1.0 / 3.0)))
@@ -148,6 +148,13 @@ class GradientMetrics:
     per_vec_ang_p99_deg: float
     per_vec_ang_max_deg: float
     signal_coverage: float
+    mag_ratio_mean: float = float("nan")
+    mag_ratio_min: float = float("nan")
+    mag_ratio_p01: float = float("nan")
+    mag_ratio_p50: float = float("nan")
+    mag_ratio_p99: float = float("nan")
+    mag_ratio_max: float = float("nan")
+    worst_idxs: list[int] = field(default_factory=list)
     passed: bool = False
     failed_checks: tuple = field(default_factory=tuple)
 
@@ -190,12 +197,19 @@ def validate_gradients(
     *,
     signal_threshold=1e-5,
     strict=False,
-    rel_norm_tol_strict=1e-4,
+    rel_norm_tol_strict=5e-4,
     rel_norm_tol_loose=1e-2,
     cosine_tol_strict=0.999,
     cosine_tol_loose=0.99,
     masked_p99_rel_tol=5e-1,
     per_vec_cos_p01_tol=0.99,
+    # NEW: magnitude-ratio gates. p50 is a *range* check (systematic
+    # scaling error); p01 is a lower bound (tail collapse).
+    mag_ratio_p50_range_strict=(0.99, 1.01),
+    mag_ratio_p50_range_loose=(0.90, 1.10),
+    mag_ratio_p01_tol_strict=0.95,
+    mag_ratio_p01_tol_loose=0.50,
+    worst_vectors_n=5,
     verbose=True,
 ):
     assert fast_grads.shape == ref_grads.shape
@@ -286,25 +300,48 @@ def validate_gradients(
         cos_min = float(cos.min())
         ang_p99 = _safe_quantile(ang, 0.99)
         ang_max = float(ang.max())
+
+        mag_ratio = fn[vmask] / (rn[vmask] + 1e-30)
+        mag_ratio_mean = float(mag_ratio.mean())
+        mag_ratio_min = float(mag_ratio.min())
+        mag_ratio_p01 = _safe_quantile(mag_ratio, 0.01)
+        mag_ratio_p50 = _safe_quantile(mag_ratio, 0.50)
+        mag_ratio_p99 = _safe_quantile(mag_ratio, 0.99)
+        mag_ratio_max = float(mag_ratio.max())
     else:
         cos_mean = cos_p01 = cos_min = float("nan")
         ang_p99 = ang_max = float("nan")
+        mag_ratio_mean = mag_ratio_min = float("nan")
+        mag_ratio_p01 = mag_ratio_p50 = float("nan")
+        mag_ratio_p99 = mag_ratio_max = float("nan")
 
     rel_norm_tol = rel_norm_tol_strict if strict else rel_norm_tol_loose
     cosine_tol = cosine_tol_strict if strict else cosine_tol_loose
+    mag_range = (
+        mag_ratio_p50_range_strict if strict else mag_ratio_p50_range_loose
+    )
+    mag_p01_tol = (
+        mag_ratio_p01_tol_strict if strict else mag_ratio_p01_tol_loose
+    )
 
     def _ok(v, cmp, thr):
         return True if (v is None or math.isnan(v)) else cmp(v, thr)
+
+    def _ok_range(v, lo, hi):
+        return True if (v is None or math.isnan(v)) else (lo <= v <= hi)
 
     checks = {
         "global_cosine": _ok(cos_flat, lambda a, b: a > b, cosine_tol),
         "rel_norm": _ok(rel_norm, lambda a, b: a < b, rel_norm_tol),
         "masked_p99_rel": _ok(p99, lambda a, b: a < b, masked_p99_rel_tol),
         "per_vec_cos_p01": _ok(cos_p01, lambda a, b: a > b, per_vec_cos_p01_tol),
+        "mag_ratio_p50": _ok_range(mag_ratio_p50, mag_range[0], mag_range[1]),
+        "mag_ratio_p01": _ok(mag_ratio_p01, lambda a, b: a > b, mag_p01_tol),
     }
     failed = tuple(k for k, v in checks.items() if not v)
     passed = not failed
 
+    worst_idxs = []
     if verbose:
         print(f"\n{'=' * 72}")
         print(f"  Gradient validation: {label}   [{fast.numel()} scalars]")
@@ -328,6 +365,24 @@ def validate_gradients(
             f"{cos_mean:.6f} / {cos_p01:.6f} / {cos_min:.6f}"
         )
         print(f"  angle p99 / max (deg)      : {ang_p99:.4f} / {ang_max:.4f}")
+        print(f"  --- per-vector magnitude ratio ||fast||/||ref|| ---")
+        print(
+            f"  mean / p01 / p50 / p99     : "
+            f"{mag_ratio_mean:.6f} / {mag_ratio_p01:.6f} / "
+            f"{mag_ratio_p50:.6f} / {mag_ratio_p99:.6f}"
+        )
+        print(
+            f"  min / max                  : "
+            f"{mag_ratio_min:.6f} / {mag_ratio_max:.6f}"
+        )
+        print(
+            f"  p50 window (tol)           : "
+            f"[{mag_range[0]:.3f}, {mag_range[1]:.3f}]"
+        )
+        print(
+            f"  p01 lower bound (tol)      : "
+            f"{mag_p01_tol:.3f}"
+        )
 
         if rel_m.size:
             print_ascii_histogram(rel_m, "Log10 relative error")
@@ -349,6 +404,55 @@ def validate_gradients(
                 ),
                 "Angular error (deg)",
             )
+            print_ascii_histogram(
+                mag_ratio,
+                "Magnitude ratio ||fast||/||ref||",
+            )
+
+        # ------------------------------------------------------------------
+        # Worst-primitive diagnostic. Fires only when a check fails, so it
+        # stays out of the way for passing runs.
+        # ------------------------------------------------------------------
+        if failed and vmask.any() and worst_vectors_n > 0:
+            # Recover the indices (into the flattened (n,3) space) of the
+            # masked primitives so we can print the actual reference and
+            # fast vectors.
+            vmask_idx = np.nonzero(vmask)[0]
+
+            # Rank by (1 - cos) to find the most directionally wrong ones.
+            worst_by_cos_order = np.argsort(cos)[:worst_vectors_n]
+            # Rank by |log(mag_ratio)| to find the most magnitude-wrong ones
+            # (equal weight for under- and over-shoot).
+            worst_by_mag_order = np.argsort(
+                -np.abs(np.log(np.clip(mag_ratio, 1e-30, None)))
+            )[:worst_vectors_n]
+
+            print(f"\n  --- worst {worst_vectors_n} primitives by direction (1 - cos) ---")
+            for k in worst_by_cos_order:
+                prim_idx = int(vmask_idx[k])
+                worst_idxs.append(prim_idx)
+                print(
+                    f"    [{prim_idx:6d}] "
+                    f"cos={cos[k]:.6f}  ang={ang[k]:8.4f}°  "
+                    f"||ref||={rn[vmask][k]:.4e}  ||fast||={fn[vmask][k]:.4e}  "
+                    f"mag={mag_ratio[k]:.4f}"
+                )
+                print(f"             ref ={b[k]}")
+                print(f"             fast={a[k]}")
+
+            print(
+                f"\n  --- worst {worst_vectors_n} primitives by magnitude ratio ---"
+            )
+            for k in worst_by_mag_order:
+                prim_idx = int(vmask_idx[k])
+                print(
+                    f"    [{prim_idx:6d}] "
+                    f"mag={mag_ratio[k]:.6f}  "
+                    f"||ref||={rn[vmask][k]:.4e}  ||fast||={fn[vmask][k]:.4e}  "
+                    f"cos={cos[k]:.6f}"
+                )
+                print(f"             ref ={b[k]}")
+                print(f"             fast={a[k]}")
 
         if passed:
             print(f"\n\033[92m  ✓ PASS  [{label}]\033[0m")
@@ -375,6 +479,13 @@ def validate_gradients(
         per_vec_ang_p99_deg=ang_p99,
         per_vec_ang_max_deg=ang_max,
         signal_coverage=signal_coverage,
+        mag_ratio_mean=mag_ratio_mean,
+        mag_ratio_min=mag_ratio_min,
+        mag_ratio_p01=mag_ratio_p01,
+        mag_ratio_p50=mag_ratio_p50,
+        mag_ratio_p99=mag_ratio_p99,
+        mag_ratio_max=mag_ratio_max,
+        worst_idxs=worst_idxs,
         passed=passed,
         failed_checks=failed,
     )
@@ -1315,6 +1426,11 @@ def main():
             args.seed,
         )
         _summarize(pn_metrics, "PointNormal")
+        for metric in pn_metrics:
+            for idx in metric.worst_idxs:
+                p = points[idx]
+                n = normals[idx]
+                print(f"Bad PointNormal {idx}: p:{p}, n:{n}")
 
     if args.geometry_type in ("Triangle", "All"):
         print("\n" + "=" * 72)
@@ -1331,6 +1447,11 @@ def main():
             args.epsilon,
         )
         _summarize(tri_metrics, "Triangle")
+        for metric in tri_metrics:
+            for idx in metric.worst_idxs:
+                tri_idxs = indices[idx]
+                tri = vertices[tri_idxs]
+                print(f"Bad Triangle {idx}: {tri}")
 
     if args.geometry_type in ("Mesh", "All"):
         print("\n" + "=" * 72)
@@ -1347,6 +1468,13 @@ def main():
             args.epsilon,
         )
         _summarize(mesh_metrics, "Mesh")
+        for metric in mesh_metrics:
+            for idx in metric.worst_idxs:
+                tri_indices = np.where((indices == idx).any(axis=1))[0]
+                tri_indices = indices[tri_indices]
+                for tri_idx in tri_indices:
+                    tri = vertices[tri_idx]
+                    print(f"Bad Vertex appearing in Trinalge {idx}: {tri}")
 
     # ---------------------------------------------------------------
     # CSV

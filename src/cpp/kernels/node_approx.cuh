@@ -21,49 +21,40 @@ __device__ __forceinline__ auto should_node_be_approximated(const Vec3 &query,
 
 __device__ __forceinline__ auto
 should_node_be_approximated(const PointNormal &geometry, const AABB &aabb,
-                            const float beta_2, const float inv_epsilon)
+                            const float beta, const PointNormalContext &ctx)
     -> bool {
-  Vec3 com = aabb.center_of_mass;
-  float max_distance = __half2float(aabb.max_distance);
-  float dist_geometry_to_com2 = (geometry.centroid() - com).length2();
-  if (inv_epsilon > 0.F) {
-    const float min_far_field_dist2 = 4.0F / (inv_epsilon * inv_epsilon);
-    if (dist_geometry_to_com2 < min_far_field_dist2) {
-      return false;
-    }
-    // Far-field check with the effective radius.
-    const float effective_R = fmaxf(max_distance, 2.F / inv_epsilon);
-    return dist_geometry_to_com2 > effective_R * effective_R * beta_2;
+  const float R = __half2float(aabb.max_distance);
+  const float dist_com2 = (geometry.centroid() - aabb.center_of_mass).length2();
 
+  if (ctx.inv_eps_length <= 0.F) {
+    const float one_plus_beta = 1.F + beta;
+    return dist_com2 > (one_plus_beta * one_plus_beta) * (R * R);
   }
-  // Sharp dipol - criterion like in the forward pass
-  return dist_geometry_to_com2 > (max_distance * max_distance * beta_2);
+  const float thresh_r = (1.F + beta) * R;
+  const float thresh_e = R + 2.F * ctx.eps_length;
+  const float thresh = fmaxf(thresh_r, thresh_e);
+  return dist_com2 > thresh * thresh;
 }
 
 template <typename Reg>
 __device__ __forceinline__ auto
 should_node_be_approximated(const Triangle &geometry, const AABB &aabb,
-                            const float beta_2, const TriangleContext<Reg> ctx)
+                            const float beta, const TriangleContext<Reg> ctx)
     -> bool {
   const Vec3 com = aabb.center_of_mass;
-  const float dist_geometry_to_com2 = geometry.min_vert_distance_to2(com);
+  const float R = __half2float(aabb.max_distance);
+  const float dist_com2 = geometry.distance_to2(com);
 
   if constexpr (std::is_same_v<Reg, RegSharp>) {
-    // No regularization: pure sharp criterion.
-    const float R = __half2float(aabb.max_distance);
-    return dist_geometry_to_com2 > R * R * beta_2;
+    // Sharp: only the BH opening criterion applies.
+    const float one_plus_beta = 1.F + beta;
+    return dist_com2 > (one_plus_beta * one_plus_beta) * (R * R);
   } else {
-    // Near-field guard: refuse to approximate if the nearest vertex is
-    // inside the regularized band.
-    if (dist_geometry_to_com2 < 4.F * ctx.eps_length2) {
-      return false;
-    }
-
-    // Far-field check with the effective radius.
-    const float R = __half2float(aabb.max_distance);
-    const float two_eps = 2.F * ctx.eps_length; // or store eps in ctx
-    const float effective_R = fmaxf(R, two_eps);
-    return dist_geometry_to_com2 > effective_R * effective_R * beta_2;
+    // Regularized: ball must clear both the band and the BH opening cone.
+    const float thresh_r = (1.F + beta) * R;
+    const float thresh_e = R + 2.F * ctx.eps_length;
+    const float thresh = fmaxf(thresh_r, thresh_e);
+    return dist_com2 > thresh * thresh;
   }
 }
 
