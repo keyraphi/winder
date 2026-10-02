@@ -30,6 +30,10 @@ bool cuda_memcpy(void *dest, void *src, size_t bytes);
 void thrust_fill_float(float *ptr, size_t count, float value);
 } // namespace winder_cuda
 
+void reduce_async(const float *array, float *sum, uint32_t array_len,
+            cudaStream_t compute_stream);
+
+
 struct SceneParams {
   float scale;
   AABB bounds;

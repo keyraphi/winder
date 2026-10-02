@@ -45,6 +45,7 @@ struct ComputeGradientsPointNormalParams {
   uint32_t query_count;
   uint32_t geometry_count;
   float *gradients;
+  float *epsilon_gradients;
   uint32_t *global_device_counter;
   const float beta;
   const float epsilon;
@@ -68,6 +69,7 @@ struct ComputeGradientsTriangleParams {
   uint32_t query_count;
   uint32_t geometry_count;
   float *gradients;
+  float *epsilon_gradients;
   uint32_t *global_device_counter;
   const float beta;
   const float epsilon;
