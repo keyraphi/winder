@@ -1,6 +1,9 @@
 #include "aabb.h"
+#include "cub/device/device_reduce.cuh"
 #include "geometry.h"
 #include "kernels/common.cuh"
+#include "thrust/detail/fill.inl"
+#include "thrust/detail/reduce.inl"
 #include "utils.h"
 #include "vec3.h"
 #include <cmath>
@@ -82,7 +85,8 @@ template <IsPrimitiveGeometry PrimitiveGeometry> struct GeometryToSceneBounds {
 };
 
 struct MergeSceneBounds {
-  __device__ auto operator()(const SceneBounds &a, const SceneBounds &b) const -> SceneBounds {
+  __device__ auto operator()(const SceneBounds &a, const SceneBounds &b) const
+      -> SceneBounds {
     return SceneBounds::merge(a, b);
   }
 };
@@ -149,9 +153,9 @@ auto computeSceneBounds(const PrimitiveGeometry *geometry, const size_t count,
   auto bounds_transform = thrust::make_transform_iterator(
       geometry, GeometryToSceneBounds<PrimitiveGeometry>{});
 
-  SceneBounds scene_bounds =
-      thrust::reduce(build_stream_policy, bounds_transform,
-                     bounds_transform + count, SceneBounds::empty(), MergeSceneBounds{});
+  SceneBounds scene_bounds = thrust::reduce(
+      build_stream_policy, bounds_transform, bounds_transform + count,
+      SceneBounds::empty(), MergeSceneBounds{});
   return scene_bounds;
 }
 
@@ -177,6 +181,25 @@ auto initializeMortonCodes(const PrimitiveGeometry *geometry,
   CUDA_CHECK(cudaGetLastError());
 }
 
+void reduce_async(const float *array, float *sum, const uint32_t array_len,
+                  cudaStream_t compute_stream) {
+  void *temp_storage = nullptr;
+  size_t temp_storage_bytes = 0;
+
+  CUDA_CHECK(cub::DeviceReduce::Sum(temp_storage, temp_storage_bytes, array,
+                                    sum, array_len, compute_stream));
+
+  if (temp_storage_bytes > 0) {
+    CUDA_CHECK(
+        cudaMallocAsync(&temp_storage, temp_storage_bytes, compute_stream));
+  }
+
+  CUDA_CHECK(cub::DeviceReduce::Sum(temp_storage, temp_storage_bytes, array,
+                                    sum, array_len, compute_stream));
+
+  CUDA_CHECK(cudaFreeAsync(temp_storage, compute_stream));
+}
+
 template void initializeMortonCodes<Vec3>(const Vec3 *geometry,
                                           uint64_t *geometry_morton_codes,
                                           size_t count, cudaStream_t stream,
@@ -187,9 +210,12 @@ template void initializeMortonCodes<Triangle>(const Triangle *geometry,
                                               size_t count, cudaStream_t stream,
                                               SceneBounds *out_scene_bounds);
 
-template SceneBounds computeSceneBounds<Vec3>(const Vec3 *geometry, const size_t count,
-                                       cudaStream_t stream);
-template SceneBounds computeSceneBounds<PointNormal>(const PointNormal *geometry, const size_t count,
-                                       cudaStream_t stream);
-template SceneBounds computeSceneBounds<Triangle>(const Triangle *geometry, const size_t count,
-                                       cudaStream_t stream);
+template SceneBounds computeSceneBounds<Vec3>(const Vec3 *geometry,
+                                              const size_t count,
+                                              cudaStream_t stream);
+template SceneBounds
+computeSceneBounds<PointNormal>(const PointNormal *geometry, const size_t count,
+                                cudaStream_t stream);
+template SceneBounds computeSceneBounds<Triangle>(const Triangle *geometry,
+                                                  const size_t count,
+                                                  cudaStream_t stream);

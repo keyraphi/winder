@@ -30,6 +30,8 @@ using TriangleIdx_t = nb::ndarray<nb::array_api, uint32_t, nb::shape<-1, 3>,
                                   nb::c_contig, nb::device::cuda>;
 using Scalar_t = nb::ndarray<nb::array_api, float, nb::shape<-1>, nb::c_contig,
                              nb::device::cuda>;
+using SingleScalar_t = nb::ndarray<nb::array_api, float, nb::shape<1>,
+                                   nb::c_contig, nb::device::cuda>;
 using GradResult_t = nb::ndarray<nb::array_api, float, nb::shape<-1, -1, 3>,
                                  nb::c_contig, nb::device::cuda>;
 using VertexGradResult_t = nb::ndarray<nb::array_api, float, nb::shape<-1, 3>,
@@ -121,6 +123,7 @@ auto brute_force_winding_numbers(const Triangle_t &triangles,
 auto brute_force_gradients(const Scalar_t &grad_output, const Vec3_t &points,
                            const Vec3_t &scaled_normals, const Vec3_t &queries,
                            GradResult_t &output_gradients,
+                           SingleScalar_t &epsilon_gradient,
                            float epsilon = 0.004F, const uint64_t stream = 0)
     -> void {
   if (points.device_id() != grad_output.device_id()) {
@@ -155,14 +158,15 @@ auto brute_force_gradients(const Scalar_t &grad_output, const Vec3_t &points,
   }
   brute_force_point_normal_gradient_impl(
       grad_output.data(), points.data(), scaled_normals.data(), queries.data(),
-      points.shape(0), queries.shape(0), output_gradients.data(), epsilon,
-      points.device_id(), stream);
+      points.shape(0), queries.shape(0), output_gradients.data(),
+      epsilon_gradient.data(), epsilon, points.device_id(), stream);
 }
 
 auto brute_force_gradients(const Scalar_t &grad_output, const Vec3_t &vertices,
                            const TriangleIdx_t &triangle_indices,
                            const Vec3_t &queries,
                            VertexGradResult_t &output_gradients,
+                           SingleScalar_t &epsilon_gradient,
                            float epsilon = 0.004F, const uint64_t stream = 0)
     -> void {
   if (vertices.device_id() != grad_output.device_id()) {
@@ -188,16 +192,17 @@ auto brute_force_gradients(const Scalar_t &grad_output, const Vec3_t &vertices,
   if (output_gradients.shape(1) != 3) {
     throw std::runtime_error("Shape[1] of output_gradients has to be 3");
   }
-  brute_force_mesh_gradient_impl(grad_output.data(), vertices.data(),
-                                 triangle_indices.data(), queries.data(),
-                                 triangle_indices.shape(0), queries.shape(0),
-                                 vertices.shape(0), output_gradients.data(),
-                                 epsilon, vertices.device_id(), stream);
+  brute_force_mesh_gradient_impl(
+      grad_output.data(), vertices.data(), triangle_indices.data(),
+      queries.data(), triangle_indices.shape(0), queries.shape(0),
+      vertices.shape(0), output_gradients.data(), epsilon_gradient.data(),
+      epsilon, vertices.device_id(), stream);
 }
 
 auto brute_force_gradients(const Scalar_t &grad_output,
                            const Triangle_t &triangles, const Vec3_t &queries,
                            GradResult_t &output_gradients,
+                           SingleScalar_t &epsilon_gradient,
                            float epsilon = 0.004F, const uint64_t stream = 0)
     -> void {
   if (triangles.device_id() != grad_output.device_id()) {
@@ -222,10 +227,10 @@ auto brute_force_gradients(const Scalar_t &grad_output,
   if (output_gradients.shape(2) != 3) {
     throw std::runtime_error("Shape[2] of output_gradients has to be 3");
   }
-  brute_force_triangle_gradient_impl(grad_output.data(), triangles.data(),
-                                     queries.data(), triangles.shape(0),
-                                     queries.shape(0), output_gradients.data(),
-                                     epsilon, triangles.device_id(), stream);
+  brute_force_triangle_gradient_impl(
+      grad_output.data(), triangles.data(), queries.data(), triangles.shape(0),
+      queries.shape(0), output_gradients.data(), epsilon_gradient.data(),
+      epsilon, triangles.device_id(), stream);
 }
 
 class GradientEngine {
@@ -249,8 +254,9 @@ public:
 
   // PointNormal
   auto compute(const Vec3_t &points, const Vec3_t &scaled_normals,
-               GradResult_t &output_gradients, float beta = -1.F,
-               float epsilon = 0.004F, const uint64_t stream = 0) -> void {
+               GradResult_t &output_gradients, SingleScalar_t &epsilon_gradient,
+               float beta = -1.F, float epsilon = 0.004F,
+               const uint64_t stream = 0) -> void {
     if (points.device_id() != scaled_normals.device_id()) {
       throw std::runtime_error(
           "points and scaled_normals must be on the same CUDA device.");
@@ -268,12 +274,14 @@ public:
           "Shape[0] of points must be equal to shape[0] of output_gradients");
     }
     m_impl.compute(points.data(), scaled_normals.data(), points.shape(0),
-                   output_gradients.data(), beta, epsilon, stream);
+                   output_gradients.data(), epsilon_gradient.data(), beta,
+                   epsilon, stream);
   }
 
   // Mesh
   auto compute(const Vec3_t &vertices, const TriangleIdx_t &triangle_indices,
-               VertexGradResult_t &output_gradients, float beta = -1.F,
+               VertexGradResult_t &output_gradients,
+               SingleScalar_t &epsilon_gradient, float beta = -1.F,
                float epsilon = 0.004F, const uint64_t stream = 0) -> void {
 
     if (vertices.device_id() != triangle_indices.device_id()) {
@@ -289,13 +297,13 @@ public:
           "Shape[0] of vertices must be equal to shape[0] of output_gradients");
     }
     m_impl.compute(vertices.data(), triangle_indices.data(), vertices.shape(0),
-                   triangle_indices.shape(0), output_gradients.data(), beta,
-                   epsilon, stream);
+                   triangle_indices.shape(0), output_gradients.data(),
+                   epsilon_gradient.data(), beta, epsilon, stream);
   }
   // Triangles
   auto compute(const Triangle_t &triangles, GradResult_t &output_gradients,
-               float beta = -1.F, float epsilon = 0.004F,
-               const uint64_t stream = 0) -> void {
+               SingleScalar_t &epsilon_gradient, float beta = -1.F,
+               float epsilon = 0.004F, const uint64_t stream = 0) -> void {
     if (triangles.device_id() != output_gradients.device_id()) {
       throw std::runtime_error(
           "triangles and output_gradients must be on the same CUDA device.");
@@ -306,7 +314,8 @@ public:
     }
 
     m_impl.compute(triangles.data(), triangles.shape(0),
-                   output_gradients.data(), beta, epsilon, stream);
+                   output_gradients.data(), epsilon_gradient.data(), beta,
+                   epsilon, stream);
   }
 
   [[nodiscard]] auto dump() const -> std::string {
@@ -586,10 +595,11 @@ NB_MODULE(winder_module, m) {
   m.def(
       "brute_force_gradients_point_normal",
       nb::overload_cast<const Scalar_t &, const Vec3_t &, const Vec3_t &,
-                        const Vec3_t &, GradResult_t &, float, const uint64_t>(
-          &brute_force_gradients),
+                        const Vec3_t &, GradResult_t &, SingleScalar_t &, float,
+                        const uint64_t>(&brute_force_gradients),
       "grad_output"_a, "points"_a, "scaled_normals"_a, "queries"_a,
-      "out_gradients"_a, "epsilon"_a = 0.004F, "stream"_a = 0,
+      "out_gradients"_a, "epsilon_gradient"_a, "epsilon"_a = 0.004F,
+      "stream"_a = 0,
       nb::sig("def brute_force_gradients_point_normal(grad_output: "
               "winder.types.Array[winder.types.Shape[winder.types.M], "
               "winder.types.float32, "
@@ -605,7 +615,11 @@ NB_MODULE(winder_module, m) {
               "out_gradients: "
               "winder.types.Array[winder.types.Shape[winder.types.N, "
               "typing.Literal[2], typing.Literal[3]], winder.types.float32, "
-              "winder.types.cuda], epsilon: float = 0.004, "
+              "winder.types.cuda], "
+              "epsilon_gradient: "
+              "winder.types.Array[winder.types.Shape[typein.Literal[1]], "
+              "winder.types.float32, winder.types.cuda], "
+              "epsilon: float = 0.004, "
               "stream: int = 0) -> None"),
       (std::string(R"doc(
                 Compute the partial derivatives w.r.t. the given point
@@ -655,10 +669,10 @@ NB_MODULE(winder_module, m) {
   m.def(
       "brute_force_gradients_mesh",
       nb::overload_cast<const Scalar_t &, const Vec3_t &, const TriangleIdx_t &,
-                        const Vec3_t &, VertexGradResult_t &, float,
+                        const Vec3_t &, VertexGradResult_t &, SingleScalar_t &, float,
                         const uint64_t>(&brute_force_gradients),
       "grad_output"_a, "vertices"_a, "triangle_indices"_a, "queries"_a,
-      "out_gradients"_a, "epsilon"_a = 0.004F, "stream"_a = 0,
+      "out_gradients"_a, "epsilon_gradient"_a, "epsilon"_a = 0.004F, "stream"_a = 0,
       nb::sig("def brute_force_gradients_mesh(grad_output: "
               "winder.types.Array[winder.types.Shape[winder.types.M], "
               "winder.types.float32, "
@@ -674,6 +688,9 @@ NB_MODULE(winder_module, m) {
               "out_gradients: "
               "winder.types.Array[winder.types.Shape[winder.types.K, "
               "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+              "epsilon_gradient: "
+              "winder.types.Array[winder.types.Shape[typein.Literal[1]], "
+              "winder.types.float32, winder.types.cuda], "
               "epsilon: float = 0.004, "
               "stream: int = 0) -> None"),
       (std::string(R"doc(
@@ -720,9 +737,10 @@ NB_MODULE(winder_module, m) {
   // --- Triangle soup -------------------------------------------------------
   m.def("brute_force_gradients_triangle_soup",
         nb::overload_cast<const Scalar_t &, const Triangle_t &, const Vec3_t &,
-                          GradResult_t &, float, const uint64_t>(
+                          GradResult_t &, SingleScalar_t &, float, const uint64_t>(
             &brute_force_gradients),
         "grad_output"_a, "triangles"_a, "queries"_a, "out_gradients"_a,
+        "epsilon_gradient"_a,
         "epsilon"_a = 0.004F, "stream"_a = 0,
         nb::sig("def brute_force_gradients_triangle_soup(grad_output: "
                 "winder.types.Array[winder.types.Shape[winder.types.M], "
@@ -737,6 +755,9 @@ NB_MODULE(winder_module, m) {
                 "winder.types.Array[winder.types.Shape[winder.types.N, "
                 "typing.Literal[3], typing.Literal[3]], winder.types.float32, "
                 "winder.types.cuda], "
+                "epsilon_gradient: "
+                "winder.types.Array[winder.types.Shape[typein.Literal[1]], "
+                "winder.types.float32, winder.types.cuda], "
                 "epsilon: float = 0.004, "
                 "stream: int "
                 "= 0) -> None"),
@@ -945,9 +966,9 @@ NB_MODULE(winder_module, m) {
       .def(
           "compute_mesh",
           nb::overload_cast<const Vec3_t &, const TriangleIdx_t &,
-                            VertexGradResult_t &, float, float, const uint64_t>(
+                            VertexGradResult_t &, SingleScalar_t &, float, float, const uint64_t>(
               &GradientEngine::compute),
-          "vertices"_a, "triangle_indices"_a, "out_gradients"_a,
+          "vertices"_a, "triangle_indices"_a, "out_gradients"_a, "epsilon_gradient"_a,
           "beta"_a = -1.F, "epsilon"_a = 0.004F, "stream"_a = 0,
           nb::sig(
               "def compute_mesh(self, vertices: "
@@ -959,6 +980,9 @@ NB_MODULE(winder_module, m) {
               "out_gradients: "
               "winder.types.Array[winder.types.Shape[winder.types.K, "
               "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+              "epsilon_gradient: "
+              "winder.types.Array[winder.types.Shape[typein.Literal[1]], "
+              "winder.types.float32, winder.types.cuda], "
               "beta: float = -1, epsilon: float = 0.004, "
               "stream: int = 0) "
               "-> None"),
@@ -999,9 +1023,9 @@ NB_MODULE(winder_module, m) {
 
       // --- compute_triangle_soup -------------------------------------------
       .def("compute_triangle_soup",
-           nb::overload_cast<const Triangle_t &, GradResult_t &, float, float,
+           nb::overload_cast<const Triangle_t &, GradResult_t &, SingleScalar_t &, float, float,
                              const uint64_t>(&GradientEngine::compute),
-           "triangles"_a, "out_gradients"_a, "beta"_a = -1.F,
+           "triangles"_a, "out_gradients"_a, "epsilon_gradient"_a, "beta"_a = -1.F,
            "epsilon"_a = 0.004F, "stream"_a = 0,
            nb::sig("def compute_triangle_soup(self, triangles: "
                    "winder.types.Array[winder.types.Shape[winder.types.N, "
@@ -1010,6 +1034,9 @@ NB_MODULE(winder_module, m) {
                    "out_gradients: "
                    "winder.types.Array[winder.types.Shape[winder.types.N, "
                    "typing.Literal[3], typing.Literal[3]], "
+                   "winder.types.float32, winder.types.cuda], "
+                   "epsilon_gradient: "
+                   "winder.types.Array[winder.types.Shape[typein.Literal[1]], "
                    "winder.types.float32, winder.types.cuda], "
                    "beta: float = -1, "
                    "epsilon: float = 0.004, "
@@ -1050,9 +1077,9 @@ NB_MODULE(winder_module, m) {
       // --- compute_point_normal --------------------------------------------
       .def("compute_point_normal",
            nb::overload_cast<const Vec3_t &, const Vec3_t &, GradResult_t &,
-                             float, float, const uint64_t>(
+                             SingleScalar_t &, float, float, const uint64_t>(
                &GradientEngine::compute),
-           "points"_a, "scaled_normals"_a, "out_gradients"_a, "beta"_a = -1.F,
+           "points"_a, "scaled_normals"_a, "out_gradients"_a, "epsilon_gradient"_a, "beta"_a = -1.F,
            "epsilon"_a = 0.004F, "stream"_a = 0,
            nb::sig(
                "def compute_point_normal(self, points: "
@@ -1065,6 +1092,9 @@ NB_MODULE(winder_module, m) {
                "winder.types.Array[winder.types.Shape[winder.types.N, "
                "typing.Literal[2], typing.Literal[3]], winder.types.float32, "
                "winder.types.cuda], "
+               "epsilon_gradient: "
+               "winder.types.Array[winder.types.Shape[typein.Literal[1]], "
+               "winder.types.float32, winder.types.cuda], "
                "beta: float = -1, epsilon: float = 0.004, "
                "stream: int = 0) "
                "-> None"),

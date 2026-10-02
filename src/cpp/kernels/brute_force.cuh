@@ -20,12 +20,12 @@ void compute_brute_force_triangle(const Vec3 *queries_vec3,
 void compute_brute_force_gradients_point_normals(
     const float *grad_output, const Vec3 *points, const Vec3 *scaled_normals,
     const Vec3 *queries_vec3, uint32_t geometry_count, uint32_t query_count,
-    float *gradients, float epsilon, float scene_scale, cudaStream_t compute_stream);
+    float *gradients, float *epsilon_gradients, float epsilon, float scene_scale, cudaStream_t compute_stream);
 
 void compute_brute_force_gradients_triangles(
     const float *grad_output, const Triangle *triangles,
     const Vec3 *queries_vec3, uint32_t geometry_count, uint32_t query_count,
-    float *gradients, float epsilon, float scene_scale, cudaStream_t compute_stream);
+    float *gradients, float *epsilon_gradients, float epsilon, float scene_scale, cudaStream_t compute_stream);
 
 void accumulate_vertice_gradients(const float *triangle_results,
                                   const uint32_t *triangle_indices,

@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
-#include <cstdio>
 #include <cuda_runtime_api.h>
+#include <driver_types.h>
 
 #define CUDA_CHECK(expr_to_check)                                              \
   do {                                                                         \
@@ -26,7 +26,8 @@ __host__ __device__ __forceinline__ auto expand_bits(uint32_t v) -> uint32_t {
 }
 
 __host__ __device__ __forceinline__ auto morton3D_30bit(uint32_t x, uint32_t y,
-                                               uint32_t z) -> uint32_t {
+                                                        uint32_t z)
+    -> uint32_t {
   return (expand_bits(x) << 2) | (expand_bits(y) << 1) | expand_bits(z);
 }
 
@@ -50,7 +51,9 @@ __host__ __device__ __forceinline__ auto splitBy3(uint32_t v) -> uint64_t {
   return x;
 }
 
-__host__ __device__ __forceinline__ uint64_t morton3D_63bit(uint32_t x, uint32_t y, uint32_t z) {
+__host__ __device__ __forceinline__ uint64_t morton3D_63bit(uint32_t x,
+                                                            uint32_t y,
+                                                            uint32_t z) {
   // see
   // https://www.forceflow.be/2013/10/07/morton-encodingdecoding-through-bit-interleaving-implementations/
   uint64_t answer = 0;

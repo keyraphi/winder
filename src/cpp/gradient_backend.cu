@@ -1,6 +1,7 @@
 #include "aabb.h"
 #include "binary_node.h"
 #include "bvh8.h"
+#include "cuda/std/__functional/operations.h"
 #include "geometry.h"
 #include "gradient_backend.h"
 #include "kernels/binary2bvh8.cuh"
@@ -13,6 +14,7 @@
 #include "soa.h"
 #include "taylor_coefficients.h"
 #include "thrust/detail/fill.inl"
+#include "thrust/detail/reduce.inl"
 #include "thrust/detail/sequence.inl"
 #include "thrust/detail/sort.inl"
 #include "utils.h"
@@ -156,7 +158,7 @@ void GradientBackend::init(const float *queries, const float *grad_outputs) {
                    m_to_internal + m_query_count);
   // sorts both morton_codes and m_to_internal
   thrust::stable_sort_by_key(build_stream_policy, query_morton_codes,
-                      query_morton_codes + m_query_count, m_to_internal);
+                             query_morton_codes + m_query_count, m_to_internal);
 
   gather_queries_and_grad_outputs_soa(queries, grad_outputs, m_to_internal,
                                       m_sorted_queries, m_sorted_grad_outputs,
@@ -287,8 +289,8 @@ void GradientBackend::init(const float *queries, const float *grad_outputs) {
 
 auto GradientBackend::compute(const float *points, const float *scaled_normals,
                               size_t geometry_count, float *gradients,
-                              float beta, float epsilon, uint64_t stream)
-    -> void {
+                              float *epsilon_gradient, float beta,
+                              float epsilon, uint64_t stream) -> void {
   ScopedCudaDevice device_scope{m_device};
   // convert stream to cuda stream
   cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
@@ -315,8 +317,8 @@ auto GradientBackend::compute(const float *points, const float *scaled_normals,
   thrust::sequence(compute_stream_policy, geometry_to_internal,
                    geometry_to_internal + geometry_count);
   thrust::stable_sort_by_key(compute_stream_policy, geometry_morton_codes,
-                      geometry_morton_codes + geometry_count,
-                      geometry_to_internal);
+                             geometry_morton_codes + geometry_count,
+                             geometry_to_internal);
 
   // free morton code memory
   CUDA_CHECK(cudaFreeAsync(geometry_morton_codes, compute_stream));
@@ -336,6 +338,10 @@ auto GradientBackend::compute(const float *points, const float *scaled_normals,
   CUDA_CHECK(
       cudaMallocAsync(&global_counter, sizeof(uint32_t), compute_stream));
 
+  float *epsilon_gradients;
+  CUDA_CHECK(cudaMallocAsync(&epsilon_gradients, geometry_count * sizeof(float),
+                             compute_stream));
+
   ComputeGradientsPointNormalParams params{
       .points = points_vec3,
       .normals = normals_vec3,
@@ -350,6 +356,7 @@ auto GradientBackend::compute(const float *points, const float *scaled_normals,
       .query_count = (uint32_t)m_query_count,
       .geometry_count = (uint32_t)geometry_count,
       .gradients = gradients,
+      .epsilon_gradients = epsilon_gradients,
       .global_device_counter = global_counter,
       .beta = beta,
       .epsilon = epsilon,
@@ -360,11 +367,15 @@ auto GradientBackend::compute(const float *points, const float *scaled_normals,
   // free temporary memory
   CUDA_CHECK(cudaFreeAsync(geometry_to_internal, compute_stream));
   CUDA_CHECK(cudaFreeAsync(global_counter, compute_stream));
+
+  reduce_async(epsilon_gradients, epsilon_gradient, geometry_count, compute_stream);
+  CUDA_CHECK(cudaFreeAsync(epsilon_gradients, compute_stream));
 }
 
 auto GradientBackend::compute(const float *triangles_float,
                               size_t geometry_count, float *gradients,
-                              float beta, float epsilon, uint64_t stream) -> void {
+                              float *epsilon_gradient, float beta,
+                              float epsilon, uint64_t stream) -> void {
   ScopedCudaDevice device_scope{m_device};
   // convert stream to cuda stream
   cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
@@ -390,8 +401,8 @@ auto GradientBackend::compute(const float *triangles_float,
   thrust::sequence(compute_stream_policy, geometry_to_internal,
                    geometry_to_internal + geometry_count);
   thrust::stable_sort_by_key(compute_stream_policy, geometry_morton_codes,
-                      geometry_morton_codes + geometry_count,
-                      geometry_to_internal);
+                             geometry_morton_codes + geometry_count,
+                             geometry_to_internal);
 
   // free morton code memory
   CUDA_CHECK(cudaFreeAsync(geometry_morton_codes, compute_stream));
@@ -411,6 +422,10 @@ auto GradientBackend::compute(const float *triangles_float,
   CUDA_CHECK(
       cudaMallocAsync(&global_counter, sizeof(uint32_t), compute_stream));
 
+  float *epsilon_gradients;
+  CUDA_CHECK(cudaMallocAsync(&epsilon_gradients, geometry_count * sizeof(float),
+                             compute_stream));
+
   ComputeGradientsTriangleParams params{
       .triangles = triangles,
       .sort_indirections = geometry_to_internal,
@@ -424,6 +439,7 @@ auto GradientBackend::compute(const float *triangles_float,
       .query_count = (uint32_t)m_query_count,
       .geometry_count = (uint32_t)geometry_count,
       .gradients = gradients,
+      .epsilon_gradients = epsilon_gradients,
       .global_device_counter = global_counter,
       .beta = beta,
       .epsilon = epsilon,
@@ -434,14 +450,16 @@ auto GradientBackend::compute(const float *triangles_float,
   // free temporary memory
   CUDA_CHECK(cudaFreeAsync(geometry_to_internal, compute_stream));
   CUDA_CHECK(cudaFreeAsync(global_counter, compute_stream));
+
+  reduce_async(epsilon_gradients, epsilon_gradient, geometry_count, compute_stream);
+  CUDA_CHECK(cudaFreeAsync(epsilon_gradients, compute_stream));
 }
 
 auto GradientBackend::compute(const float *vertices,
                               const uint32_t *triangle_indices,
                               size_t vertex_count, size_t geometry_count,
-                              float *vertex_gradients, float beta,
-                              float epsilon,
-                              uint64_t stream) -> void {
+                              float *vertex_gradients, float* epsilon_gradient, float beta,
+                              float epsilon, uint64_t stream) -> void {
   if (m_query_count == 0) {
     return;
   }
@@ -462,7 +480,8 @@ auto GradientBackend::compute(const float *vertices,
   CUDA_CHECK(cudaMallocAsync(
       &triangle_gradients, geometry_count * sizeof(Triangle), compute_stream));
 
-  this->compute(triangles, geometry_count, triangle_gradients, beta, epsilon, stream);
+  this->compute(triangles, geometry_count, triangle_gradients, epsilon_gradient, beta, epsilon,
+                stream);
   CUDA_CHECK(cudaFreeAsync(triangles, compute_stream));
 
   CUDA_CHECK(cudaMemsetAsync(vertex_gradients, 0,

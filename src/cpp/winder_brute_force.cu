@@ -1,3 +1,4 @@
+#include "cuda/std/__functional/operations.h"
 #include "geometry.h"
 #include "kernels/brute_force.cuh"
 #include "kernels/common.cuh"
@@ -138,7 +139,7 @@ auto brute_force_triangle_impl(const float *triangles_float,
 auto brute_force_point_normal_gradient_impl(
     const float *grad_output, const float *points, const float *scaled_normals,
     const float *queries, const size_t geometry_count, const size_t query_count,
-    float *gradients, float epsilon, const int device_id, const uint64_t stream)
+    float *gradients, float *epsilon_gradient, float epsilon, const int device_id, const uint64_t stream)
     -> void {
   ScopedCudaDevice device_scope{device_id};
 
@@ -153,6 +154,7 @@ auto brute_force_point_normal_gradient_impl(
 
   // convert stream to cuda stream
   cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
+  auto compute_stream_policy = thrust::cuda::par.on(compute_stream);
 
   float max_dim = 0.F;
   if (epsilon > 0.F) {
@@ -165,10 +167,17 @@ auto brute_force_point_normal_gradient_impl(
 
   CUDA_CHECK(cudaEventRecord(start, compute_stream));
 
+  float *epsilon_gradients;
+  CUDA_CHECK(cudaMallocAsync(&epsilon_gradients, geometry_count * sizeof(float),
+                             compute_stream));
+
   compute_brute_force_gradients_point_normals(
       grad_output, points_vec3, scaled_normals_vec3, queries_vec3,
-      (uint32_t)geometry_count, (uint32_t)query_count, gradients, epsilon,
+      (uint32_t)geometry_count, (uint32_t)query_count, gradients, epsilon_gradients, epsilon,
       max_dim, compute_stream);
+  // reduce epslon gradients
+  reduce_async(epsilon_gradients, epsilon_gradient, geometry_count, compute_stream);
+  CUDA_CHECK(cudaFreeAsync(epsilon_gradients, compute_stream));
 
   CUDA_CHECK(cudaEventRecord(finish, compute_stream));
   // free events
@@ -179,7 +188,7 @@ auto brute_force_point_normal_gradient_impl(
 auto brute_force_triangle_gradient_impl(
     const float *grad_output, const float *triangles_float,
     const float *queries, const size_t geometry_count, const size_t query_count,
-    float *gradients, float epsilon, const int device_id, const uint64_t stream)
+    float *gradients, float *epsilon_gradient, float epsilon, const int device_id, const uint64_t stream)
     -> void {
 
   const Vec3 *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
@@ -204,9 +213,15 @@ auto brute_force_triangle_gradient_impl(
     epsilon = 0.F;
   }
 
+  float *epsilon_gradients;
+  CUDA_CHECK(cudaMallocAsync(&epsilon_gradients, geometry_count * sizeof(float),
+                             compute_stream));
   compute_brute_force_gradients_triangles(
       grad_output, triangles, queries_vec3, (uint32_t)geometry_count,
-      (uint32_t)query_count, gradients, epsilon, max_dim, compute_stream);
+      (uint32_t)query_count, gradients, epsilon_gradients, epsilon, max_dim, compute_stream);
+  // reduce epslon gradients
+  reduce_async(epsilon_gradients, epsilon_gradient, geometry_count, compute_stream);
+  CUDA_CHECK(cudaFreeAsync(epsilon_gradients, compute_stream));
 
   CUDA_CHECK(cudaEventRecord(finish, compute_stream));
   // free events
@@ -218,7 +233,7 @@ auto brute_force_mesh_gradient_impl(
     const float *grad_output, const float *vertices,
     const uint32_t *triangle_indices, const float *queries,
     const size_t geometry_count, const size_t query_count,
-    const size_t vertex_count, float *vertice_grads, float epsilon,
+    const size_t vertex_count, float *vertice_grads, float* epsilon_gradient, float epsilon,
     const int device_id, const uint64_t stream) -> void {
 
   if (geometry_count == 0) {
@@ -254,7 +269,7 @@ auto brute_force_mesh_gradient_impl(
   // use regular triangle computation
   brute_force_triangle_gradient_impl(
       grad_output, triangles, queries, geometry_count, query_count,
-      triangle_gradients, epsilon, device_id, stream);
+      triangle_gradients, epsilon_gradient, epsilon, device_id, stream);
   // release temporary triangle array
   CUDA_CHECK(cudaFreeAsync(triangles, compute_stream));
 
