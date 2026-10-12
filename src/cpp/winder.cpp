@@ -439,7 +439,18 @@ NB_MODULE(winder_module, m) {
                    Negative values disable regularization (treated as 0). The default
                    is 1/250 = 0.004.
   )doc";
-
+  // Reusable docstring for the `epsilon_gradient` output (used by every
+  // function that produces a gradient with respect to `epsilon`).
+  constexpr const char *EPSILON_GRADIENT_DOC = R"doc(
+                `epsilon_gradient` : Array
+                    A (1,) float32 CUDA array pre-allocated by the caller on the
+                    same CUDA stream as the other outputs.
+                    Will be filled with the gradient of the loss with respect to
+                    the regularization scale `epsilon` (dL/depsilon).
+                    The result is a single scalar because `epsilon` is a global
+                    scalar shared by the entire winding-number field, so all
+                    per-query contributions are accumulated into this one entry.
+  )doc";
   // ===========================================================================
   // brute_force_winding_numbers_*
   // ===========================================================================
@@ -617,7 +628,7 @@ NB_MODULE(winder_module, m) {
               "typing.Literal[2], typing.Literal[3]], winder.types.float32, "
               "winder.types.cuda], "
               "epsilon_gradient: "
-              "winder.types.Array[winder.types.Shape[typein.Literal[1]], "
+              "winder.types.Array[winder.types.Shape[typing.Literal[1]], "
               "winder.types.float32, winder.types.cuda], "
               "epsilon: float = 0.004, "
               "stream: int = 0) -> None"),
@@ -655,7 +666,7 @@ NB_MODULE(winder_module, m) {
                       with respect to the source positions at index i (dL/dp)
                       Calculated as: dL/dp = (dL/dw)^T * (dw/dp).
             )doc") +
-       EPSILON_DOC + R"doc(
+       EPSILON_DOC + EPSILON_DOC + R"doc(
                 `stream` : int, optional
                     The raw 64-bit identifier (handle) of a CUDA stream. 
                     Allows enqueuing operations asynchronously within deep learning frameworks.
@@ -669,10 +680,11 @@ NB_MODULE(winder_module, m) {
   m.def(
       "brute_force_gradients_mesh",
       nb::overload_cast<const Scalar_t &, const Vec3_t &, const TriangleIdx_t &,
-                        const Vec3_t &, VertexGradResult_t &, SingleScalar_t &, float,
-                        const uint64_t>(&brute_force_gradients),
+                        const Vec3_t &, VertexGradResult_t &, SingleScalar_t &,
+                        float, const uint64_t>(&brute_force_gradients),
       "grad_output"_a, "vertices"_a, "triangle_indices"_a, "queries"_a,
-      "out_gradients"_a, "epsilon_gradient"_a, "epsilon"_a = 0.004F, "stream"_a = 0,
+      "out_gradients"_a, "epsilon_gradient"_a, "epsilon"_a = 0.004F,
+      "stream"_a = 0,
       nb::sig("def brute_force_gradients_mesh(grad_output: "
               "winder.types.Array[winder.types.Shape[winder.types.M], "
               "winder.types.float32, "
@@ -689,7 +701,7 @@ NB_MODULE(winder_module, m) {
               "winder.types.Array[winder.types.Shape[winder.types.K, "
               "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
               "epsilon_gradient: "
-              "winder.types.Array[winder.types.Shape[typein.Literal[1]], "
+              "winder.types.Array[winder.types.Shape[typing.Literal[1]], "
               "winder.types.float32, winder.types.cuda], "
               "epsilon: float = 0.004, "
               "stream: int = 0) -> None"),
@@ -725,7 +737,7 @@ NB_MODULE(winder_module, m) {
                       with respect to the vertex i (dL/dv_i)
                       Calculated as: dL/dv_i = (dL/dw)^T * (dw/dv_i).
             )doc") +
-       EPSILON_DOC + R"doc(
+       EPSILON_DOC + EPSILON_DOC + R"doc(
                 `stream` : int, optional
                     The raw 64-bit identifier (handle) of a CUDA stream. 
                     Allows enqueuing operations asynchronously within deep learning frameworks.
@@ -737,11 +749,10 @@ NB_MODULE(winder_module, m) {
   // --- Triangle soup -------------------------------------------------------
   m.def("brute_force_gradients_triangle_soup",
         nb::overload_cast<const Scalar_t &, const Triangle_t &, const Vec3_t &,
-                          GradResult_t &, SingleScalar_t &, float, const uint64_t>(
-            &brute_force_gradients),
+                          GradResult_t &, SingleScalar_t &, float,
+                          const uint64_t>(&brute_force_gradients),
         "grad_output"_a, "triangles"_a, "queries"_a, "out_gradients"_a,
-        "epsilon_gradient"_a,
-        "epsilon"_a = 0.004F, "stream"_a = 0,
+        "epsilon_gradient"_a, "epsilon"_a = 0.004F, "stream"_a = 0,
         nb::sig("def brute_force_gradients_triangle_soup(grad_output: "
                 "winder.types.Array[winder.types.Shape[winder.types.M], "
                 "winder.types.float32, "
@@ -756,7 +767,7 @@ NB_MODULE(winder_module, m) {
                 "typing.Literal[3], typing.Literal[3]], winder.types.float32, "
                 "winder.types.cuda], "
                 "epsilon_gradient: "
-                "winder.types.Array[winder.types.Shape[typein.Literal[1]], "
+                "winder.types.Array[winder.types.Shape[typing.Literal[1]], "
                 "winder.types.float32, winder.types.cuda], "
                 "epsilon: float = 0.004, "
                 "stream: int "
@@ -790,7 +801,7 @@ NB_MODULE(winder_module, m) {
                       with respect to the vertex j of triangle i  (dL/dv_j)
                       Calculated as: dL/dv_j = (dL/dw)^T * (dw/dv_j).
             )doc") +
-         EPSILON_DOC + R"doc(
+         EPSILON_DOC + EPSILON_DOC + R"doc(
                 `stream` : int, optional
                     The raw 64-bit identifier (handle) of a CUDA stream. 
                     Allows enqueuing operations asynchronously within deep learning frameworks.
@@ -963,30 +974,30 @@ NB_MODULE(winder_module, m) {
                     )doc")
 
       // --- compute_mesh ----------------------------------------------------
-      .def(
-          "compute_mesh",
-          nb::overload_cast<const Vec3_t &, const TriangleIdx_t &,
-                            VertexGradResult_t &, SingleScalar_t &, float, float, const uint64_t>(
-              &GradientEngine::compute),
-          "vertices"_a, "triangle_indices"_a, "out_gradients"_a, "epsilon_gradient"_a,
-          "beta"_a = -1.F, "epsilon"_a = 0.004F, "stream"_a = 0,
-          nb::sig(
-              "def compute_mesh(self, vertices: "
-              "winder.types.Array[winder.types.Shape[winder.types.K, "
-              "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
-              "triangle_indices: "
-              "winder.types.Array[winder.types.Shape[winder.types.N, "
-              "typing.Literal[3]], winder.types.uint32, winder.types.cuda], "
-              "out_gradients: "
-              "winder.types.Array[winder.types.Shape[winder.types.K, "
-              "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
-              "epsilon_gradient: "
-              "winder.types.Array[winder.types.Shape[typein.Literal[1]], "
-              "winder.types.float32, winder.types.cuda], "
-              "beta: float = -1, epsilon: float = 0.004, "
-              "stream: int = 0) "
-              "-> None"),
-          (std::string(R"doc(
+      .def("compute_mesh",
+           nb::overload_cast<const Vec3_t &, const TriangleIdx_t &,
+                             VertexGradResult_t &, SingleScalar_t &, float,
+                             float, const uint64_t>(&GradientEngine::compute),
+           "vertices"_a, "triangle_indices"_a, "out_gradients"_a,
+           "epsilon_gradient"_a, "beta"_a = -1.F, "epsilon"_a = 0.004F,
+           "stream"_a = 0,
+           nb::sig(
+               "def compute_mesh(self, vertices: "
+               "winder.types.Array[winder.types.Shape[winder.types.K, "
+               "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+               "triangle_indices: "
+               "winder.types.Array[winder.types.Shape[winder.types.N, "
+               "typing.Literal[3]], winder.types.uint32, winder.types.cuda], "
+               "out_gradients: "
+               "winder.types.Array[winder.types.Shape[winder.types.K, "
+               "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+               "epsilon_gradient: "
+               "winder.types.Array[winder.types.Shape[typing.Literal[1]], "
+               "winder.types.float32, winder.types.cuda], "
+               "beta: float = -1, epsilon: float = 0.004, "
+               "stream: int = 0) "
+               "-> None"),
+           (std::string(R"doc(
                 Compute the partial derivatives w.r.t. the given triangle mesh vertex
                 positions (shared vertices, indexed triangles).
 
@@ -1012,21 +1023,22 @@ NB_MODULE(winder_module, m) {
                     Use any negative number to get default values.
                     Default for triangles is 2.3 
             )doc") +
-           EPSILON_DOC + R"doc(
+            EPSILON_DOC + EPSILON_DOC + R"doc(
                 `stream` : int, optional
                     The raw 64-bit identifier (handle) of a CUDA stream. 
                     Allows enqueuing operations asynchronously within deep learning frameworks.
                     For example, in PyTorch pass: `torch.cuda.current_stream().cuda_stream`.
                     Default is 0 (the default/null stream).
             )doc")
-              .c_str())
+               .c_str())
 
       // --- compute_triangle_soup -------------------------------------------
       .def("compute_triangle_soup",
-           nb::overload_cast<const Triangle_t &, GradResult_t &, SingleScalar_t &, float, float,
-                             const uint64_t>(&GradientEngine::compute),
-           "triangles"_a, "out_gradients"_a, "epsilon_gradient"_a, "beta"_a = -1.F,
-           "epsilon"_a = 0.004F, "stream"_a = 0,
+           nb::overload_cast<const Triangle_t &, GradResult_t &,
+                             SingleScalar_t &, float, float, const uint64_t>(
+               &GradientEngine::compute),
+           "triangles"_a, "out_gradients"_a, "epsilon_gradient"_a,
+           "beta"_a = -1.F, "epsilon"_a = 0.004F, "stream"_a = 0,
            nb::sig("def compute_triangle_soup(self, triangles: "
                    "winder.types.Array[winder.types.Shape[winder.types.N, "
                    "typing.Literal[3], typing.Literal[3]], "
@@ -1036,7 +1048,7 @@ NB_MODULE(winder_module, m) {
                    "typing.Literal[3], typing.Literal[3]], "
                    "winder.types.float32, winder.types.cuda], "
                    "epsilon_gradient: "
-                   "winder.types.Array[winder.types.Shape[typein.Literal[1]], "
+                   "winder.types.Array[winder.types.Shape[typing.Literal[1]], "
                    "winder.types.float32, winder.types.cuda], "
                    "beta: float = -1, "
                    "epsilon: float = 0.004, "
@@ -1065,7 +1077,7 @@ NB_MODULE(winder_module, m) {
                     Use any negative number to get default values.
                     Default for triangles is 2.3 
             )doc") +
-            EPSILON_DOC + R"doc(
+            EPSILON_DOC + EPSILON_DOC + R"doc(
                 `stream` : int, optional
                     The raw 64-bit identifier (handle) of a CUDA stream. 
                     Allows enqueuing operations asynchronously within deep learning frameworks.
@@ -1079,8 +1091,9 @@ NB_MODULE(winder_module, m) {
            nb::overload_cast<const Vec3_t &, const Vec3_t &, GradResult_t &,
                              SingleScalar_t &, float, float, const uint64_t>(
                &GradientEngine::compute),
-           "points"_a, "scaled_normals"_a, "out_gradients"_a, "epsilon_gradient"_a, "beta"_a = -1.F,
-           "epsilon"_a = 0.004F, "stream"_a = 0,
+           "points"_a, "scaled_normals"_a, "out_gradients"_a,
+           "epsilon_gradient"_a, "beta"_a = -1.F, "epsilon"_a = 0.004F,
+           "stream"_a = 0,
            nb::sig(
                "def compute_point_normal(self, points: "
                "winder.types.Array[winder.types.Shape[winder.types.N, "
@@ -1093,7 +1106,7 @@ NB_MODULE(winder_module, m) {
                "typing.Literal[2], typing.Literal[3]], winder.types.float32, "
                "winder.types.cuda], "
                "epsilon_gradient: "
-               "winder.types.Array[winder.types.Shape[typein.Literal[1]], "
+               "winder.types.Array[winder.types.Shape[typing.Literal[1]], "
                "winder.types.float32, winder.types.cuda], "
                "beta: float = -1, epsilon: float = 0.004, "
                "stream: int = 0) "
@@ -1128,7 +1141,7 @@ NB_MODULE(winder_module, m) {
                     Use any negative number to get default values.
                     Default for point clouds is 2.3.
             )doc") +
-            EPSILON_DOC + R"doc(
+            EPSILON_DOC + EPSILON_DOC + R"doc(
                 `stream` : int, optional
                     The raw 64-bit identifier (handle) of a CUDA stream. 
                     Allows enqueuing operations asynchronously within deep learning frameworks.

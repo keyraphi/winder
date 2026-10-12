@@ -374,6 +374,175 @@
                 \end{cases}$$
             </div>
         </div>
+      <h3 class="text-md font-bold uppercase tracking-wider text-slate-400 mt-8 mb-2">Singularity &amp; Boundary Regularization for Triangle Soups</h3>
+      <p>
+          The Van Oosterom–Strackee formula above is well-defined for any query $x$ that is not *on* the triangle, but its analytic
+          derivatives degenerate whenever $x$ approaches a vertex or an edge of the triangle. Writing the contribution of a single
+          triangle $T = (v_0, v_1, v_2)$ in terms of the vertex vectors
+          $a = v_0 - x$, $b = v_1 - x$, $c = v_2 - x$ and the two abbreviations
+      </p>
+      <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
+          $$N = a \cdot (b \times c), \qquad
+            D = \|a\|\|b\|\|c\| + (a\cdot b)\|c\| + (b\cdot c)\|a\| + (c\cdot a)\|b\|,$$
+      </div>
+      <p>
+          the winding number contribution is $w_T(x) = \frac{1}{2\pi}\arctan(N/D)$ and the vertex gradient follows from the quotient rule:
+      </p>
+      <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
+          $$\frac{\partial w_T}{\partial v_k}
+            = \frac{1}{2\pi} \cdot
+              \frac{D \, \dfrac{\partial N}{\partial v_k} - N \, \dfrac{\partial D}{\partial v_k}}{N^2 + D^2}.$$
+      </div>
+
+      <p>
+          The denominator $N^2 + D^2$ vanishes — and the gradient diverges — whenever $N$ and $D$ are *simultaneously* zero. This
+          occurs in exactly two geometric configurations:
+      </p>
+
+      <ul class="list-disc list-inside space-y-3 text-sm text-slate-600 pl-2 my-4">
+          <li>
+              <strong>Vertex singularity.</strong> As the query $x$ approaches a triangle vertex, the corresponding vertex vector
+              shrinks to zero: say $\|a\| \to 0$. Every term of $N$ contains at least one power of $\|a\|$ (either via the
+              triple product or via one of the normalized cross products), and every term of $D$ likewise carries at least one
+              factor of $\|a\|$. Both quantities therefore vanish together, $N \sim \|a\|$ and $D \sim \|a\|$, and
+              the ratio $(D\,\partial N - N\,\partial D)/(N^2 + D^2)$ diverges as $\|a\|^{-1}$.
+          </li>
+          <li>
+              <strong>Edge singularity.</strong> If $x$ lies anywhere on the edge $\overline{v_0 v_1}$, the vectors $a$ and $b$
+              become anti-parallel, $a = -\lambda\,b$ for some $\lambda > 0$. The triple product
+              $N = a \cdot (b \times c)$ then vanishes identically, and substituting $a = -\lambda b$ into $D$ makes its four
+              summands pair up into two equal-and-opposite contributions:
+              $$\begin{aligned}
+              D &= \lambda \|b\|^2 \|c\| - \lambda \|b\|^2 \|c\|
+                 + \lambda \|b\| (b\cdot c) - \lambda \|b\| (b\cdot c) = 0.
+              \end{aligned}$$
+              Once again the derivative blows up.
+          </li>
+      </ul>
+
+      <p>
+          The winding *value* $w_T$ itself stays finite in both configurations (it has a well-defined limit depending on the
+          direction of approach), but the gradient does not. On top of this, $w_T$ has a genuine finite jump of $+1$ across the
+          *interior* of the triangle — the discontinuity that encodes the “inside / outside” property of the field — so a
+          regularization must inevitably modify the winding value in a narrow band around the triangle boundary. The design goal is
+          therefore not to preserve the raw formula everywhere, but to replace it with a forward function that
+          <strong>(a)</strong> equals the raw formula away from the singularity,
+          <strong>(b)</strong> is bounded everywhere, and
+          <strong>(c)</strong> has a finite, continuous gradient across all of $\mathbb{R}^3$.
+      </p>
+
+      <p>
+          Winder resolves this by modifying the <em>forward function only</em>. The gradient pass documented in Section 5.2 then
+          differentiates the regularized forward expression and introduces no additional mechanism. The modification runs in two
+          stages.
+      </p>
+
+      <h4 class="text-sm font-bold text-slate-700 tracking-wide uppercase mt-4">Stage 1 — Edge Length Regularization</h4>
+      <p>
+          Each raw edge length $\|a\|, \|b\|, \|c\|$ is replaced by a scalar $r(s)$ selected by the runtime <code>reg_mode</code>
+          flag:
+      </p>
+
+      <div class="overflow-x-auto my-4 border border-slate-200 rounded-md">
+          <table class="min-w-full divide-y divide-slate-200 text-left text-xs">
+              <thead class="bg-slate-100 font-mono text-slate-600">
+                  <tr>
+                      <th class="px-3 py-2">Mode</th>
+                      <th class="px-3 py-2">$r(s)$</th>
+                      <th class="px-3 py-2">Behaviour near $s = 0$</th>
+                  </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-200 font-mono text-slate-700 bg-white">
+                  <tr>
+                      <td class="px-3 py-2 font-sans font-bold text-slate-900">sharp</td>
+                      <td class="px-3 py-2">$s$</td>
+                      <td class="px-3 py-2 font-sans">exact, gradient singular</td>
+                  </tr>
+                  <tr>
+                      <td class="px-3 py-2 font-sans font-bold text-slate-900">plummer</td>
+                      <td class="px-3 py-2">$\sqrt{s^2 + \epsilon^2}$</td>
+                      <td class="px-3 py-2 font-sans">smooth everywhere, linear at $s = 0$</td>
+                  </tr>
+                  <tr>
+                      <td class="px-3 py-2 font-sans font-bold text-slate-900">compact</td>
+                      <td class="px-3 py-2">$\epsilon \, g(s/\epsilon)$</td>
+                      <td class="px-3 py-2 font-sans">identity for $s \ge 2\epsilon$, polynomial below</td>
+                  </tr>
+              </tbody>
+          </table>
+      </div>
+
+      <p>
+          The compact profile $g$ is a $C^2$ piecewise polynomial in $t = s/\epsilon$:
+      </p>
+      <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
+          $$g(t) = \begin{cases}
+              1 + A_2 t^2 + A_4 t^4 & t \le 1 \\[2pt]
+              V + S u + C u^2 + D u^3, \quad u = t - 1 & 1 < t \le 2 \\[2pt]
+              t & t > 2
+          \end{cases}$$
+      </div>
+      <p>
+          with the constants $A_2, A_4, V, S, C, D$ fixed so that $g$ and its first two derivatives agree at $t = 1$ and $t = 2$
+          (see <code>geometry.h</code> for the exact values). At $t > 2$ the compact profile reduces to the raw length $s = |a|$
+          exactly, so the modification is invisible for well-separated geometry. At $\epsilon = 0$ both Plummer and Compact fall
+          back to the Sharp variant.
+      </p>
+
+      <h4 class="text-sm font-bold text-slate-700 tracking-wide uppercase mt-6">Stage 2 — Angular Bump</h4>
+      <p>
+          After edge-length regularization, define the normalized numerator and denominator
+      </p>
+      <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
+          $$P = \frac{a \cdot (b \times c)}{r_a r_b r_c}, \qquad
+            Q = 1 + \frac{a \cdot b}{r_a r_b} + \frac{a \cdot c}{r_a r_c} + \frac{b \cdot c}{r_b r_c}.$$
+      </div>
+      <p>
+          Far from the triangle these are simply the raw $N/(|a||b||c|)$ and $D/(|a||b||c|)$, and $w_T = \frac{1}{2\pi}\mathrm{atan2}(P, Q)$.
+          But on the triangle *interior*, $P \to 0$ and $Q \to 0$ simultaneously and the arctangent becomes $0/0$.
+          Winder circumvents this by shifting both $P$ and $Q$ by a common scalar $c$ before evaluating the arctangent:
+      </p>
+      <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
+          $$\begin{aligned}
+              u &= \frac{P^2 + Q^2}{\epsilon^2} \\[2pt]
+              \mathsf{bump}(u) &= 1 - t^2 (3 - 2t), \qquad t = \mathrm{clamp}\!\left(\tfrac{4}{3}\bigl(u - \tfrac{1}{4}\bigr),\, 0,\, 1\right) \\[2pt]
+              c &= \frac{\epsilon}{\sqrt{2}} \, \mathsf{bump}(u) \\[2pt]
+              w_T(x) &= \frac{1}{2\pi} \, \mathrm{atan2}\!\bigl(P + c, \; Q + c\bigr).
+          \end{aligned}$$
+      </div>
+      <p>
+          The bump profile satisfies $\mathsf{bump}(u) = 1$ for $u \le 1/4$, falls to zero over $u \in [1/4, 1]$, and is exactly zero
+          for $u \ge 1$. The behaviour of the shift is therefore:
+      </p>
+      <ul class="list-disc list-inside space-y-2 text-sm text-slate-600 pl-2 my-4">
+          <li>
+              <strong>Far from the singularity</strong> ($P^2 + Q^2 > \epsilon^2$): $c = 0$ and $w_T$ recovers the raw
+              Van Oosterom–Strackee value exactly.
+          </li>
+          <li>
+              <strong>Very close to the singularity</strong> ($P^2 + Q^2 < \epsilon^2/4$): $c = \epsilon/\sqrt{2}$ and the pair
+              $(P, Q)$ is displaced off the origin. In particular,
+              $(P+c)^2 + (Q+c)^2 \ge \epsilon^2/2$, so the denominator of the gradient is bounded below by a positive constant.
+          </li>
+          <li>
+              <strong>In the transition band</strong>: $c$ varies smoothly, so its derivative with respect to $P$ and $Q$ — and
+              therefore with respect to the vertex positions — is well-defined and finite.
+          </li>
+      </ul>
+      <p>
+          Shifting <em>both</em> $P$ and $Q$ by the same $c$ is essential. If only the numerator were shifted, the argument
+          $(P+c)/Q$ would still diverge as $Q \to 0$; shifting both preserves a bounded ratio along the entire approach to the
+          singularity, and the resulting $w_T$ is continuous (and in fact $C^1$) in the vertex positions.
+      </p>
+
+      <p class="mt-4 p-3 bg-cyan-50/60 rounded-lg border border-cyan-200/80 text-sm text-slate-700">
+          <strong>Summary of the forward pass for one triangle.</strong>
+          Given the query $x$, the vertices $v_0, v_1, v_2$ and the regularization parameters $(\epsilon, \texttt{reg\_mode})$,
+          the forward function is evaluated as: (1) form $a, b, c$; (2) regularize each edge length via $r(\cdot)$;
+          (3) compute $P$ and $Q$ from the regularized lengths; (4) shift both by $c$; (5) return
+          $\frac{1}{2\pi}\mathrm{atan2}(P+c,\, Q+c)$. This composition is $C^1$ in $v_0, v_1, v_2$ and in $\epsilon$ across
+          all of $\mathbb{R}^3$, and it is the object that Section 5.2 differentiates.
+      </p>
     </div>
 </section>
 

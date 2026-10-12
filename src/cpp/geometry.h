@@ -170,7 +170,7 @@ struct PointNormalContext {
   __host__ __device__ __forceinline__ static auto make(float eps_fraction,
                                                        float scene_scale)
       -> PointNormalContext {
-    constexpr float INV_PI_1_5 = 0.179587122F;
+    constexpr float INV_PI_1_5 = 0.179587122F;  // 1/(pi*sqrt(pi))
     const float eps_length = eps_fraction * scene_scale;
     if (eps_length <= 0.F) {
       return PointNormalContext{
@@ -874,7 +874,7 @@ struct PointNormal {
       const float inv_eps_angle = ctx.inv_eps_angle;
       scale_n = g * ctx.near_field_g_denum;
       scale_d = 0.F;
-      eps_grad = -3.F * inv_eps_angle * g * n_dot_d * INV_FOUR_PI *
+      eps_grad = -3.F * inv_eps_angle * g * n_dot_d * 
                  ctx.near_field_g_denum;
     } else if (t < 2.F) {
       // Mid field:
