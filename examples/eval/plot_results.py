@@ -95,6 +95,11 @@ NUMERIC_KEYS = [
     "mag_ratio_p95",
     "mag_ratio_p99",
     "mag_ratio_p99_9",
+    # Backward scalar (epsilon gradient)
+    "eps_ref",
+    "eps_fast",
+    "eps_abs_err",
+    "eps_rel_err",
 ]
 
 PALETTE = {
@@ -598,6 +603,18 @@ HINTS = {
         "epsilon. (d) speedup is largely independent of epsilon, since "
         "the traversal cost is set by beta, not by the kernel width."
     ),
+    "epsilon_gradient": (
+        "Fast-vs-brute agreement of the scalar epsilon gradient "
+        "dL/d(epsilon). This is the derivative of the loss with respect "
+        "to the regularization length, so it is a single number per item. "
+        "Panel (a): distribution of relative error, using a signal-aware "
+        "denominator max(|ref|, 1e-2) so near-zero references do not "
+        "explode the ratio. Panel (b): ECDF of the same quantity. Panel "
+        "(c): signed reference vs fast value; a clean diagonal indicates "
+        "both the magnitude and the sign are reproduced. Panel (d): "
+        "relative error vs mesh complexity; a flat trend means the "
+        "approximation error does not grow with triangle count."
+    ),
 }
 
 
@@ -662,6 +679,10 @@ def print_summary(data, dataset_name, mode_name):
         print(_stat("per_vec_ang_p50", data["per_vec_ang_p50"], ".4f"))
         print(_stat("per_vec_ang_p99", data["per_vec_ang_p99"], ".4f"))
         print(_stat("mag_ratio_p50", data["mag_ratio_p50"], ".6f"))
+
+    if _has_data(data, "eps_rel_err"):
+        print(_stat("eps_abs_err", data["eps_abs_err"]))
+        print(_stat("eps_rel_err", data["eps_rel_err"]))
     print()
 
 
@@ -690,6 +711,7 @@ def compute_capabilities(data: dict) -> dict:
             _has_data(data, "per_vec_ang_p50") and _has_data(data, "mag_ratio_p50")
         ),
         "global_gradient": _has_data(data, "global_cosine"),
+        "epsilon_gradient": _has_data(data, "eps_rel_err"),
     }
 
 
@@ -1428,6 +1450,155 @@ def fig_gradient_quality(data, style_mode, label, out, prefix=""):
     fig.suptitle(label, y=1.005, fontsize=mpl.rcParams["font.size"] + 2)
     fig.tight_layout()
     save_or_show(fig, "09_gradient_quality", style_mode, out, prefix)
+
+
+def fig_epsilon_gradient(data, style_mode, label, out, prefix=""):
+    fig, axes = plt.subplots(2, 2, figsize=figsize(style_mode, "grid22"))
+
+    rel = data.get("eps_rel_err", np.array([]))
+    ref = data.get("eps_ref", np.array([]))
+    fast = data.get("eps_fast", np.array([]))
+    nt = data.get("n_tri", np.array([]))
+
+    # (a) Relative error histogram
+    ax = axes[0, 0]
+    v = rel[np.isfinite(rel) & (rel > 0)]
+    if v.size:
+        lo = max(v.min(), 1e-12)
+        hi = max(v.max(), lo * 10)
+        bins = np.logspace(np.log10(lo), np.log10(hi), 40)
+        ax.hist(v, bins=bins, color=PALETTE["primary"], alpha=0.85)
+        med = float(np.median(v))
+        ax.axvline(
+            med,
+            color=PALETTE["highlight"],
+            lw=1.4,
+            linestyle="--",
+            label=f"median = {med:.2e}",
+        )
+        ax.set_xscale("log")
+        format_log_axis(ax, which="x")
+        finalize_axes(
+            ax,
+            xlabel="Relative error |Δ(dL/dε)| / max(|ref|, 1e-2)",
+            ylabel="Item count",
+            title="(a) Epsilon-gradient relative error",
+            legend_loc="upper right",
+        )
+    else:
+        finalize_axes(
+            ax,
+            xlabel="Relative error",
+            ylabel="Item count",
+            title="(a) Epsilon-gradient relative error",
+        )
+
+    # (b) ECDF of relative error
+    ax = axes[0, 1]
+    if v.size:
+        x, y = ecdf(v)
+        ax.plot(x, y, color=PALETTE["primary"], lw=1.6)
+        ax.set_xscale("log")
+        format_log_axis(ax, which="x")
+        for q, c in [
+            (0.5, PALETTE["primary"]),
+            (0.9, PALETTE["tertiary"]),
+            (0.99, PALETTE["secondary"]),
+        ]:
+            val = float(np.quantile(v, q))
+            ax.axvline(val, color=c, lw=0.9, linestyle="--", alpha=0.7)
+            ax.text(
+                val,
+                0.02,
+                f"p{int(q * 100)}={val:.2e}",
+                rotation=90,
+                fontsize=7,
+                color=c,
+                va="bottom",
+                ha="right",
+            )
+    finalize_axes(
+        ax,
+        xlabel="Relative error",
+        ylabel="Fraction of items ≤ x",
+        title="(b) Epsilon-gradient error ECDF",
+    )
+    ax.set_ylim(0, 1.02)
+
+    # (c) Reference vs fast
+    ax = axes[1, 0]
+    m = _finite(ref, fast)
+    if m.sum():
+        ax.scatter(
+            ref[m],
+            fast[m],
+            s=4,
+            alpha=0.3,
+            color=PALETTE["primary"],
+            edgecolors="none",
+        )
+        lo = min(ref[m].min(), fast[m].min())
+        hi = max(ref[m].max(), fast[m].max())
+        ax.plot([lo, hi], [lo, hi], color=PALETTE["neutral"], lw=0.9, linestyle=":")
+        handles = [
+            scatter_legend_handle(PALETTE["primary"], "per item"),
+            line_legend_handle(PALETTE["neutral"], "y = x", lw=0.9, ls=":"),
+        ]
+        ax.set_xscale("symlog", linthresh=1e-3)
+        ax.set_yscale("symlog", linthresh=1e-3)
+        finalize_axes(
+            ax,
+            xlabel="Reference dL/dε",
+            ylabel="Fast dL/dε",
+            title="(c) Sign and magnitude agreement",
+        )
+        ax.legend(handles=handles, loc="upper left")
+    else:
+        finalize_axes(
+            ax,
+            xlabel="Reference dL/dε",
+            ylabel="Fast dL/dε",
+            title="(c) Sign and magnitude agreement",
+        )
+
+    # (d) Relative error vs mesh complexity
+    ax = axes[1, 1]
+    m = _finite_positive(nt, rel)
+    if m.sum():
+        ax.scatter(
+            nt[m],
+            rel[m],
+            s=3,
+            alpha=0.2,
+            color=PALETTE["primary"],
+            edgecolors="none",
+        )
+        c, med, _, _, _ = binned_median(nt, rel)
+        handles = [scatter_legend_handle(PALETTE["primary"], "per item")]
+        if c.size:
+            ax.plot(c, med, color=PALETTE["highlight"], lw=1.6)
+            handles.append(line_legend_handle(PALETTE["highlight"], "binned median"))
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        format_log_axis(ax)
+        finalize_axes(
+            ax,
+            xlabel="Triangle count",
+            ylabel="Epsilon-gradient relative error",
+            title="(d) Error vs mesh complexity",
+        )
+        ax.legend(handles=handles, loc="upper left")
+    else:
+        finalize_axes(
+            ax,
+            xlabel="Triangle count",
+            ylabel="Epsilon-gradient relative error",
+            title="(d) Error vs mesh complexity",
+        )
+
+    fig.suptitle(label, y=1.005, fontsize=mpl.rcParams["font.size"] + 2)
+    fig.tight_layout()
+    save_or_show(fig, "12_epsilon_gradient", style_mode, out, prefix)
 
 
 def fig_error_scaling(data, style_mode, label, out, prefix=""):
@@ -2278,6 +2449,12 @@ PLOT_SPECS = [
         fig_tradeoff,
         requires=lambda caps, d: caps["speedup"] and caps["accuracy"],
         kind="both",
+    ),
+    PlotSpec(
+        "epsilon_gradient",
+        fig_epsilon_gradient,
+        requires=_req("epsilon_gradient"),
+        kind="backward",
     ),
 ]
 

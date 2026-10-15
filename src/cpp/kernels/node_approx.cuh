@@ -357,6 +357,78 @@ __device__ __forceinline__ auto compute_node_approximation(
   return result;
 }
 
+// =============================================================================
+// Far-field query gradient for one node.
+//
+//   ∇_q f0 = [ 3 (M0 · r_hat) r_hat - M0 ] / (4π R³)
+//   ∇_q f1 = 3 / (4π R⁴) [ (tr(M1) - 5 q_rr) r_hat + 2 M1_sym r_hat ]
+//
+// with q_rr = r_hat^T M1 r_hat. Only the symmetric part of M1 enters the
+// gradient; the antisymmetric part contracts against the symmetric outer
+// product r_hat r_hat^T and vanishes.
+//
+// M2 is intentionally omitted in the fast path for now // TODO analyze error
+// =============================================================================
+__device__ __forceinline__ auto compute_node_query_grad_approximation(
+    const Vec3 &query, const Vec3 &center_of_mass, const Vec3_f16 &M0_f16,
+    const Mat3x3_f16 &M1_f16) -> Vec3 {
+
+  const Vec3 r = center_of_mass - query;
+  const float inv_R = r.inv_length();
+  const float inv_R3 = inv_R * inv_R * inv_R;
+  const float inv_R4 = inv_R3 * inv_R;
+
+  const Vec3_f16 r_hat = Vec3_f16::from_float(r * inv_R);
+
+  constexpr float INV_4PI = 0.07957747154594767F;
+  const half three_h = __float2half(3.F);
+  const half five_h = __float2half(5.F);
+  const half two_h = __float2half(2.F);
+  const half half_h = __float2half(0.5F);
+
+  // Zero order --------------------------------------------------------------
+  //   fma(r_hat, s, a) returns r_hat * s + a, so this is
+  //   3 (M0 · r_hat) r_hat - M0.
+  const Vec3_f16 grad0_h =
+      Vec3_f16::fma(r_hat, __hmul(three_h, M0_f16.dot(r_hat)), -M0_f16);
+
+  const float scale0 = INV_4PI * inv_R3;
+  Vec3 grad{
+      .x = __half2float(grad0_h.x) * scale0,
+      .y = __half2float(grad0_h.y) * scale0,
+      .z = __half2float(grad0_h.z) * scale0,
+  };
+
+  // First order -------------------------------------------------------------
+  // Symmetrize M1 in half2. M1_sym[i][j] = (M1[i][j] + M1[j][i]) / 2.
+  Mat3x3_f16 M1_sym;
+  M1_sym.data[0] = M1_f16.data[0];
+  M1_sym.data[4] = M1_f16.data[4];
+  M1_sym.data[8] = M1_f16.data[8];
+  M1_sym.data[1] = __hmul(__hadd(M1_f16.data[1], M1_f16.data[3]), half_h);
+  M1_sym.data[3] = M1_sym.data[1];
+  M1_sym.data[2] = __hmul(__hadd(M1_f16.data[2], M1_f16.data[6]), half_h);
+  M1_sym.data[6] = M1_sym.data[2];
+  M1_sym.data[5] = __hmul(__hadd(M1_f16.data[5], M1_f16.data[7]), half_h);
+  M1_sym.data[7] = M1_sym.data[5];
+
+  const Vec3_f16 v = M1_sym * r_hat; // M1_sym · r_hat
+  const half q_rr = r_hat.dot(v);    // r_hat^T M1_sym r_hat
+  const half trace =
+      __hadd(__hadd(M1_f16.data[0], M1_f16.data[4]), M1_f16.data[8]);
+  const half tr_5q = __hsub(trace, __hmul(five_h, q_rr));
+
+  // (tr(M1) - 5 q_rr) r_hat + 2 M1_sym r_hat
+  const Vec3_f16 grad1_h = Vec3_f16::fma(r_hat, tr_5q, v * two_h);
+
+  const float scale1 = 3.F * INV_4PI * inv_R4;
+  grad.x += __half2float(grad1_h.x) * scale1;
+  grad.y += __half2float(grad1_h.y) * scale1;
+  grad.z += __half2float(grad1_h.z) * scale1;
+
+  return grad;
+}
+
 /**
  * @brief Computes the complete multi-order Taylor approximation of loss
  * gradients for a PointNormal primitive w.r.t. position (p) and normal dipole

@@ -369,15 +369,22 @@ def _forward_metrics(
         "misclass_frac": misclass / max(1, ref.size),
     }
 
-
 def _backward_metrics(
     ref: np.ndarray,
     fast: np.ndarray,
     t_brute_ms: float,
     t_fast_ms: float,
+    ref_eps: Optional[float] = None,
+    fast_eps: Optional[float] = None,
     signal_threshold: float = 1e-6,
 ) -> dict:
-    """Gradient metrics with full per-primitive distribution statistics."""
+    """Gradient metrics with full per-primitive distribution statistics.
+
+    If ``ref_eps`` and ``fast_eps`` are provided, the scalar epsilon gradient
+    (dL / d(epsilon)) is also compared with a signal-aware relative
+    denominator: the floor ``max(|ref|, 1e-2)`` avoids pathological ratios
+    when the reference happens to be near zero.
+    """
     ref_flat = ref.reshape(-1)
     fast_flat = fast.reshape(-1)
     diff = fast_flat - ref_flat
@@ -457,7 +464,7 @@ def _backward_metrics(
         ):
             per_vec[k] = float("nan")
 
-    return {
+    out = {
         "time_brute_ms": float(t_brute_ms),
         "time_fast_ms": float(t_fast_ms),
         "speedup": float(t_brute_ms / t_fast_ms) if t_fast_ms > 0 else float("nan"),
@@ -472,13 +479,24 @@ def _backward_metrics(
         "p99_rel_masked": p99_rel,
         "global_rel_norm": float(rel_norm),
         "global_cosine": global_cosine,
-        # Used by the bucket figure to compute per-bucket signal fractions.
         "ref_norm": float(norm_ref),
         "fast_norm": float(norm_fast),
         **per_vec,
         "misclass_count": 0,
         "misclass_frac": 0.0,
     }
+
+    if ref_eps is not None and fast_eps is not None:
+        eps_ref = float(ref_eps)
+        eps_fast = float(fast_eps)
+        eps_abs_err = abs(eps_fast - eps_ref)
+        eps_denom = max(abs(eps_ref), 1e-2)
+        out["eps_ref"] = eps_ref
+        out["eps_fast"] = eps_fast
+        out["eps_abs_err"] = eps_abs_err
+        out["eps_rel_err"] = eps_abs_err / eps_denom
+
+    return out
 
 
 # =============================================================================
@@ -568,21 +586,31 @@ def _backward_triangle_engines(batch: MeshBatch, args, ws, epsilon: float):
     N = t_tri.shape[0]
     out_brute = torch.empty([N, 3, 3], device="cuda", dtype=torch.float32)
     out_fast = torch.empty_like(out_brute)
+    eps_brute = torch.zeros(1, device="cuda", dtype=torch.float32)
+    eps_fast = torch.zeros(1, device="cuda", dtype=torch.float32)
 
     t_brute = _cuda_time(
         lambda: winder.brute_force_gradients_triangle_soup(
-            g, t_tri, t_q, out_brute, float(epsilon), h
+            g, t_tri, t_q, out_brute, eps_brute, float(epsilon), h
         ),
         ws,
     )
 
     def _fast():
         eng = winder.GradientEngine(t_q, g, h)
-        eng.compute_triangle_soup(t_tri, out_fast, float(args.beta), float(epsilon), h)
+        eng.compute_triangle_soup(
+            t_tri, out_fast, eps_fast, float(args.beta), float(epsilon), h
+        )
 
     t_fast = _cuda_time(_fast, ws)
-    return out_brute.cpu().numpy(), out_fast.cpu().numpy(), t_brute, t_fast
-
+    return (
+        out_brute.cpu().numpy(),
+        out_fast.cpu().numpy(),
+        float(eps_brute.item()),
+        float(eps_fast.item()),
+        t_brute,
+        t_fast,
+    )
 
 def _backward_mesh_engines(batch: MeshBatch, args, ws, epsilon: float):
     if batch.vertices_gpu is None or batch.indices_gpu is None:
@@ -595,21 +623,31 @@ def _backward_mesh_engines(batch: MeshBatch, args, ws, epsilon: float):
     K = v.shape[0]
     out_brute = torch.empty([K, 3], device="cuda", dtype=torch.float32)
     out_fast = torch.empty_like(out_brute)
+    eps_brute = torch.zeros(1, device="cuda", dtype=torch.float32)
+    eps_fast = torch.zeros(1, device="cuda", dtype=torch.float32)
 
     t_brute = _cuda_time(
         lambda: winder.brute_force_gradients_mesh(
-            g, v, idx, q, out_brute, float(epsilon), h
+            g, v, idx, q, out_brute, eps_brute, float(epsilon), h
         ),
         ws,
     )
 
     def _fast():
         eng = winder.GradientEngine(q, g, h)
-        eng.compute_mesh(v, idx, out_fast, float(args.beta), float(epsilon), h)
+        eng.compute_mesh(
+            v, idx, out_fast, eps_fast, float(args.beta), float(epsilon), h
+        )
 
     t_fast = _cuda_time(_fast, ws)
-    return out_brute.cpu().numpy(), out_fast.cpu().numpy(), t_brute, t_fast
-
+    return (
+        out_brute.cpu().numpy(),
+        out_fast.cpu().numpy(),
+        float(eps_brute.item()),
+        float(eps_fast.item()),
+        t_brute,
+        t_fast,
+    )
 
 def _backward_point_normal_engines(batch: MeshBatch, args, ws, epsilon: float):
     h = ws.handle
@@ -619,10 +657,12 @@ def _backward_point_normal_engines(batch: MeshBatch, args, ws, epsilon: float):
     N = p.shape[0]
     out_brute = torch.empty([N, 2, 3], device="cuda", dtype=torch.float32)
     out_fast = torch.empty_like(out_brute)
+    eps_brute = torch.zeros(1, device="cuda", dtype=torch.float32)
+    eps_fast = torch.zeros(1, device="cuda", dtype=torch.float32)
 
     t_brute = _cuda_time(
         lambda: winder.brute_force_gradients_point_normal(
-            g, p, n, q, out_brute, float(epsilon), h
+            g, p, n, q, out_brute, eps_brute, float(epsilon), h
         ),
         ws,
     )
@@ -630,11 +670,18 @@ def _backward_point_normal_engines(batch: MeshBatch, args, ws, epsilon: float):
     def _fast():
         eng = winder.GradientEngine(q, g, h)
         eng.compute_point_normal(
-            p, n, out_fast, float(args.beta), float(epsilon), h
+            p, n, out_fast, eps_fast, float(args.beta), float(epsilon), h
         )
 
     t_fast = _cuda_time(_fast, ws)
-    return out_brute.cpu().numpy(), out_fast.cpu().numpy(), t_brute, t_fast
+    return (
+        out_brute.cpu().numpy(),
+        out_fast.cpu().numpy(),
+        float(eps_brute.item()),
+        float(eps_fast.item()),
+        t_brute,
+        t_fast,
+    )
 
 # =============================================================================
 # PyTorch reference implementations (small-scale correctness + timing)
@@ -817,24 +864,30 @@ def run_forward_point_normal(batch, args, ws, epsilon):
 
 
 def run_backward_triangle(batch, args, ws, epsilon):
-    ref, fast, tb, tf = _backward_triangle_engines(batch, args, ws, epsilon)
-    m = _backward_metrics(ref, fast, tb, tf)
+    ref, fast, ref_eps, fast_eps, tb, tf = _backward_triangle_engines(
+        batch, args, ws, epsilon
+    )
+    m = _backward_metrics(ref, fast, tb, tf, ref_eps=ref_eps, fast_eps=fast_eps)
     m["_ref_full"] = ref
     m["_fast_full"] = fast
     return m
 
 
 def run_backward_mesh(batch, args, ws, epsilon):
-    ref, fast, tb, tf = _backward_mesh_engines(batch, args, ws, epsilon)
-    m = _backward_metrics(ref, fast, tb, tf)
+    ref, fast, ref_eps, fast_eps, tb, tf = _backward_mesh_engines(
+        batch, args, ws, epsilon
+    )
+    m = _backward_metrics(ref, fast, tb, tf, ref_eps=ref_eps, fast_eps=fast_eps)
     m["_ref_full"] = ref
     m["_fast_full"] = fast
     return m
 
 
 def run_backward_point_normal(batch, args, ws, epsilon):
-    ref, fast, tb, tf = _backward_point_normal_engines(batch, args, ws, epsilon)
-    m = _backward_metrics(ref, fast, tb, tf)
+    ref, fast, ref_eps, fast_eps, tb, tf = _backward_point_normal_engines(
+        batch, args, ws, epsilon
+    )
+    m = _backward_metrics(ref, fast, tb, tf, ref_eps=ref_eps, fast_eps=fast_eps)
     m["_ref_full"] = ref
     m["_fast_full"] = fast
     return m
@@ -1294,7 +1347,6 @@ def _put_sentinel(q: queue.Queue, item, timeout: float = 2.0) -> None:
     except queue.Full:
         pass
 
-
 def producer_loop(reader, raw_queue, done_set, args, stop_event, counter):
     produced = 0
     skipped = 0
@@ -1332,18 +1384,15 @@ def producer_loop(reader, raw_queue, done_set, args, stop_event, counter):
                     break
             produced += 1
     finally:
+        # Block until every preprocessor has received its shutdown sentinel.
+        # Using a timed put here is what caused the pipeline to hang.
         for _ in range(args.preprocess_workers):
-            if stop_event.is_set():
+            if not _put_blocking(raw_queue, None, stop_event):
                 break
-            try:
-                raw_queue.put(None, timeout=0.5)
-            except queue.Full:
-                _put_sentinel(raw_queue, None, timeout=2.0)
         with counter["lock"]:
             counter["produced"] = produced
             counter["skipped"] = skipped
             counter["parse_errors"] = parse_errors
-
 
 def preprocess_loop(
     worker_id, reader, raw_queue, input_queue, args, stop_event, preprocess_done
@@ -1402,8 +1451,10 @@ def preprocess_loop(
         preprocess_done["count"] += 1
         is_last = preprocess_done["count"] >= args.preprocess_workers
     if is_last:
+        # Block until the workers pick up their sentinels.
         for _ in range(args.workers):
-            _put_sentinel(input_queue, None, timeout=2.0)
+            if not _put_blocking(input_queue, None, stop_event):
+                break
 
 
 def worker_loop(worker_id, input_queue, output_queue, args, stop_event):
@@ -1463,7 +1514,7 @@ def worker_loop(worker_id, input_queue, output_queue, args, stop_event):
                 )
     finally:
         if not sent_done:
-            _put_sentinel(output_queue, None, timeout=2.0)
+            output_queue.put(None)
 
 
 def writer_loop(results_path, output_queue, agg, stop_event, args, start_time):
@@ -1476,7 +1527,7 @@ def writer_loop(results_path, output_queue, agg, stop_event, args, start_time):
             try:
                 item = output_queue.get(timeout=0.5)
             except queue.Empty:
-                if stop_event.is_set() and n_workers_done >= args.workers:
+                if n_workers_done >= args.workers or stop_event.is_set():
                     break
                 continue
             if item is None:

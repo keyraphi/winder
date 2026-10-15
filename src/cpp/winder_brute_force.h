@@ -25,7 +25,13 @@ auto brute_force_triangle_impl(const float *triangles, const float *queries,
 auto brute_force_point_normal_gradient_impl(
     const float *grad_output, const float *points, const float *scaled_normals,
     const float *queries, size_t geometry_count, size_t query_count,
-    float *output_gradients, float *epsilon_gradient, float epsilon, int device_id, uint64_t stream = 0)
+    float *output_gradients, float *epsilon_gradient, float epsilon,
+    int device_id, uint64_t stream = 0) -> void;
+
+auto brute_force_point_normal_query_gradient_impl(
+    const float *grad_output, const float *points, const float *scaled_normals,
+    const float *queries, size_t geometry_count, size_t query_count,
+    float *query_gradients, float epsilon, int device_id, uint64_t stream)
     -> void;
 
 auto brute_force_mesh_gradient_impl(const float *grad_output,
@@ -33,10 +39,24 @@ auto brute_force_mesh_gradient_impl(const float *grad_output,
                                     const uint32_t *triangle_indices,
                                     const float *queries, size_t geometry_count,
                                     size_t query_count, size_t vertex_count,
-                                    float *output_gradients, float *epsilon_gradient, float epsilon,
+                                    float *output_gradients,
+                                    float *epsilon_gradient, float epsilon,
                                     int device_id, uint64_t stream = 0) -> void;
+auto brute_force_mesh_query_gradient_impl(
+    const float *grad_output, const float *vertices,
+    const uint32_t *triangle_indices, const float *queries,
+    size_t geometry_count, size_t query_count, size_t vertex_count,
+    float *query_gradients, float epsilon, int device_id, uint64_t stream)
+    -> void;
 
 auto brute_force_triangle_gradient_impl(
     const float *grad_output, const float *triangles, const float *queries,
-    size_t geometry_count, size_t query_count, float *output_gradients, float *epsilon_gradient,
-    float epsilon, int device_id, uint64_t stream = 0) -> void;
+    size_t geometry_count, size_t query_count, float *output_gradients,
+    float *epsilon_gradient, float epsilon, int device_id, uint64_t stream = 0)
+    -> void;
+
+auto brute_force_triangle_query_gradient_impl(
+    const float *grad_output, const float *triangles_float,
+    const float *queries, size_t geometry_count, size_t query_count,
+    float *query_gradients, float epsilon, int device_id, uint64_t stream)
+    -> void;

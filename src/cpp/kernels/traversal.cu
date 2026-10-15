@@ -24,6 +24,7 @@
 #include <device_atomic_functions.h>
 #include <driver_types.h>
 #include <limits>
+#include <type_traits>
 #include <vector_functions.h>
 #include <vector_types.h>
 
@@ -60,8 +61,14 @@ load_shared_cooperative(T *shared_dst, const T *global_src, uint32_t lane_id) {
   }
 }
 
-template <IsGeometry Geometry>
-__global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
+// Forward traversal kernel for computation of winding numbers is almost
+// identical to the traversal kernel for the computation of the query gradients.
+// We merged them into one kernel to make maintenance simpler.
+// The differences are guarded with constexpr checks on the TraversalOutput type
+enum class TraversalOutput { WindingNumbersField, QueryGradient };
+
+template <IsGeometry Geometry, TraversalOutput Out>
+__global__ void __launch_bounds__(128) traverse_geometry_tree_kernel(
     const Vec3 *__restrict__ queries,
     const uint32_t *__restrict__ sort_indirections,
     const BVH8Node *__restrict__ bvh8_nodes,
@@ -69,10 +76,16 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
     const TaylorCoefficientsF16 *__restrict__ node_coefficients,
     const TaylorCoefficientsF16 *__restrict__ leaf_coefficients,
     const AABB *__restrict__ leaf_aabbs,
-    const SoAView<Geometry> sorted_geometry, const uint32_t query_count,
-    const uint32_t geometry_count, float *__restrict__ winding_numbers,
+    const SoAView<Geometry> sorted_geometry,
+    const float *__restrict__ grad_output, // null for WindingNumbersField
+    const uint32_t query_count, const uint32_t geometry_count,
+    float *__restrict__ out_winding_numbers_field, // nullptr for QueryGradient
+    float *__restrict__ out_query_gradients, // null for WindingNumbersField
     uint32_t *__restrict__ global_device_counter, const float beta_2,
     const typename Geometry::Context ctx, const SceneNormalization norm) {
+
+  using Accum = std::conditional_t<Out == TraversalOutput::WindingNumbersField,
+                                   float, Vec3>;
 
   const uint32_t warp_id = threadIdx.x / 32;
   const uint32_t lane_id = threadIdx.x % 32;
@@ -116,8 +129,15 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
       original_query_idx = sort_indirections[my_query_idx];
       my_query = norm.to_normalized(queries[original_query_idx]);
     }
-    float my_winding_number = 0.F;
-    float my_wn_comp = 0.F; // for kahan add
+    Accum my_result;
+    Accum my_comp; // for kahan add
+    if constexpr (Out == TraversalOutput::WindingNumbersField) {
+      my_result = 0.F;
+      my_comp = 0.F;
+    } else {
+      my_result = Vec3::zero();
+      my_comp = Vec3::zero();
+    }
 
     // Always start traversal on root
     int stack_ptr = 0;
@@ -188,10 +208,18 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
         AABB parent_aabb = current_node.getAABB();
 
         // Do approximation
-        float approx_contribution = compute_node_approximation(
-            my_query, parent_aabb.center_of_mass, zero_order_coeff,
-            first_order_coeff, second_order_coeff);
-        kahan_add(my_winding_number, approx_contribution, my_wn_comp);
+        if constexpr (Out == TraversalOutput::WindingNumbersField) {
+          float approx_contribution = compute_node_approximation(
+              my_query, parent_aabb.center_of_mass, zero_order_coeff,
+              first_order_coeff, second_order_coeff);
+          kahan_add(my_result, approx_contribution, my_comp);
+        } else {
+          Vec3 approx_grad = compute_node_query_grad_approximation(
+              my_query, parent_aabb.center_of_mass,
+              current_node_coefficients.zero_order,
+              current_node_coefficients.first_order);
+          kahan_add(my_result, approx_grad, my_comp);
+        }
 
         // Remember that I have the full contribution of this node already.
         my_required_stack_depth = stack_ptr;
@@ -240,12 +268,20 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
             const TaylorCoefficientsF16 &current_leaf_coefficients =
                 current_taylor_coefficients_cache[warp_id];
             const Vec3 leaf_center_of_mass = child_aabb.center_of_mass;
-            float approx_contribution = compute_node_approximation(
-                my_query, leaf_center_of_mass,
-                current_leaf_coefficients.zero_order,
-                current_leaf_coefficients.first_order,
-                current_leaf_coefficients.second_order);
-            kahan_add(my_winding_number, approx_contribution, my_wn_comp);
+            if constexpr (Out == TraversalOutput::WindingNumbersField) {
+              float approx_contribution = compute_node_approximation(
+                  my_query, leaf_center_of_mass,
+                  current_leaf_coefficients.zero_order,
+                  current_leaf_coefficients.first_order,
+                  current_leaf_coefficients.second_order);
+              kahan_add(my_result, approx_contribution, my_comp);
+            } else {
+              Vec3 approx_gradient = compute_node_query_grad_approximation(
+                  my_query, leaf_center_of_mass,
+                  current_leaf_coefficients.zero_order,
+                  current_leaf_coefficients.first_order);
+              kahan_add(my_result, approx_gradient, my_comp);
+            }
             is_detail_eval_needed = false;
           }
           uint32_t detailed_leaf_evaluation_mask = __ballot_sync(
@@ -277,18 +313,32 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
                 __shfl_sync(0xFFFFFFFF, my_query.y, current_leader);
             shared_query.z =
                 __shfl_sync(0xFFFFFFFF, my_query.z, current_leader);
-            // compute the winding number contribution from my geometry
-            float my_contribution = 0.F;
-            if (is_my_geometry_in_bounds) {
-              my_contribution =
-                  my_geometry.contributionToQuery(shared_query, ctx);
-            }
-            // sum up all contributions in warp
-            float total_contribution = warp_reduce_add_xor(my_contribution);
-            // only leader adds that contribution
-            if ((int)lane_id == current_leader) {
-              my_winding_number += total_contribution;
-              kahan_add(my_winding_number, total_contribution, my_wn_comp);
+
+            if constexpr (Out == TraversalOutput::WindingNumbersField) {
+              // compute the winding number contribution from my geometry
+              float my_contribution = 0.F;
+              if (is_my_geometry_in_bounds) {
+                my_contribution =
+                    my_geometry.contributionToQuery(shared_query, ctx);
+              }
+              // sum up all contributions in warp
+              float total_contribution = warp_reduce_add_xor(my_contribution);
+              // only leader adds that contribution
+              if ((int)lane_id == current_leader) {
+                kahan_add(my_result, total_contribution, my_comp);
+              }
+            } else {
+              Vec3 my_grad = Vec3::zero();
+              if (is_my_geometry_in_bounds) {
+                my_grad =
+                    my_geometry.queryGradContribution(shared_query, 1.F, ctx);
+              }
+              Vec3 total_grad{.x = warp_reduce_add_xor(my_grad.x),
+                              .y = warp_reduce_add_xor(my_grad.y),
+                              .z = warp_reduce_add_xor(my_grad.z)};
+              if ((int)lane_id == current_leader) {
+                kahan_add(my_result, total_grad, my_comp);
+              }
             }
           }
         } else {
@@ -305,19 +355,35 @@ __global__ void __launch_bounds__(128) compute_winding_numbers_kernel(
     } // traversal while
     // winding number computation is complete
     if (my_required_stack_depth >= 0) {
-      winding_numbers[original_query_idx] = my_winding_number;
+      if constexpr (Out == TraversalOutput::WindingNumbersField) {
+        out_winding_numbers_field[original_query_idx] = my_result;
+      } else {
+        const float g_j_scaled = grad_output[original_query_idx] * norm.scale;
+        size_t out_idx = static_cast<size_t>(original_query_idx) * 3;
+        out_query_gradients[out_idx] = my_result.x * g_j_scaled;
+        out_query_gradients[out_idx + 1] = my_result.y * g_j_scaled;
+        out_query_gradients[out_idx + 2] = my_result.z * g_j_scaled;
+      }
     }
   } // grid while
 }
 
-template <IsGeometry Geometry>
-__global__ void compute_winding_numbers_single_leaf_kernel(
-    const Vec3 *queries, const uint32_t *sort_indirections,
-    const SoAView<Geometry> sorted_geometry, const uint32_t query_count,
-    const uint32_t geometry_count, float *winding_numbers,
+// Single-leaf traversal. Used when geometry_count <= 32, i.e. there is no
+// BVH8 tree and every query thread simply iterates over the whole geometry
+// set. Shares the TraversalOutput template with the main traversal kernel
+// so both output kinds live in the same code path.
+template <IsGeometry Geometry, TraversalOutput Out>
+__global__ void traverse_single_leaf_kernel(
+    const Vec3 *__restrict__ queries,
+    const uint32_t *__restrict__ sort_indirections,
+    const SoAView<Geometry> sorted_geometry,
+    const float *__restrict__ grad_output, // nullptr for WindingNumbersField
+    const uint32_t query_count, const uint32_t geometry_count,
+    float *__restrict__ out_winding_numbers_field, // nullptr for QueryGradient
+    float *__restrict__ out_query_gradients, // nullptr for WindingNumbersField
     const typename Geometry::Context ctx, const SceneNormalization norm) {
-  // Global index of the query this thread is responsible for
-  uint32_t my_query_idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+  const uint32_t my_query_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
   __shared__ Geometry shared_geometry[32];
   if (threadIdx.x < geometry_count) {
@@ -329,21 +395,32 @@ __global__ void compute_winding_numbers_single_leaf_kernel(
   if (my_query_idx >= query_count)
     return;
 
-  // Load query
-  uint32_t original_idx = sort_indirections[my_query_idx];
-  Vec3 my_query = norm.to_normalized(queries[original_idx]);
-  float my_winding_number = 0.0f;
+  const uint32_t original_idx = sort_indirections[my_query_idx];
+  const Vec3 my_query = norm.to_normalized(queries[original_idx]);
 
-  // Since there is only one leaf, all geometry (1-32 elements)
-  // is stored at the beginning of sorted_geometry.
-  // Every thread iterates through all available geometry for its specific
-  // query.
-  for (uint32_t i = 0; i < geometry_count; ++i) {
-    my_winding_number += shared_geometry[i].contributionToQuery(my_query, ctx);
+  if constexpr (Out == TraversalOutput::WindingNumbersField) {
+    float my_winding_number = 0.0F;
+    for (uint32_t i = 0; i < geometry_count; ++i) {
+      my_winding_number +=
+          shared_geometry[i].contributionToQuery(my_query, ctx);
+    }
+    out_winding_numbers_field[original_idx] = my_winding_number;
+  } else {
+    // Query-gradient accumulation uses Kahan since it is new code and the
+    // extra accuracy is free.
+    Vec3 my_grad = Vec3::zero();
+    for (uint32_t i = 0; i < geometry_count; ++i) {
+      const Vec3 contrib =
+          shared_geometry[i].queryGradContribution(my_query, 1.F, ctx);
+      my_grad += contrib;
+    }
+    // Adjoint is applied once at the end, matching the main traversal.
+    const float g_j_scaled = grad_output[original_idx] * norm.scale;
+    const size_t out_idx = static_cast<size_t>(original_idx) * 3;
+    out_query_gradients[out_idx] = my_grad.x * g_j_scaled;
+    out_query_gradients[out_idx + 1] = my_grad.y * g_j_scaled;
+    out_query_gradients[out_idx + 2] = my_grad.z * g_j_scaled;
   }
-
-  // Write out results
-  winding_numbers[original_idx] = my_winding_number;
 }
 
 template <IsGeometry Geometry>
@@ -359,11 +436,12 @@ void compute_winding_numbers(
   if (params.geometry_count <= 32) {
     uint32_t threads = 256;
     uint32_t blocks = (params.query_count + threads - 1) / threads;
-    compute_winding_numbers_single_leaf_kernel<Geometry>
+    traverse_single_leaf_kernel<Geometry, TraversalOutput::WindingNumbersField>
         <<<blocks, threads, 0, stream>>>(
             params.queries, params.sort_indirections, params.sorted_geometry,
-            params.query_count, params.geometry_count, params.winding_numbers,
-            ctx, params.norm);
+            /*grad_output=*/nullptr, params.query_count, params.geometry_count,
+            params.winding_numbers,
+            /*out_query_gradients=*/nullptr, ctx, params.norm);
     CUDA_CHECK(cudaGetLastError());
     return;
   }
@@ -380,18 +458,77 @@ void compute_winding_numbers(
                              cudaMemcpyHostToDevice, stream));
 
   cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-      &blocks_per_sm, compute_winding_numbers_kernel<Geometry>, threads, 0);
+      &blocks_per_sm,
+      traverse_geometry_tree_kernel<Geometry,
+                                    TraversalOutput::WindingNumbersField>,
+      threads, 0);
 
   cudaDeviceProp deviceProp;
   cudaGetDeviceProperties(&deviceProp, device_id);
   int blocks = blocks_per_sm * deviceProp.multiProcessorCount;
 
-  compute_winding_numbers_kernel<Geometry><<<blocks, threads, 0, stream>>>(
-      params.queries, params.sort_indirections, params.bvh8_nodes,
-      params.bvh8_leaf_pointers, params.node_coefficients,
-      params.leaf_coefficients, params.leaf_aabbs, params.sorted_geometry,
-      params.query_count, params.geometry_count, params.winding_numbers,
-      params.global_device_counter, beta_2, ctx, params.norm);
+  traverse_geometry_tree_kernel<Geometry, TraversalOutput::WindingNumbersField>
+      <<<blocks, threads, 0, stream>>>(
+          params.queries, params.sort_indirections, params.bvh8_nodes,
+          params.bvh8_leaf_pointers, params.node_coefficients,
+          params.leaf_coefficients, params.leaf_aabbs, params.sorted_geometry,
+          /*grad_output=*/nullptr, params.query_count, params.geometry_count,
+          params.winding_numbers, /*out_query_gradients=*/nullptr,
+          params.global_device_counter, beta_2, ctx, params.norm);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+template <IsGeometry Geometry>
+void query_gradient_traversal(const ComputeQueryGradientParams<Geometry> &params,
+                             int device_id, const cudaStream_t &stream) {
+  if (params.query_count == 0) {
+    return;
+  }
+
+  auto ctx = Geometry::Context::make(params.epsilon, params.scene_scale);
+  // There i no tree if there is only one leaf
+  if (params.geometry_count <= 32) {
+    uint32_t threads = 256;
+    uint32_t blocks = (params.query_count + threads - 1) / threads;
+    traverse_single_leaf_kernel<Geometry,
+                                TraversalOutput::QueryGradient> // TODO
+        <<<blocks, threads, 0, stream>>>(
+            params.queries, params.sort_indirections, params.sorted_geometry,
+            params.grad_output, params.query_count, params.geometry_count,
+            /*winding_numbers=*/nullptr, params.out_query_gradients, ctx,
+            params.norm);
+    CUDA_CHECK(cudaGetLastError());
+    return;
+  }
+
+  float beta_2 = params.beta * params.beta;
+
+  int threads = 128;
+  int blocks_per_sm = 0;
+
+  // Set global counter to 0
+  uint32_t global_device_counter_reset = 0;
+  CUDA_CHECK(cudaMemcpyAsync(params.global_device_counter,
+                             &global_device_counter_reset, sizeof(uint32_t),
+                             cudaMemcpyHostToDevice, stream));
+
+  cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+      &blocks_per_sm,
+      traverse_geometry_tree_kernel<Geometry, TraversalOutput::QueryGradient>,
+      threads, 0);
+
+  cudaDeviceProp deviceProp;
+  cudaGetDeviceProperties(&deviceProp, device_id);
+  int blocks = blocks_per_sm * deviceProp.multiProcessorCount;
+
+  traverse_geometry_tree_kernel<Geometry, TraversalOutput::QueryGradient>
+      <<<blocks, threads, 0, stream>>>(
+          params.queries, params.sort_indirections, params.bvh8_nodes,
+          params.bvh8_leaf_pointers, params.node_coefficients,
+          params.leaf_coefficients, params.leaf_aabbs, params.sorted_geometry,
+          params.grad_output, params.query_count, params.geometry_count,
+          /*winding_numbers=*/nullptr, params.out_query_gradients,
+          params.global_device_counter, beta_2, ctx, params.norm);
   CUDA_CHECK(cudaGetLastError());
 }
 
@@ -741,8 +878,8 @@ __global__ void compute_triangle_gradient_single_leaf_kernel(
     const SoAView<Vec3> sorted_queries,
     const float *__restrict__ sorted_grad_outputs, const uint32_t query_count,
     const uint32_t geometry_count, float *__restrict__ gradients,
-    float *__restrict__ epsilon_gradients,
-    const typename Triangle::Context ctx, const SceneNormalization norm) {
+    float *__restrict__ epsilon_gradients, const typename Triangle::Context ctx,
+    const SceneNormalization norm) {
   // Global index of the geometry this thread is responsible for
   uint32_t my_geometry_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -1079,4 +1216,10 @@ template void compute_winding_numbers<PointNormal>(
     const cudaStream_t &stream);
 template void compute_winding_numbers<Triangle>(
     const ComputeWindingNumbersParams<Triangle> &params, int device_id,
+    const cudaStream_t &stream);
+template void query_gradient_traversal<PointNormal>(
+    const ComputeQueryGradientParams<PointNormal> &params, int device_id,
+    const cudaStream_t &stream);
+template void query_gradient_traversal<Triangle>(
+    const ComputeQueryGradientParams<Triangle> &params, int device_id,
     const cudaStream_t &stream);

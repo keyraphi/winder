@@ -37,6 +37,7 @@ import argparse
 import csv
 import math
 import sys
+import zlib
 import tarfile
 import tempfile
 import time
@@ -121,14 +122,91 @@ def _auto_chunk_size(n_tri: int, user_chunk: int, budget_bytes: int) -> int:
     return max(1, min(user_chunk, fit))
 
 
+# Compact-profile constants (must match geometry.h).
+_TWO_OVER_SQRT_PI = 1.1283791671
+_QUARTIC_A2 = 0.4748737341529164
+_QUARTIC_A4 = -0.0606601717798213
+_CUBIC_V = math.sqrt(2.0)
+_CUBIC_S = 1.0 / math.sqrt(2.0)
+_CUBIC_C = -0.6568542494923802
+_CUBIC_D = 0.5355339059327378
+
+
+def _compact_g(t: torch.Tensor) -> torch.Tensor:
+    tq = t.clamp(max=1.0)
+    tc = t.clamp(min=1.0, max=2.0)
+    ti = t.clamp(min=2.0)
+    gq = 1.0 + _QUARTIC_A2 * tq * tq + _QUARTIC_A4 * tq**4
+    u = tc - 1.0
+    gc = _CUBIC_V + _CUBIC_S * u + _CUBIC_C * u * u + _CUBIC_D * u**3
+    return torch.where(t <= 1.0, gq, torch.where(t <= 2.0, gc, ti))
+
+
+def _torch_reg_inv_lengths(
+    a: torch.Tensor,
+    b: torch.Tensor,
+    c: torch.Tensor,
+    eps_world: torch.Tensor,
+    reg_mode: str,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return 1/r_a, 1/r_b, 1/r_c matching the CUDA edge regularizer."""
+    a2 = (a * a).sum(-1) + 1e-20
+    b2 = (b * b).sum(-1) + 1e-20
+    c2 = (c * c).sum(-1) + 1e-20
+    use_reg = float(eps_world.detach()) > 0.0 and reg_mode != "sharp"
+    if not use_reg:
+        return a2.rsqrt(), b2.rsqrt(), c2.rsqrt()
+    if reg_mode == "plummer":
+        eps2 = eps_world * eps_world
+        return (
+            (a2 + eps2).rsqrt(),
+            (b2 + eps2).rsqrt(),
+            (c2 + eps2).rsqrt(),
+        )
+    # compact
+    inv_eps = 1.0 / eps_world
+    ra = eps_world * _compact_g(a2.sqrt() * inv_eps)
+    rb = eps_world * _compact_g(b2.sqrt() * inv_eps)
+    rc = eps_world * _compact_g(c2.sqrt() * inv_eps)
+    return 1.0 / ra, 1.0 / rb, 1.0 / rc
+
+def _torch_reg_inv_lengths_reg(
+    a: torch.Tensor,
+    b: torch.Tensor,
+    c: torch.Tensor,
+    eps_world: torch.Tensor,
+    reg_mode: str,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Regularized inverse lengths; assumes eps_world > 0 and reg_mode != sharp.
+
+    Kept branch-free so it can be traced by torch.compile without a
+    Python-level graph break.
+    """
+    a2 = (a * a).sum(-1) + 1e-20
+    b2 = (b * b).sum(-1) + 1e-20
+    c2 = (c * c).sum(-1) + 1e-20
+    if reg_mode == "plummer":
+        eps2 = eps_world * eps_world
+        return (a2 + eps2).rsqrt(), (b2 + eps2).rsqrt(), (c2 + eps2).rsqrt()
+    # compact
+    inv_eps = 1.0 / eps_world
+    ra = eps_world * _compact_g(a2.sqrt() * inv_eps)
+    rb = eps_world * _compact_g(b2.sqrt() * inv_eps)
+    rc = eps_world * _compact_g(c2.sqrt() * inv_eps)
+    return 1.0 / ra, 1.0 / rb, 1.0 / rc
+
+
 def _triangle_grads_torch(
     triangles_np: np.ndarray,
     queries: np.ndarray,
     grad_output_np: np.ndarray,
+    eps_world: float,
+    reg_mode: str,
     chunk_size: int,
     try_compile: bool,
-) -> tuple[np.ndarray, float, str | None]:
-    """Return (gradients, wall_clock_ms, compile_error_or_none)."""
+    need_eps_grad: bool,
+) -> tuple[np.ndarray, float, float, float, str | None]:
+    """Return (vertex_grads, eps_grad, geom_ms, eps_ms, compile_error)."""
     device = "cuda"
     tris = torch.from_numpy(triangles_np).to(device)
     q = torch.from_numpy(queries).to(device)
@@ -139,21 +217,42 @@ def _triangle_grads_torch(
     chunk = _auto_chunk_size(N, chunk_size, 1_000_000_000)
     inv_two_pi = 1.0 / (2.0 * math.pi)
 
-    def _chunk_loss(v, qc, gc):
+    # Branch selection outside the compiled region. Keeping this as a plain
+    # Python bool means dynamo sees a single branch-free loss function and
+    # does not emit a graph break on `float(eps_t.detach())`.
+    use_reg = eps_world > 0.0 and reg_mode != "sharp"
+
+    def _chunk_loss_reg(v, eps_t, qc, gc):
         a = v[None, :, 0, :] - qc[:, None, :]
         b = v[None, :, 1, :] - qc[:, None, :]
         c = v[None, :, 2, :] - qc[:, None, :]
-        la = a.norm(dim=-1)
-        lb = b.norm(dim=-1)
-        lc = c.norm(dim=-1)
-        Nv = (a * torch.cross(b, c, dim=-1)).sum(-1)
-        Dv = (
-            la * lb * lc
-            + (a * b).sum(-1) * lc
-            + (b * c).sum(-1) * la
-            + (c * a).sum(-1) * lb
+        ia, ib, ic = _torch_reg_inv_lengths_reg(a, b, c, eps_t, reg_mode)
+        P = (a * torch.cross(b, c, dim=-1)).sum(-1) * ia * ib * ic
+        Qn = (
+            1.0
+            + (a * b).sum(-1) * ia * ib
+            + (a * c).sum(-1) * ia * ic
+            + (b * c).sum(-1) * ib * ic
         )
-        return (torch.atan2(Nv, Dv) * inv_two_pi * gc[:, None]).sum()
+        return (torch.atan2(P, Qn) * inv_two_pi * gc[:, None]).sum()
+
+    def _chunk_loss_sharp(v, eps_t, qc, gc):  # noqa: ARG001 (eps_t unused)
+        a = v[None, :, 0, :] - qc[:, None, :]
+        b = v[None, :, 1, :] - qc[:, None, :]
+        c = v[None, :, 2, :] - qc[:, None, :]
+        ia = (a * a).sum(-1).add(1e-20).rsqrt()
+        ib = (b * b).sum(-1).add(1e-20).rsqrt()
+        ic = (c * c).sum(-1).add(1e-20).rsqrt()
+        P = (a * torch.cross(b, c, dim=-1)).sum(-1) * ia * ib * ic
+        Qn = (
+            1.0
+            + (a * b).sum(-1) * ia * ib
+            + (a * c).sum(-1) * ia * ic
+            + (b * c).sum(-1) * ib * ic
+        )
+        return (torch.atan2(P, Qn) * inv_two_pi * gc[:, None]).sum()
+
+    _chunk_loss = _chunk_loss_reg if use_reg else _chunk_loss_sharp
 
     compile_error = None
     if try_compile:
@@ -161,38 +260,66 @@ def _triangle_grads_torch(
             _chunk_loss = torch.compile(_chunk_loss)
         except Exception as exc:
             compile_error = f"torch.compile failed: {exc}"
-            _chunk_loss = (
-                _chunk_loss.__wrapped__
-                if hasattr(_chunk_loss, "__wrapped__")
-                else _chunk_loss
-            )
 
-    # Warmup once so any compilation / kernel caching is paid before timing.
+    # Warmup: pays compilation / kernel-caching cost before timing.
     v_warm = tris.clone().requires_grad_(True)
-    _ = _chunk_loss(v_warm, q[: min(64, Q)], g[: min(64, Q)])
+    eps_warm = torch.tensor(eps_world, device=device, dtype=torch.float32)
+    _ = _chunk_loss(v_warm, eps_warm, q[: min(64, Q)], g[: min(64, Q)])
     torch.cuda.synchronize()
-    del v_warm
+    del v_warm, eps_warm
 
+    # ---- Geometry-only timing ----
     v = tris.clone().requires_grad_(True)
+    eps_fixed = torch.tensor(eps_world, device=device, dtype=torch.float32)
     torch.cuda.synchronize()
     t0 = time.perf_counter()
     for i in range(0, Q, chunk):
-        loss = _chunk_loss(v, q[i : i + chunk], g[i : i + chunk])
+        loss = _chunk_loss(v, eps_fixed, q[i : i + chunk], g[i : i + chunk])
         loss.backward()
     torch.cuda.synchronize()
     t1 = time.perf_counter()
+    v_grad = v.grad.detach().cpu().numpy()
+    t_geom_ms = (t1 - t0) * 1e3
 
-    return v.grad.detach().cpu().numpy(), (t1 - t0) * 1e3, compile_error
+    # ---- Epsilon-gradient timing ----
+    eps_grad_value = float("nan")
+    t_eps_ms = float("nan")
+    if need_eps_grad and use_reg:
+        v = tris.clone().requires_grad_(True)
+        eps_var = torch.tensor(
+            eps_world, device=device, dtype=torch.float32, requires_grad=True
+        )
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        for i in range(0, Q, chunk):
+            # Multiplying by 1.0 keeps the autograd edge alive per chunk,
+            # so eps_var.grad accumulates across the whole query set.
+            eps_chunk = eps_var * 1.0
+            loss = _chunk_loss(v, eps_chunk, q[i : i + chunk], g[i : i + chunk])
+            loss.backward()
+        torch.cuda.synchronize()
+        t1 = time.perf_counter()
+        eps_grad_value = float(eps_var.grad.item()) if eps_var.grad is not None else 0.0
+        t_eps_ms = (t1 - t0) * 1e3
+
+    return v_grad, eps_grad_value, t_geom_ms, t_eps_ms, compile_error
 
 
 def _point_normal_grads_torch(
     triangles_np: np.ndarray,
     queries: np.ndarray,
     grad_output_np: np.ndarray,
-    epsilon: float,
+    eps_world: float,
     chunk_size: int,
     try_compile: bool,
-) -> tuple[np.ndarray, float, str | None]:
+    need_eps_grad: bool,
+) -> tuple[np.ndarray, float, float, float, str | None]:
+    """Return (grads, eps_grad, geom_ms, eps_ms, compile_error).
+
+    The point-normal kernel has a fixed regularization profile (the erf-based
+    S(t) from geometry.h); there is no compact/plummer switch. Only eps_world
+    is configurable.
+    """
     # Convert to point-normal
     v0, v1, v2 = triangles_np[:, 0], triangles_np[:, 1], triangles_np[:, 2]
     points = ((v0 + v1 + v2) / 3.0).astype(np.float32)
@@ -212,23 +339,37 @@ def _point_normal_grads_torch(
     N = p.shape[0]
     Q = q.shape[0]
     chunk = _auto_chunk_size(N, chunk_size, 1_000_000_000)
-    inv_eps = 1.0 / epsilon
     inv_4pi = 1.0 / (4.0 * math.pi)
     four_over_3sqrt_pi = 4.0 / (3.0 * math.sqrt(math.pi))
+    two_over_sqrt_pi = 2.0 / math.sqrt(math.pi)
 
-    def _chunk_loss(p_, n_, qc, gc):
+    # Branch selection outside the compiled region (see triangle comment).
+    use_reg = eps_world > 0.0
+
+    def _chunk_loss_reg(p_, n_, eps_t, qc, gc):
+        inv_eps = 1.0 / eps_t
+        inv_eps3 = inv_eps**3
         d = p_[None, :, :] - qc[:, None, :]
         dist2 = (d * d).sum(-1)
         inv_dist = torch.rsqrt(dist2 + 1e-20)
         inv_dist3 = inv_dist**3
         t = dist2 * inv_dist * inv_eps
-        near = four_over_3sqrt_pi * inv_eps**3
-        mid_s = torch.erf(t) - (2.0 / math.sqrt(math.pi)) * t * torch.exp(-t * t)
+        near = four_over_3sqrt_pi * inv_eps3
+        mid_s = torch.erf(t) - two_over_sqrt_pi * t * torch.exp(-t * t)
         mid = mid_s * inv_dist3
-        far = inv_dist3
-        s_over_d3 = torch.where(t < 0.1, near, torch.where(t < 2.0, mid, far))
+        s_over_d3 = torch.where(t < 0.1, near, torch.where(t < 2.0, mid, inv_dist3))
         contrib = (n_[None, :, :] * d).sum(-1) * inv_4pi * s_over_d3
         return (contrib * gc[:, None]).sum()
+
+    def _chunk_loss_sharp(p_, n_, eps_t, qc, gc):  # noqa: ARG001 (eps_t unused)
+        d = p_[None, :, :] - qc[:, None, :]
+        dist2 = (d * d).sum(-1)
+        inv_dist = torch.rsqrt(dist2 + 1e-20)
+        inv_dist3 = inv_dist**3
+        contrib = (n_[None, :, :] * d).sum(-1) * inv_4pi * inv_dist3
+        return (contrib * gc[:, None]).sum()
+
+    _chunk_loss = _chunk_loss_reg if use_reg else _chunk_loss_sharp
 
     compile_error = None
     if try_compile:
@@ -237,26 +378,51 @@ def _point_normal_grads_torch(
         except Exception as exc:
             compile_error = f"torch.compile failed: {exc}"
 
+    # Warmup.
     p_warm = p.clone().requires_grad_(True)
     n_warm = n.clone().requires_grad_(True)
-    _ = _chunk_loss(p_warm, n_warm, q[: min(64, Q)], g[: min(64, Q)])
+    eps_warm = torch.tensor(eps_world, device=device, dtype=torch.float32)
+    _ = _chunk_loss(p_warm, n_warm, eps_warm, q[: min(64, Q)], g[: min(64, Q)])
     torch.cuda.synchronize()
-    del p_warm, n_warm
+    del p_warm, n_warm, eps_warm
 
+    # ---- Geometry-only timing ----
     p_ = p.clone().requires_grad_(True)
     n_ = n.clone().requires_grad_(True)
+    eps_fixed = torch.tensor(eps_world, device=device, dtype=torch.float32)
     torch.cuda.synchronize()
     t0 = time.perf_counter()
     for i in range(0, Q, chunk):
-        loss = _chunk_loss(p_, n_, q[i : i + chunk], g[i : i + chunk])
+        loss = _chunk_loss(p_, n_, eps_fixed, q[i : i + chunk], g[i : i + chunk])
         loss.backward()
     torch.cuda.synchronize()
     t1 = time.perf_counter()
-
     grads = np.stack(
         [p_.grad.detach().cpu().numpy(), n_.grad.detach().cpu().numpy()], axis=1
     )
-    return grads, (t1 - t0) * 1e3, compile_error
+    t_geom_ms = (t1 - t0) * 1e3
+
+    # ---- Epsilon-gradient timing ----
+    eps_grad_value = float("nan")
+    t_eps_ms = float("nan")
+    if need_eps_grad and use_reg:
+        p_ = p.clone().requires_grad_(True)
+        n_ = n.clone().requires_grad_(True)
+        eps_var = torch.tensor(
+            eps_world, device=device, dtype=torch.float32, requires_grad=True
+        )
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        for i in range(0, Q, chunk):
+            eps_chunk = eps_var * 1.0
+            loss = _chunk_loss(p_, n_, eps_chunk, q[i : i + chunk], g[i : i + chunk])
+            loss.backward()
+        torch.cuda.synchronize()
+        t1 = time.perf_counter()
+        eps_grad_value = float(eps_var.grad.item()) if eps_var.grad is not None else 0.0
+        t_eps_ms = (t1 - t0) * 1e3
+
+    return grads, eps_grad_value, t_geom_ms, t_eps_ms, compile_error
 
 
 def _mesh_grads_torch(
@@ -264,9 +430,13 @@ def _mesh_grads_torch(
     faces_np: np.ndarray,
     queries: np.ndarray,
     grad_output_np: np.ndarray,
+    eps_world: float,
+    reg_mode: str,
     chunk_size: int,
     try_compile: bool,
-) -> tuple[np.ndarray, float, str | None]:
+    need_eps_grad: bool,
+) -> tuple[np.ndarray, float, float, float, str | None]:
+    """Return (vertex_grads, eps_grad, geom_ms, eps_ms, compile_error)."""
     device = "cuda"
     v = torch.from_numpy(vertices_np).to(device)
     f = torch.from_numpy(faces_np.astype(np.int64)).to(device)
@@ -278,22 +448,42 @@ def _mesh_grads_torch(
     chunk = _auto_chunk_size(N, chunk_size, 1_000_000_000)
     inv_two_pi = 1.0 / (2.0 * math.pi)
 
-    def _chunk_loss(v_, qc, gc):
-        tri_v = v_[f]  # [N, 3, 3]
+    # Branch selection outside the compiled region (see triangle comment).
+    use_reg = eps_world > 0.0 and reg_mode != "sharp"
+
+    def _chunk_loss_reg(v_, eps_t, qc, gc):
+        tri_v = v_[f]
         a = tri_v[None, :, 0, :] - qc[:, None, :]
         b = tri_v[None, :, 1, :] - qc[:, None, :]
         c = tri_v[None, :, 2, :] - qc[:, None, :]
-        la = a.norm(dim=-1)
-        lb = b.norm(dim=-1)
-        lc = c.norm(dim=-1)
-        Nv = (a * torch.cross(b, c, dim=-1)).sum(-1)
-        Dv = (
-            la * lb * lc
-            + (a * b).sum(-1) * lc
-            + (b * c).sum(-1) * la
-            + (c * a).sum(-1) * lb
+        ia, ib, ic = _torch_reg_inv_lengths_reg(a, b, c, eps_t, reg_mode)
+        P = (a * torch.cross(b, c, dim=-1)).sum(-1) * ia * ib * ic
+        Qn = (
+            1.0
+            + (a * b).sum(-1) * ia * ib
+            + (a * c).sum(-1) * ia * ic
+            + (b * c).sum(-1) * ib * ic
         )
-        return (torch.atan2(Nv, Dv) * inv_two_pi * gc[:, None]).sum()
+        return (torch.atan2(P, Qn) * inv_two_pi * gc[:, None]).sum()
+
+    def _chunk_loss_sharp(v_, eps_t, qc, gc):  # noqa: ARG001 (eps_t unused)
+        tri_v = v_[f]
+        a = tri_v[None, :, 0, :] - qc[:, None, :]
+        b = tri_v[None, :, 1, :] - qc[:, None, :]
+        c = tri_v[None, :, 2, :] - qc[:, None, :]
+        ia = (a * a).sum(-1).add(1e-20).rsqrt()
+        ib = (b * b).sum(-1).add(1e-20).rsqrt()
+        ic = (c * c).sum(-1).add(1e-20).rsqrt()
+        P = (a * torch.cross(b, c, dim=-1)).sum(-1) * ia * ib * ic
+        Qn = (
+            1.0
+            + (a * b).sum(-1) * ia * ib
+            + (a * c).sum(-1) * ia * ic
+            + (b * c).sum(-1) * ib * ic
+        )
+        return (torch.atan2(P, Qn) * inv_two_pi * gc[:, None]).sum()
+
+    _chunk_loss = _chunk_loss_reg if use_reg else _chunk_loss_sharp
 
     compile_error = None
     if try_compile:
@@ -302,20 +492,46 @@ def _mesh_grads_torch(
         except Exception as exc:
             compile_error = f"torch.compile failed: {exc}"
 
+    # Warmup.
     v_warm = v.clone().requires_grad_(True)
-    _ = _chunk_loss(v_warm, q[: min(64, Q)], g[: min(64, Q)])
+    eps_warm = torch.tensor(eps_world, device=device, dtype=torch.float32)
+    _ = _chunk_loss(v_warm, eps_warm, q[: min(64, Q)], g[: min(64, Q)])
     torch.cuda.synchronize()
-    del v_warm
+    del v_warm, eps_warm
 
+    # ---- Geometry-only timing ----
     v_ = v.clone().requires_grad_(True)
+    eps_fixed = torch.tensor(eps_world, device=device, dtype=torch.float32)
     torch.cuda.synchronize()
     t0 = time.perf_counter()
     for i in range(0, Q, chunk):
-        loss = _chunk_loss(v_, q[i : i + chunk], g[i : i + chunk])
+        loss = _chunk_loss(v_, eps_fixed, q[i : i + chunk], g[i : i + chunk])
         loss.backward()
     torch.cuda.synchronize()
     t1 = time.perf_counter()
-    return v_.grad.detach().cpu().numpy(), (t1 - t0) * 1e3, compile_error
+    v_grad = v_.grad.detach().cpu().numpy()
+    t_geom_ms = (t1 - t0) * 1e3
+
+    # ---- Epsilon-gradient timing ----
+    eps_grad_value = float("nan")
+    t_eps_ms = float("nan")
+    if need_eps_grad and use_reg:
+        v_ = v.clone().requires_grad_(True)
+        eps_var = torch.tensor(
+            eps_world, device=device, dtype=torch.float32, requires_grad=True
+        )
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        for i in range(0, Q, chunk):
+            eps_chunk = eps_var * 1.0
+            loss = _chunk_loss(v_, eps_chunk, q[i : i + chunk], g[i : i + chunk])
+            loss.backward()
+        torch.cuda.synchronize()
+        t1 = time.perf_counter()
+        eps_grad_value = float(eps_var.grad.item()) if eps_var.grad is not None else 0.0
+        t_eps_ms = (t1 - t0) * 1e3
+
+    return v_grad, eps_grad_value, t_geom_ms, t_eps_ms, compile_error
 
 
 # ============================================================================
@@ -342,7 +558,7 @@ def _wall_time_cuda(fn, warmup: int = 1, iters: int = 3) -> float:
     return float(np.median(times))
 
 
-def _cuda_backward_triangle(tris_np, queries_np, grad_output_np, beta, epsilon):
+def _cuda_backward_triangle(tris_np, queries_np, grad_output_np, beta, eps_fraction):
     device = "cuda"
     t = torch.from_numpy(tris_np).to(device)
     q = torch.from_numpy(queries_np).to(device)
@@ -351,10 +567,12 @@ def _cuda_backward_triangle(tris_np, queries_np, grad_output_np, beta, epsilon):
 
     out_brute = torch.empty([N, 3, 3], device=device, dtype=torch.float32)
     out_fast = torch.empty_like(out_brute)
+    eps_brute = torch.zeros(1, device=device, dtype=torch.float32)
+    eps_fast = torch.zeros(1, device=device, dtype=torch.float32)
 
     def _brute():
         winder.brute_force_gradients_triangle_soup(
-            g, t, q, out_brute, float(epsilon), _stream()
+            g, t, q, out_brute, eps_brute, float(eps_fraction), _stream()
         )
 
     t_brute = _wall_time_cuda(_brute)
@@ -362,16 +580,24 @@ def _cuda_backward_triangle(tris_np, queries_np, grad_output_np, beta, epsilon):
     def _fast():
         eng = winder.GradientEngine(q, g, _stream())
         eng.compute_triangle_soup(
-            t, out_fast, float(beta), float(epsilon), _stream()
+            t, out_fast, eps_fast, float(beta), float(eps_fraction), _stream()
         )
 
     t_fast = _wall_time_cuda(_fast)
 
-    return out_brute.cpu().numpy(), out_fast.cpu().numpy(), t_brute, t_fast
+    return (
+        out_brute.cpu().numpy(),
+        out_fast.cpu().numpy(),
+        float(eps_brute.item()),
+        float(eps_fast.item()),
+        t_brute,
+        t_fast,
+    )
 
 
-def _cuda_backward_mesh(vertices_np, faces_np, queries_np, grad_output_np,
-                        beta, epsilon):
+def _cuda_backward_mesh(
+    vertices_np, faces_np, queries_np, grad_output_np, beta, eps_fraction
+):
     device = "cuda"
     v = torch.from_numpy(vertices_np).to(device)
     f = torch.from_numpy(faces_np.astype(np.uint32)).to(device)
@@ -381,24 +607,37 @@ def _cuda_backward_mesh(vertices_np, faces_np, queries_np, grad_output_np,
 
     out_brute = torch.empty([K, 3], device=device, dtype=torch.float32)
     out_fast = torch.empty_like(out_brute)
+    eps_brute = torch.zeros(1, device=device, dtype=torch.float32)
+    eps_fast = torch.zeros(1, device=device, dtype=torch.float32)
 
     def _brute():
         winder.brute_force_gradients_mesh(
-            g, v, f, q, out_brute, float(epsilon), _stream()
+            g, v, f, q, out_brute, eps_brute, float(eps_fraction), _stream()
         )
 
     t_brute = _wall_time_cuda(_brute)
 
     def _fast():
         eng = winder.GradientEngine(q, g, _stream())
-        eng.compute_mesh(v, f, out_fast, float(beta), float(epsilon), _stream())
+        eng.compute_mesh(
+            v, f, out_fast, eps_fast, float(beta), float(eps_fraction), _stream()
+        )
 
     t_fast = _wall_time_cuda(_fast)
 
-    return out_brute.cpu().numpy(), out_fast.cpu().numpy(), t_brute, t_fast
+    return (
+        out_brute.cpu().numpy(),
+        out_fast.cpu().numpy(),
+        float(eps_brute.item()),
+        float(eps_fast.item()),
+        t_brute,
+        t_fast,
+    )
 
 
-def _cuda_backward_point_normal(tris_np, queries_np, grad_output_np, beta, epsilon):
+def _cuda_backward_point_normal(
+    tris_np, queries_np, grad_output_np, beta, eps_fraction
+):
     v0, v1, v2 = tris_np[:, 0], tris_np[:, 1], tris_np[:, 2]
     points = ((v0 + v1 + v2) / 3.0).astype(np.float32)
     cross = np.cross(v1 - v0, v2 - v0)
@@ -416,10 +655,12 @@ def _cuda_backward_point_normal(tris_np, queries_np, grad_output_np, beta, epsil
 
     out_brute = torch.empty([N, 2, 3], device=device, dtype=torch.float32)
     out_fast = torch.empty_like(out_brute)
+    eps_brute = torch.zeros(1, device=device, dtype=torch.float32)
+    eps_fast = torch.zeros(1, device=device, dtype=torch.float32)
 
     def _brute():
         winder.brute_force_gradients_point_normal(
-            g, p, n, q, out_brute, float(epsilon), _stream()
+            g, p, n, q, out_brute, eps_brute, float(eps_fraction), _stream()
         )
 
     t_brute = _wall_time_cuda(_brute)
@@ -427,17 +668,38 @@ def _cuda_backward_point_normal(tris_np, queries_np, grad_output_np, beta, epsil
     def _fast():
         eng = winder.GradientEngine(q, g, _stream())
         eng.compute_point_normal(
-            p, n, out_fast, float(beta), float(epsilon), _stream()
+            p, n, out_fast, eps_fast, float(beta), float(eps_fraction), _stream()
         )
 
     t_fast = _wall_time_cuda(_fast)
 
-    return out_brute.cpu().numpy(), out_fast.cpu().numpy(), t_brute, t_fast
+    return (
+        out_brute.cpu().numpy(),
+        out_fast.cpu().numpy(),
+        float(eps_brute.item()),
+        float(eps_fast.item()),
+        t_brute,
+        t_fast,
+    )
 
 
 # ============================================================================
 # Query generation (matches eval_pipeline)
 # ============================================================================
+
+
+def _stable_seed(*parts) -> int:
+    """Deterministic seed that is stable across processes."""
+    return zlib.crc32("|".join(str(p) for p in parts).encode())
+
+
+def _scene_epsilon_world(tris_or_vertices: np.ndarray, eps_fraction: float) -> float:
+    """Match the C++ convention: eps_world = eps_fraction * max_extent."""
+    if eps_fraction <= 0.0:
+        return 0.0
+    flat = tris_or_vertices.reshape(-1, 3)
+    extent = flat.max(0) - flat.min(0)
+    return float(eps_fraction * np.max(extent))
 
 
 def _sample_queries(tris: np.ndarray, n_queries: int, seed: int) -> np.ndarray:
@@ -446,9 +708,9 @@ def _sample_queries(tris: np.ndarray, n_queries: int, seed: int) -> np.ndarray:
     mn = flat.min(0)
     mx = flat.max(0)
     diag = float(np.linalg.norm(mx - mn))
-    mn = mn - 0.3 * diag
-    mx = mx + 0.3 * diag
-    return rng.uniform(mn, mx, (n_queries, 3)).astype(np.float32)
+    return rng.uniform(mn - 0.3 * diag, mx + 0.3 * diag, (n_queries, 3)).astype(
+        np.float32
+    )
 
 
 # ============================================================================
@@ -489,7 +751,7 @@ def main():
         type=float,
         default=DEFAULT_EPSILON,
         help=f"Regularization fraction of scene scale, applied to all modes. "
-             f"Default {DEFAULT_EPSILON} (= 1/250). Use 0 for the sharp kernel.",
+        f"Default {DEFAULT_EPSILON} (= 1/250). Use 0 for the sharp kernel.",
     )
     p.add_argument(
         "--torch-chunk-size",
@@ -508,6 +770,18 @@ def main():
     )
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--output", type=str, default="bench_backward.csv")
+    p.add_argument(
+        "--reg-mode",
+        choices=["sharp", "plummer", "compact"],
+        default="compact",
+        help="Must match the reg mode the CUDA library was compiled with "
+        "(DefaultReg in geometry.h).",
+    )
+    p.add_argument(
+        "--compute-eps-grad",
+        action="store_true",
+        help="Also benchmark dL/d(epsilon) on both PyTorch and CUDA.",
+    )
     args = p.parse_args()
 
     np.random.seed(args.seed)
@@ -541,7 +815,7 @@ def main():
         tris = vertices[faces]
         for mode in modes:
             for q_count in query_counts:
-                seed = hash((mesh_name, mode, q_count, args.seed)) & 0x7FFFFFFF
+                seed = _stable_seed(mesh_name, mode, q_count, args.seed)
                 queries = _sample_queries(tris, q_count, seed)
                 grad_out = (
                     np.random.default_rng(seed + 1)
@@ -562,57 +836,110 @@ def main():
 
                 try:
                     if mode == "triangle":
-                        pt_grads, pt_ms, c_err = _triangle_grads_torch(
-                            tris,
-                            queries,
-                            grad_out,
-                            args.torch_chunk_size,
-                            args.try_torch_compile,
+                        eps_world = _scene_epsilon_world(tris, args.epsilon)
+                        pt_grads, pt_eps, pt_ms, pt_eps_ms, c_err = (
+                            _triangle_grads_torch(
+                                tris,
+                                queries,
+                                grad_out,
+                                eps_world,
+                                args.reg_mode,
+                                args.torch_chunk_size,
+                                args.try_torch_compile,
+                                args.compute_eps_grad,
+                            )
                         )
                         row["pytorch_ms"] = pt_ms
+                        row["pytorch_eps_ms"] = pt_eps_ms
                         row["torch_compile_error"] = c_err or ""
-                        bf, ft, bf_ms, ft_ms = _cuda_backward_triangle(
+                        bf, ft, bf_eps, ft_eps, bf_ms, ft_ms = _cuda_backward_triangle(
                             tris, queries, grad_out, args.beta, args.epsilon
                         )
                         row["cuda_brute_ms"] = bf_ms
                         row["cuda_fast_ms"] = ft_ms
+                        # CUDA eps grad is computed in the same kernel call as
+                        # the geometry grad, so its cost is included in the
+                        # geometry timings above.
+                        row["cuda_brute_eps_ms"] = bf_ms
+                        row["cuda_fast_eps_ms"] = ft_ms
+                        row["pytorch_eps_grad"] = pt_eps
+                        row["cuda_brute_eps_grad"] = bf_eps
+                        row["cuda_fast_eps_grad"] = ft_eps
+                        d = pt_grads.reshape(-1) - bf.reshape(-1)
+                        row["pt_vs_cuda_brute_rel_norm"] = float(
+                            np.linalg.norm(d) / (np.linalg.norm(bf.reshape(-1)) + 1e-30)
+                        )
                         assert pt_grads.shape == bf.shape == ft.shape
 
                     elif mode == "mesh":
-                        pt_grads, pt_ms, c_err = _mesh_grads_torch(
+                        eps_world = _scene_epsilon_world(vertices, args.epsilon)
+                        pt_grads, pt_eps, pt_ms, pt_eps_ms, c_err = _mesh_grads_torch(
                             vertices,
                             faces,
                             queries,
                             grad_out,
+                            eps_world,
+                            args.reg_mode,
                             args.torch_chunk_size,
                             args.try_torch_compile,
+                            args.compute_eps_grad,
                         )
                         row["pytorch_ms"] = pt_ms
+                        row["pytorch_eps_ms"] = pt_eps_ms
                         row["torch_compile_error"] = c_err or ""
-                        bf, ft, bf_ms, ft_ms = _cuda_backward_mesh(
-                            vertices, faces, queries, grad_out,
-                            args.beta, args.epsilon,
+                        bf, ft, bf_eps, ft_eps, bf_ms, ft_ms = _cuda_backward_mesh(
+                            vertices,
+                            faces,
+                            queries,
+                            grad_out,
+                            args.beta,
+                            args.epsilon,
                         )
                         row["cuda_brute_ms"] = bf_ms
                         row["cuda_fast_ms"] = ft_ms
+                        row["cuda_brute_eps_ms"] = bf_ms
+                        row["cuda_fast_eps_ms"] = ft_ms
+                        row["pytorch_eps_grad"] = pt_eps
+                        row["cuda_brute_eps_grad"] = bf_eps
+                        row["cuda_fast_eps_grad"] = ft_eps
+                        d = pt_grads.reshape(-1) - bf.reshape(-1)
+                        row["pt_vs_cuda_brute_rel_norm"] = float(
+                            np.linalg.norm(d) / (np.linalg.norm(bf.reshape(-1)) + 1e-30)
+                        )
                         assert pt_grads.shape == bf.shape == ft.shape
 
                     elif mode == "point_normal":
-                        pt_grads, pt_ms, c_err = _point_normal_grads_torch(
-                            tris,
-                            queries,
-                            grad_out,
-                            args.epsilon,
-                            args.torch_chunk_size,
-                            args.try_torch_compile,
+                        eps_world = _scene_epsilon_world(tris, args.epsilon)
+                        pt_grads, pt_eps, pt_ms, pt_eps_ms, c_err = (
+                            _point_normal_grads_torch(
+                                tris,
+                                queries,
+                                grad_out,
+                                eps_world,
+                                args.torch_chunk_size,
+                                args.try_torch_compile,
+                                args.compute_eps_grad,
+                            )
                         )
                         row["pytorch_ms"] = pt_ms
+                        row["pytorch_eps_ms"] = pt_eps_ms
                         row["torch_compile_error"] = c_err or ""
-                        bf, ft, bf_ms, ft_ms = _cuda_backward_point_normal(
-                            tris, queries, grad_out, args.beta, args.epsilon
+                        bf, ft, bf_eps, ft_eps, bf_ms, ft_ms = (
+                            _cuda_backward_point_normal(
+                                tris, queries, grad_out, args.beta, args.epsilon
+                            )
                         )
                         row["cuda_brute_ms"] = bf_ms
                         row["cuda_fast_ms"] = ft_ms
+                        row["cuda_brute_eps_ms"] = bf_ms
+                        row["cuda_fast_eps_ms"] = ft_ms
+                        row["pytorch_eps_grad"] = pt_eps
+                        row["cuda_brute_eps_grad"] = bf_eps
+                        row["cuda_fast_eps_grad"] = ft_eps
+                        d = pt_grads.reshape(-1) - bf.reshape(-1)
+                        row["pt_vs_cuda_brute_rel_norm"] = float(
+                            np.linalg.norm(d) / (np.linalg.norm(bf.reshape(-1)) + 1e-30)
+                        )
                         assert pt_grads.shape == bf.shape == ft.shape
 
                     else:
@@ -673,13 +1000,13 @@ def main():
         print("No successful benchmark rows.")
         return
 
-    print("\n" + "=" * 122)
+    print("\n" + "=" * 152)
     print("  Backward pass: CUDA vs PyTorch autograd")
-    print("=" * 122)
+    print("=" * 152)
     hdr = (
         f"  {'mesh':<20} | {'N':>7} | {'Q':>7} | {'mode':<13} | "
-        f"{'PyTorch':>10} | {'CUDA-BF':>9} | {'CUDA-FT':>9} | "
-        f"{'PT/FT':>8} | {'BF/FT':>7}"
+        f"{'PyTorch':>9} | {'PT-eps':>8} | {'CUDA-BF':>8} | {'BF-eps':>8} | "
+        f"{'CUDA-FT':>8} | {'FT-eps':>8} | {'PT/FT':>7} | {'BF/FT':>6}"
     )
     print(hdr)
     print("  " + "-" * (len(hdr) - 2))
@@ -687,10 +1014,14 @@ def main():
         name = r["mesh"][:20]
         print(
             f"  {name:<20} | {r['n_tri']:>7d} | {r['n_queries']:>7d} | "
-            f"{r['mode']:<13} | {r['pytorch_ms']:>10.2f} | "
-            f"{r['cuda_brute_ms']:>9.2f} | {r['cuda_fast_ms']:>9.2f} | "
-            f"{r['speedup_pt_vs_fast']:>7.2f}x | "
-            f"{r['speedup_brute_vs_fast']:>6.2f}x"
+            f"{r['mode']:<13} | {r['pytorch_ms']:>9.2f} | "
+            f"{r.get('pytorch_eps_ms', float('nan')):>8.2f} | "
+            f"{r['cuda_brute_ms']:>8.2f} | "
+            f"{r.get('cuda_brute_eps_ms', float('nan')):>8.2f} | "
+            f"{r['cuda_fast_ms']:>8.2f} | "
+            f"{r.get('cuda_fast_eps_ms', float('nan')):>8.2f} | "
+            f"{r['speedup_pt_vs_fast']:>6.2f}x | "
+            f"{r['speedup_brute_vs_fast']:>5.2f}x"
         )
     print("  " + "-" * (len(hdr) - 2))
 
@@ -709,6 +1040,28 @@ def main():
             f"pytorch={pt:>9.2f}ms  BF={bf:>8.2f}ms  FT={ft:>8.2f}ms  "
             f"PT/FT={pt / ft:>7.2f}x  BF/FT={bf / ft:>5.2f}x"
         )
+    # Epsilon-gradient agreement summary.
+    eps_rows = [
+        r
+        for r in valid
+        if "pytorch_eps_grad" in r
+        and math.isfinite(r.get("pytorch_eps_grad", float("nan")))
+        and math.isfinite(r.get("cuda_fast_eps_grad", float("nan")))
+    ]
+    if eps_rows:
+        print(
+            "\n  Epsilon-gradient agreement (|fast − pytorch| / max(|pytorch|, 1e-2)):"
+        )
+        for r in eps_rows:
+            ref = r["pytorch_eps_grad"]
+            fast = r["cuda_fast_eps_grad"]
+            denom = max(abs(ref), 1e-2)
+            err = abs(fast - ref) / denom
+            print(
+                f"    {r['mesh'][:20]:<20} N={r['n_tri']:>7d} Q={r['n_queries']:>7d} "
+                f"{r['mode']:<13}  pytorch={ref:+12.4e}  cuda={fast:+12.4e}  "
+                f"rel={err:.3e}"
+            )
     print("=" * 122)
 
 

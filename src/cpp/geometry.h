@@ -170,7 +170,7 @@ struct PointNormalContext {
   __host__ __device__ __forceinline__ static auto make(float eps_fraction,
                                                        float scene_scale)
       -> PointNormalContext {
-    constexpr float INV_PI_1_5 = 0.179587122F;  // 1/(pi*sqrt(pi))
+    constexpr float INV_PI_1_5 = 0.179587122F; // 1/(pi*sqrt(pi))
     const float eps_length = eps_fraction * scene_scale;
     if (eps_length <= 0.F) {
       return PointNormalContext{
@@ -350,6 +350,20 @@ __device__ __forceinline__ void kahan_add(float &sum, float x,
   float y = ieee_sub(x, compensation);
   float t = ieee_add(sum, y);
   compensation = ieee_sub(ieee_sub(t, sum), y);
+  sum = t;
+}
+
+__device__ __forceinline__ void kahan_add(Vec3 &sum, Vec3 x,
+                                          Vec3 &compensation) {
+  Vec3 y = {.x = ieee_sub(x.x, compensation.x),
+            .y = ieee_sub(x.y, compensation.y),
+            .z = ieee_sub(x.z, compensation.z)};
+  Vec3 t = {.x = ieee_add(sum.x, y.x),
+            .y = ieee_add(sum.y, y.y),
+            .z = ieee_add(sum.z, y.z)};
+  compensation.x = ieee_sub(ieee_sub(t.x, sum.x), y.x);
+  compensation.y = ieee_sub(ieee_sub(t.y, sum.y), y.y);
+  compensation.z = ieee_sub(ieee_sub(t.z, sum.z), y.z);
   sum = t;
 }
 
@@ -697,8 +711,8 @@ struct Triangle {
         const float D_coeff = (Q - P) * (INV_SQRT2 * w - SQRT2 * wp * u);
 
         const float eps_grad =
-        (ctx.scene_scale * (A * P_dot + B * Q_dot) + D_coeff) * g *INV_TWO_PI /
-            D_reg;
+            (ctx.scene_scale * (A * P_dot + B * Q_dot) + D_coeff) * g *
+            INV_TWO_PI / D_reg;
         return GeometryGradient<Triangle>{
             .geometry =
                 Triangle{
@@ -728,6 +742,92 @@ struct Triangle {
                              .v1 = (dN_dv1 * Q - dD_dv1 * P) * factor,
                              .v2 = (dN_dv2 * Q - dD_dv2 * P) * factor},
         .epsilon = 0.F};
+  }
+
+  template <typename Reg = DefaultReg>
+  __host__ __device__ __forceinline__ auto
+  queryGradContribution(const Vec3 &q, const float g,
+                        const TriangleContext<Reg> ctx) const -> Vec3 {
+    // Returns d(w_T) / dq = -(d(w_T)/dv0 + d(w_T)/dv1 + d(w_T)/dv2).
+    const Vec3 a = v0 - q;
+    const Vec3 b = v1 - q;
+    const Vec3 c = v2 - q;
+
+    const float a2 = a.length2() + 1e-20F;
+    const float b2 = b.length2() + 1e-20F;
+    const float c2 = c.length2() + 1e-20F;
+
+    const RegularizedEdge ra = regularize_edge<Reg, true>(a2, ctx);
+    const RegularizedEdge rb = regularize_edge<Reg, true>(b2, ctx);
+    const RegularizedEdge rc = regularize_edge<Reg, true>(c2, ctx);
+
+    const float inv_a = ra.inv_r;
+    const float inv_b = rb.inv_r;
+    const float inv_c = rc.inv_r;
+    const float a_len = ra.r;
+    const float b_len = rb.r;
+    const float c_len = rc.r;
+    const Vec3 hat_a = a * ra.hat_scale;
+    const Vec3 hat_b = b * rb.hat_scale;
+    const Vec3 hat_c = c * rc.hat_scale;
+
+    const float cos_ab = a.dot(b) * inv_a * inv_b;
+    const float cos_ac = a.dot(c) * inv_a * inv_c;
+    const float cos_bc = b.dot(c) * inv_b * inv_c;
+
+    const float det_norm = a.dot(Vec3::cross(b, c)) * inv_a * inv_b * inv_c;
+    const float div_norm = 1.F + cos_ab + cos_ac + cos_bc;
+
+    const Vec3 dN_dv0 = Vec3::cross(b, c);
+    const Vec3 dN_dv1 = Vec3::cross(c, a);
+    const Vec3 dN_dv2 = Vec3::cross(a, b);
+
+    const float b_dot_c = b.dot(c);
+    const float c_dot_a = c.dot(a);
+    const float a_dot_b = a.dot(b);
+
+    const Vec3 dD_dv0 =
+        hat_a * (b_len * c_len + b_dot_c) + b * c_len + c * b_len;
+    const Vec3 dD_dv1 =
+        hat_b * (c_len * a_len + c_dot_a) + c * a_len + a * c_len;
+    const Vec3 dD_dv2 =
+        hat_c * (a_len * b_len + a_dot_b) + a * b_len + b * a_len;
+
+    const Vec3 sum_dN = dN_dv0 + dN_dv1 + dN_dv2;
+    const Vec3 sum_dD = dD_dv0 + dD_dv1 + dD_dv2;
+
+    const float P = det_norm;
+    const float Q = div_norm;
+    const float inv_L = inv_a * inv_b * inv_c;
+
+    if constexpr (!std::is_same_v<Reg, RegSharp>) {
+      if (ctx.inv_eps_angle2 > 0.F) {
+        const float u = (P * P + Q * Q) * ctx.inv_eps_angle2;
+        const float w = angular_bump(u);
+        const float wp = angular_bump_prime(u);
+        const float c_bump = ctx.eps_angle * INV_SQRT2 * w;
+        const float alpha = SQRT2 * wp * ctx.inv_eps_angle;
+        const float P_reg = P + c_bump;
+        const float Q_reg = Q + c_bump;
+        const float D_reg = P_reg * P_reg + Q_reg * Q_reg;
+        const float QmP = Q - P;
+        const float A = Q_reg + alpha * P * QmP;
+        const float B = -P_reg + alpha * Q * QmP;
+        const float C = QmP * (c_bump - alpha * (P * P + Q * Q));
+        const float factor = g * INV_TWO_PI / D_reg;
+
+        const Vec3 sum_hat = hat_a * inv_a + hat_b * inv_b + hat_c * inv_c;
+        return (A * inv_L * sum_dN + B * inv_L * sum_dD + C * sum_hat) *
+               (-factor);
+      }
+    }
+    // Sharp path
+    const float denom_norm = P * P + Q * Q;
+    if (denom_norm < 1e-12F) {
+      return Vec3::zero();
+    }
+    const float factor = g * INV_TWO_PI * (inv_L / denom_norm);
+    return (sum_dN * Q - sum_dD * P) * (-factor);
   }
 
   [[nodiscard]] auto dump() const -> std::string {
@@ -856,7 +956,6 @@ struct PointNormal {
 
     const float distance = dist2 * inv_dist;
     const float t = distance * ctx.inv_eps_length;
-
     const float n_dot_d = n.x * d.x + n.y * d.y + n.z * d.z;
 
     float scale_n;
@@ -868,14 +967,12 @@ struct PointNormal {
       scale_n = g * g_denum;
       scale_d = g * n_dot_d * inv_dist2 * (-3.F * g_denum);
       eps_grad = 0.F;
-
     } else if (t < 0.1F) {
       // Near field:
       const float inv_eps_angle = ctx.inv_eps_angle;
       scale_n = g * ctx.near_field_g_denum;
       scale_d = 0.F;
-      eps_grad = -3.F * inv_eps_angle * g * n_dot_d * 
-                 ctx.near_field_g_denum;
+      eps_grad = -3.F * inv_eps_angle * g * n_dot_d * ctx.near_field_g_denum;
     } else if (t < 2.F) {
       // Mid field:
       const float s_over_dist3 = S_regularization(t) * inv_dist3;
@@ -892,8 +989,8 @@ struct PointNormal {
       scale_d = g * n_dot_d * inv_dist2 * (reg_term - 3.F * g_denum);
 
       constexpr float FOUR_OVER_SQRT_PI = 2.2567583341910251F;
-      eps_grad = -FOUR_OVER_SQRT_PI * t * t * t * exp_t2 * ctx.inv_eps_angle
-             * g * n_dot_d * INV_FOUR_PI * inv_dist3;
+      eps_grad = -FOUR_OVER_SQRT_PI * t * t * t * exp_t2 * ctx.inv_eps_angle *
+                 g * n_dot_d * INV_FOUR_PI * inv_dist3;
 
     } else {
       // Far field:
@@ -912,7 +1009,61 @@ struct PointNormal {
                                           .z = scale_n * d.z}},
         .epsilon = eps_grad};
   }
-  
+
+  __host__ __device__ __forceinline__ auto
+  queryGradContribution(const Vec3 &q, const float g,
+                        const PointNormalContext ctx) const -> Vec3 {
+    // Returns d(w_i) / dq = -d(w_i)/dp_i.
+    const Vec3 d = p - q;
+    const float dist2 = d.x * d.x + d.y * d.y + d.z * d.z;
+
+#if defined(__CUDA_ARCH__)
+    const float inv_dist = rsqrtf(dist2 + 1e-20F);
+#else
+    const float inv_dist = 1.F / sqrtf(dist2 + 1e-20F);
+#endif
+    const float inv_dist2 = inv_dist * inv_dist;
+    const float inv_dist3 = inv_dist2 * inv_dist;
+
+    const float distance = dist2 * inv_dist;
+    const float t = distance * ctx.inv_eps_length;
+    const float n_dot_d = n.x * d.x + n.y * d.y + n.z * d.z;
+
+    float scale_n;
+    float scale_d;
+    if (ctx.inv_eps_length <= 0.F) {
+      const float g_denum = INV_FOUR_PI * inv_dist3;
+      scale_n = g * g_denum;
+      scale_d = g * n_dot_d * inv_dist2 * (-3.F * g_denum);
+    } else if (t < 0.1F) {
+      scale_n = g * ctx.near_field_g_denum;
+      scale_d = 0.F;
+    } else if (t < 2.F) {
+      const float s_over_dist3 = S_regularization(t) * inv_dist3;
+      const float t2 = t * t;
+#if defined(__CUDA_ARCH__)
+      const float exp_t2 = __expf(-t2);
+#else
+      const float exp_t2 = expf(-t2);
+#endif
+      const float reg_term = exp_t2 * ctx.reg_term_const;
+      const float g_denum = INV_FOUR_PI * s_over_dist3;
+      scale_n = g * g_denum;
+      scale_d = g * n_dot_d * inv_dist2 * (reg_term - 3.F * g_denum);
+    } else {
+      const float g_denum = INV_FOUR_PI * inv_dist3;
+      scale_n = g * g_denum;
+      scale_d = g * n_dot_d * inv_dist2 * (-3.F * g_denum);
+    }
+
+    // dw/dp = scale_n * n + scale_d * d, and dw/dq = -dw/dp.
+    return Vec3{
+        .x = -(scale_n * n.x + scale_d * d.x),
+        .y = -(scale_n * n.y + scale_d * d.y),
+        .z = -(scale_n * n.z + scale_d * d.z),
+    };
+  }
+
   [[nodiscard]] auto dump() const -> std::string {
     return std::format(
         "Pos:({:.2f}, {:.2f}, {:.2f}) | Norm:({:.2f}, {:.2f}, {:.2f})", p.x,
@@ -1098,6 +1249,7 @@ concept IsGeometry =
       { g.max_distance_to(p) } -> std::same_as<float>;
       { g.get_taylor_terms(p, active, z, m, t) } -> std::same_as<void>;
       { g.contributionToQuery(p, ctx) } -> std::same_as<float>;
+      { g.queryGradContribution(p, f, ctx) } -> std::same_as<Vec3>;
     };
 
 template <typename T>
