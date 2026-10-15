@@ -10,6 +10,9 @@ try:
         brute_force_gradients_mesh,
         brute_force_gradients_point_normal,
         brute_force_gradients_triangle_soup,
+        brute_force_query_gradients_point_normal,
+        brute_force_query_gradients_triangle_soup,
+        brute_force_query_gradients_mesh,
     )
 except ImportError as e:
     import warnings
@@ -27,9 +30,12 @@ __all__ = [
     "GradientEngine",
     "brute_force_winding_numbers_mesh",
     "brute_force_winding_numbers_point_normal",
-    "brute_force_winding_numbers_triangle_soup"
+    "brute_force_winding_numbers_triangle_soup",
     "brute_force_gradients_mesh",
     "brute_force_gradients_point_normal",
     "brute_force_gradients_triangle_soup",
+    "brute_force_query_gradients_point_normal",
+    "brute_force_query_gradients_triangle_soup",
+    "brute_force_query_gradients_mesh",
     "types",
 ]

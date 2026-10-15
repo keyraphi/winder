@@ -106,8 +106,36 @@ def compute_paper_metrics(results_path: Path) -> dict:
             rec = json.loads(line)
             if "error" in rec:
                 continue
-            misclass_counts.append(rec["misclass_count"])
-            rms_values.append(rec["rms_abs"])
+            # Nested-schema record: forward_triangle may be under "modes".
+            modes = rec.get("modes")
+            mc = None
+            rms = None
+            if isinstance(modes, dict):
+                for mkey, mv in modes.items():
+                    if not isinstance(mv, dict) or "error" in mv:
+                        continue
+                    if mkey.split("@eps=")[0] == "forward_triangle":
+                        mc = mv.get("misclass_count")
+                        rms = mv.get("rms_abs")
+                        break
+            # Legacy flat schema.
+            if mc is None:
+                mc = rec.get("misclass_count")
+            if rms is None:
+                rms = rec.get("rms_abs")
+            if mc is None or rms is None:
+                continue
+            misclass_counts.append(mc)
+            rms_values.append(rms)
+    if not misclass_counts:
+        return {
+            "n_shapes": 0,
+            "mean_misclass_count": float("nan"),
+            "median_misclass_count": float("nan"),
+            "frac_zero_misclass": float("nan"),
+            "mean_rms": float("nan"),
+            "median_rms": float("nan"),
+        }
     counts = np.array(misclass_counts)
     rms = np.array(rms_values)
     return {
@@ -118,7 +146,6 @@ def compute_paper_metrics(results_path: Path) -> dict:
         "mean_rms": float(rms.mean()),
         "median_rms": float(np.median(rms)),
     }
-
 
 def print_paper_comparison(results_path: Path) -> None:
     paper = compute_paper_metrics(results_path)

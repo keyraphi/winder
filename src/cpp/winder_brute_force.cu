@@ -1,9 +1,12 @@
+#include "cuda/__functional/maximum.h"
 #include "cuda/std/__functional/operations.h"
 #include "geometry.h"
 #include "kernels/brute_force.cuh"
 #include "kernels/common.cuh"
 #include "kernels/mesh.cuh"
 #include "scene_normalization.h"
+#include "thrust/detail/reduce.inl"
+#include "thrust/system/cuda/detail/execution_policy.h"
 #include "utils.h"
 #include "vec3.h"
 #include "winder_brute_force.h"
@@ -139,8 +142,8 @@ auto brute_force_triangle_impl(const float *triangles_float,
 auto brute_force_point_normal_gradient_impl(
     const float *grad_output, const float *points, const float *scaled_normals,
     const float *queries, const size_t geometry_count, const size_t query_count,
-    float *gradients, float *epsilon_gradient, float epsilon, const int device_id, const uint64_t stream)
-    -> void {
+    float *gradients, float *epsilon_gradient, float epsilon,
+    const int device_id, const uint64_t stream) -> void {
   ScopedCudaDevice device_scope{device_id};
 
   const Vec3 *points_vec3 = reinterpret_cast<const Vec3 *>(points);
@@ -173,10 +176,11 @@ auto brute_force_point_normal_gradient_impl(
 
   compute_brute_force_gradients_point_normals(
       grad_output, points_vec3, scaled_normals_vec3, queries_vec3,
-      (uint32_t)geometry_count, (uint32_t)query_count, gradients, epsilon_gradients, epsilon,
-      max_dim, compute_stream);
+      (uint32_t)geometry_count, (uint32_t)query_count, gradients,
+      epsilon_gradients, epsilon, max_dim, compute_stream);
   // reduce epslon gradients
-  reduce_async(epsilon_gradients, epsilon_gradient, geometry_count, compute_stream);
+  reduce_async(epsilon_gradients, epsilon_gradient, geometry_count,
+               compute_stream);
   CUDA_CHECK(cudaFreeAsync(epsilon_gradients, compute_stream));
 
   CUDA_CHECK(cudaEventRecord(finish, compute_stream));
@@ -185,11 +189,41 @@ auto brute_force_point_normal_gradient_impl(
   CUDA_CHECK(cudaEventDestroy(finish));
 }
 
+auto brute_force_point_normal_query_gradient_impl(
+    const float *grad_output, const float *points, const float *scaled_normals,
+    const float *queries, const size_t geometry_count, const size_t query_count,
+    float *query_gradients, float epsilon, const int device_id,
+    const uint64_t stream) -> void {
+
+  ScopedCudaDevice device_scope{device_id};
+
+  const Vec3 *points_vec3 = reinterpret_cast<const Vec3 *>(points);
+  const Vec3 *scaled_normals_vec3 =
+      reinterpret_cast<const Vec3 *>(scaled_normals);
+  const Vec3 *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
+
+  cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
+
+  float max_dim = 0.F;
+  if (epsilon > 0.F) {
+    SceneBounds scene_bounds =
+        computeSceneBounds(points_vec3, geometry_count, compute_stream);
+    max_dim = SceneNormalization::effective_extent(scene_bounds);
+  } else {
+    epsilon = 0.F;
+  }
+
+  compute_brute_force_query_gradients_point_normals(
+      grad_output, points_vec3, scaled_normals_vec3, queries_vec3,
+      (uint32_t)geometry_count, (uint32_t)query_count, query_gradients, epsilon,
+      max_dim, compute_stream);
+}
+
 auto brute_force_triangle_gradient_impl(
     const float *grad_output, const float *triangles_float,
     const float *queries, const size_t geometry_count, const size_t query_count,
-    float *gradients, float *epsilon_gradient, float epsilon, const int device_id, const uint64_t stream)
-    -> void {
+    float *gradients, float *epsilon_gradient, float epsilon,
+    const int device_id, const uint64_t stream) -> void {
 
   const Vec3 *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
   const auto *triangles = reinterpret_cast<const Triangle *>(triangles_float);
@@ -218,9 +252,11 @@ auto brute_force_triangle_gradient_impl(
                              compute_stream));
   compute_brute_force_gradients_triangles(
       grad_output, triangles, queries_vec3, (uint32_t)geometry_count,
-      (uint32_t)query_count, gradients, epsilon_gradients, epsilon, max_dim, compute_stream);
+      (uint32_t)query_count, gradients, epsilon_gradients, epsilon, max_dim,
+      compute_stream);
   // reduce epslon gradients
-  reduce_async(epsilon_gradients, epsilon_gradient, geometry_count, compute_stream);
+  reduce_async(epsilon_gradients, epsilon_gradient, geometry_count,
+               compute_stream);
   CUDA_CHECK(cudaFreeAsync(epsilon_gradients, compute_stream));
 
   CUDA_CHECK(cudaEventRecord(finish, compute_stream));
@@ -229,12 +265,39 @@ auto brute_force_triangle_gradient_impl(
   CUDA_CHECK(cudaEventDestroy(finish));
 }
 
+auto brute_force_triangle_query_gradient_impl(
+    const float *grad_output, const float *triangles_float,
+    const float *queries, const size_t geometry_count, const size_t query_count,
+    float *query_gradients, float epsilon, const int device_id,
+    const uint64_t stream) -> void {
+
+  ScopedCudaDevice device_scope{device_id};
+
+  const Vec3 *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
+  const auto *triangles = reinterpret_cast<const Triangle *>(triangles_float);
+
+  cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
+
+  float max_dim = 0.F;
+  if (epsilon > 0.F) {
+    SceneBounds scene_bounds =
+        computeSceneBounds(triangles, geometry_count, compute_stream);
+    max_dim = SceneNormalization::effective_extent(scene_bounds);
+  } else {
+    epsilon = 0.F;
+  }
+
+  compute_brute_force_query_gradients_triangles(
+      grad_output, triangles, queries_vec3, (uint32_t)geometry_count,
+      (uint32_t)query_count, query_gradients, epsilon, max_dim, compute_stream);
+}
+
 auto brute_force_mesh_gradient_impl(
     const float *grad_output, const float *vertices,
     const uint32_t *triangle_indices, const float *queries,
     const size_t geometry_count, const size_t query_count,
-    const size_t vertex_count, float *vertice_grads, float* epsilon_gradient, float epsilon,
-    const int device_id, const uint64_t stream) -> void {
+    const size_t vertex_count, float *vertice_grads, float *epsilon_gradient,
+    float epsilon, const int device_id, const uint64_t stream) -> void {
 
   if (geometry_count == 0) {
     return;
@@ -279,4 +342,45 @@ auto brute_force_mesh_gradient_impl(
                                static_cast<uint32_t>(geometry_count),
                                vertice_grads, compute_stream);
   CUDA_CHECK(cudaFreeAsync(triangle_gradients, compute_stream));
+}
+
+auto brute_force_mesh_query_gradient_impl(
+    const float *grad_output, const float *vertices,
+    const uint32_t *triangle_indices, const float *queries,
+    const size_t geometry_count, const size_t query_count,
+    const size_t vertex_count, float *query_gradients, float epsilon,
+    const int device_id, const uint64_t stream) -> void {
+  if (geometry_count == 0) {
+    return;
+  }
+
+  ScopedCudaDevice device_scope{device_id};
+  cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
+
+  // Index bounds check (same as the primitive-gradient mesh path).
+  auto compute_stream_policy = thrust::cuda::par.on(compute_stream);
+  uint32_t max_index = thrust::reduce(compute_stream_policy, triangle_indices,
+                                      triangle_indices + 3 * geometry_count, 0,
+                                      cuda::maximum<uint32_t>());
+  if (max_index >= vertex_count) {
+    throw std::runtime_error(std::format(
+        "The triangle indices are not allowed to exceed the number of "
+        "vertices. Vertex count is {}, max index is {}.",
+        vertex_count, max_index));
+  }
+
+  // Gather triangles
+  float *triangles;
+  CUDA_CHECK(cudaMallocAsync(&triangles, geometry_count * sizeof(Triangle),
+                             compute_stream));
+  gather_triangles(vertices, triangle_indices,
+                   static_cast<uint32_t>(geometry_count), triangles,
+                   compute_stream);
+
+  // Delegate to the triangle-soup query gradient
+  brute_force_triangle_query_gradient_impl(
+      grad_output, triangles, queries, geometry_count, query_count,
+      query_gradients, epsilon, device_id, stream);
+
+  CUDA_CHECK(cudaFreeAsync(triangles, compute_stream));
 }

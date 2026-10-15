@@ -100,6 +100,9 @@ struct Mat3x3_f16 {
       -> Mat3x3_f16;
   __host__ __device__ __forceinline__ auto operator=(const Mat3x3 &m)
       -> Mat3x3_f16;
+
+  __host__ __device__ __forceinline__ auto operator*(const Vec3_f16 &v) const
+      -> Vec3_f16;
 };
 
 /**
@@ -184,7 +187,8 @@ struct Mat3x3 {
     return result;
   }
 
-  __host__ __device__ __forceinline__ static auto from_sym(const SymMat3x3 &m) -> Mat3x3 {
+  __host__ __device__ __forceinline__ static auto from_sym(const SymMat3x3 &m)
+      -> Mat3x3 {
     Mat3x3 result;
     result.data[0] = m.data[0];
     result.data[1] = m.data[1];

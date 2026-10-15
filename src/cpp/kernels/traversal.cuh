@@ -27,10 +27,35 @@ template <IsGeometry Geometry> struct ComputeWindingNumbersParams {
   const SceneNormalization norm;
 };
 
+template <IsGeometry Geometry> struct ComputeQueryGradientParams {
+  const Vec3 *queries;
+  const uint32_t *sort_indirections;
+  const BVH8Node *bvh8_nodes;
+  const LeafPointers *bvh8_leaf_pointers;
+  const TaylorCoefficientsF16 *node_coefficients;
+  const TaylorCoefficientsF16 *leaf_coefficients;
+  const AABB *leaf_aabbs;
+  const SoAView<Geometry> sorted_geometry;
+  uint32_t query_count;
+  uint32_t geometry_count;
+  const float *grad_output;
+  float *out_query_gradients;
+  uint32_t *global_device_counter;
+  const float beta;
+  const float epsilon;
+  const float scene_scale;
+  const SceneNormalization norm;
+};
+
 template <IsGeometry Geometry>
 void compute_winding_numbers(
     const ComputeWindingNumbersParams<Geometry> &params, int device_id,
     const cudaStream_t &stream);
+
+template <IsGeometry Geometry>
+void query_gradient_traversal(const ComputeQueryGradientParams<Geometry> &params,
+                             int device_id, const cudaStream_t &stream);
+
 
 struct ComputeGradientsPointNormalParams {
   const Vec3 *points;

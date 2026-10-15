@@ -36,23 +36,6 @@ using GradResult_t = nb::ndarray<nb::array_api, float, nb::shape<-1, -1, 3>,
                                  nb::c_contig, nb::device::cuda>;
 using VertexGradResult_t = nb::ndarray<nb::array_api, float, nb::shape<-1, 3>,
                                        nb::c_contig, nb::device::cuda>;
-namespace winder_cuda {
-
-auto scalar_with_default(const std::optional<Scalar_t> &maybe_pc_wn,
-                         size_t count, float default_value) -> Scalar_t {
-  if (maybe_pc_wn.has_value()) {
-    return maybe_pc_wn.value();
-  }
-  // Allocate raw memory via our decoupled utility
-  auto *data = static_cast<float *>(cuda_allocate(count * sizeof(float)));
-  thrust_fill_float(data, count, default_value);
-  // Wrap the raw pointer in a Python capsule with a safe custom deleter
-  nb::capsule owner(data, [](void *p) noexcept -> void { cuda_free(p); });
-
-  return {data, {count}, owner};
-}
-
-} // namespace winder_cuda
 
 auto brute_force_winding_numbers(const Vec3_t &points,
                                  const Vec3_t &scaled_normals,
@@ -233,6 +216,119 @@ auto brute_force_gradients(const Scalar_t &grad_output,
       epsilon, triangles.device_id(), stream);
 }
 
+auto brute_force_query_gradients(const Scalar_t &grad_output,
+                                 const Vec3_t &points,
+                                 const Vec3_t &scaled_normals,
+                                 const Vec3_t &queries, Vec3_t &query_gradients,
+                                 float epsilon = 0.004F,
+                                 const uint64_t stream = 0) -> void {
+  if (points.device_id() != grad_output.device_id()) {
+    throw std::runtime_error(
+        "points and grad_output must be on the same CUDA device.");
+  }
+  if (points.device_id() != scaled_normals.device_id()) {
+    throw std::runtime_error(
+        "points and scaled_normals must be on the same CUDA device.");
+  }
+  if (points.device_id() != queries.device_id()) {
+    throw std::runtime_error(
+        "points and queries must be on the same CUDA device.");
+  }
+  if (points.device_id() != query_gradients.device_id()) {
+    throw std::runtime_error(
+        "points and query_gradients must be on the same CUDA device.");
+  }
+  if (points.shape(0) != scaled_normals.shape(0)) {
+    throw std::runtime_error(
+        "Shape of points must be equal to shape of normals.");
+  }
+  if (queries.shape(0) != grad_output.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of queries must be equal to shape[0] of grad_output.");
+  }
+  if (queries.shape(0) != query_gradients.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of queries must be equal to shape[0] of query_gradients.");
+  }
+  if (query_gradients.shape(1) != 3) {
+    throw std::runtime_error("Shape[1] of query_gradients has to be 3");
+  }
+  brute_force_point_normal_query_gradient_impl(
+      grad_output.data(), points.data(), scaled_normals.data(), queries.data(),
+      points.shape(0), queries.shape(0), query_gradients.data(), epsilon,
+      points.device_id(), stream);
+}
+
+auto brute_force_query_gradients(const Scalar_t &grad_output,
+                                 const Triangle_t &triangles,
+                                 const Vec3_t &queries, Vec3_t &query_gradients,
+                                 float epsilon = 0.004F,
+                                 const uint64_t stream = 0) -> void {
+  if (triangles.device_id() != grad_output.device_id()) {
+    throw std::runtime_error(
+        "triangles and grad_output must be on the same CUDA device.");
+  }
+  if (triangles.device_id() != queries.device_id()) {
+    throw std::runtime_error(
+        "triangles and queries must be on the same CUDA device.");
+  }
+  if (triangles.device_id() != query_gradients.device_id()) {
+    throw std::runtime_error(
+        "triangles and query_gradients must be on the same CUDA device.");
+  }
+  if (queries.shape(0) != grad_output.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of queries must be equal to shape[0] of grad_output.");
+  }
+  if (queries.shape(0) != query_gradients.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of queries must be equal to shape[0] of query_gradients.");
+  }
+  if (query_gradients.shape(1) != 3) {
+    throw std::runtime_error("Shape[1] of query_gradients has to be 3");
+  }
+  brute_force_triangle_query_gradient_impl(
+      grad_output.data(), triangles.data(), queries.data(), triangles.shape(0),
+      queries.shape(0), query_gradients.data(), epsilon, triangles.device_id(),
+      stream);
+}
+
+auto brute_force_query_gradients(const Scalar_t &grad_output,
+                                 const Vec3_t &vertices,
+                                 const TriangleIdx_t &triangle_indices,
+                                 const Vec3_t &queries, Vec3_t &query_gradients,
+                                 float epsilon = 0.004F,
+                                 const uint64_t stream = 0) -> void {
+  if (vertices.device_id() != grad_output.device_id()) {
+    throw std::runtime_error(
+        "vertices and grad_output must be on the same CUDA device.");
+  }
+  if (vertices.device_id() != triangle_indices.device_id()) {
+    throw std::runtime_error(
+        "vertices and triangle_indices must be on the same CUDA device.");
+  }
+  if (vertices.device_id() != queries.device_id()) {
+    throw std::runtime_error(
+        "vertices and queries must be on the same CUDA device.");
+  }
+  if (vertices.device_id() != query_gradients.device_id()) {
+    throw std::runtime_error(
+        "vertices and queries must be on the same CUDA device.");
+  }
+  if (queries.shape(0) != query_gradients.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of queries must be equal to shape[0] of query_gradients");
+  }
+  if (query_gradients.shape(1) != 3) {
+    throw std::runtime_error("Shape[1] of query_gradients has to be 3");
+  }
+  brute_force_mesh_query_gradient_impl(
+      grad_output.data(), vertices.data(), triangle_indices.data(),
+      queries.data(), triangle_indices.shape(0), queries.shape(0),
+      vertices.shape(0), query_gradients.data(), epsilon, vertices.device_id(),
+      stream);
+}
+
 class GradientEngine {
 public:
   GradientEngine(const Vec3_t &queries, const Scalar_t &grad_output,
@@ -378,6 +474,23 @@ public:
     } else {
       m_impl_pn->compute(queries.data(), n, out_winding_numbers.data(), beta,
                          epsilon, stream);
+    }
+  }
+
+  auto compute_query_gradients(const Scalar_t &grad_output,
+                               const Vec3_t &queries,
+                               const Vec3_t &out_query_gradients,
+                               const float beta = -1.F,
+                               const float epsilon = 0.004F,
+                               const size_t stream = 0) -> void {
+    if (is_backend_triangle) {
+      m_impl_tri->compute_query_gradients(
+          grad_output.data(), queries.data(), queries.shape(0),
+          out_query_gradients.data(), beta, epsilon, stream);
+    } else {
+      m_impl_pn->compute_query_gradients(
+          grad_output.data(), queries.data(), queries.shape(0),
+          out_query_gradients.data(), beta, epsilon, stream);
     }
   }
 
@@ -675,6 +788,74 @@ NB_MODULE(winder_module, m) {
 
             )doc")
           .c_str());
+  m.def("brute_force_query_gradients_point_normal",
+        nb::overload_cast<const Scalar_t &, const Vec3_t &, const Vec3_t &,
+                          const Vec3_t &, Vec3_t &, float, const uint64_t>(
+            &brute_force_query_gradients),
+        "grad_output"_a, "points"_a, "scaled_normals"_a, "queries"_a,
+        "out_query_gradients"_a, "epsilon"_a = 0.004F, "stream"_a = 0,
+        nb::sig("def brute_force_query_gradients_point_normal(grad_output: "
+                "winder.types.Array[winder.types.Shape[winder.types.M], "
+                "winder.types.float32, winder.types.cuda], "
+                "points: "
+                "winder.types.Array[winder.types.Shape[winder.types.N, "
+                "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+                "scaled_normals: "
+                "winder.types.Array[winder.types.Shape[winder.types.N, "
+                "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+                "queries: "
+                "winder.types.Array[winder.types.Shape[winder.types.M, "
+                "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+                "out_query_gradients: "
+                "winder.types.Array[winder.types.Shape[winder.types.M, "
+                "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+                "epsilon: float = 0.004, "
+                "stream: int = 0) -> None"),
+        (std::string(R"doc(
+                Computes the gradient of the loss with respect to the query
+                positions for a point cloud with scaled normals.
+
+                NOTE: Brute Force implementation: exact, but in `O(N*M)`!
+
+                This is the query-side counterpart of
+                `brute_force_gradients_point_normal`. For each query position
+                `q_j`, it computes:
+
+                    dL/dq_j = g_j * sum_i dw_i(q_j) / dq_j
+                            = -g_j * sum_i dw_i(q_j) / dp_i
+
+                The two gradients are transposes of each other at the loss
+                level, not negatives, so they must both be computed
+                independently. Callers who need both gradients should call
+                both functions; they share no state.
+
+                Parameters
+                ----------
+                `grad_output` : Array
+                    (M,) float32 CUDA array representing the gradient of the
+                    loss with respect to the winding numbers at the query
+                    locations (dL/dw). Aligned with `queries`.
+                `points` : Array
+                    (N, 3) float32 CUDA array of point positions.
+                `scaled_normals` : Array
+                    (N, 3) float32 CUDA array of scaled normals.
+                    The scaled normal direction is the orientation,
+                    the scale the associated voronoi area.
+                `queries` : Array
+                    (M, 3) float32 CUDA array of query points for which the
+                    gradient is evaluated.
+                `out_query_gradients` : Array
+                    (M, 3) float32 CUDA array pre-allocated by the caller.
+                    Will be filled with dL/dq for each query.
+            )doc") +
+         EPSILON_DOC + R"doc(
+                `stream` : int, optional
+                    The raw 64-bit identifier (handle) of a CUDA stream.
+                    Allows enqueuing operations asynchronously within deep learning frameworks.
+                    For example, in PyTorch pass: `torch.cuda.current_stream().cuda_stream`.
+                    Default is 0 (the default/null stream).
+            )doc")
+            .c_str());
 
   // --- Mesh ----------------------------------------------------------------
   m.def(
@@ -810,6 +991,134 @@ NB_MODULE(winder_module, m) {
             )doc")
             .c_str());
 
+  m.def("brute_force_query_gradients_triangle_soup",
+        nb::overload_cast<const Scalar_t &, const Triangle_t &, const Vec3_t &,
+                          Vec3_t &, float, const uint64_t>(
+            &brute_force_query_gradients),
+        "grad_output"_a, "triangles"_a, "queries"_a, "out_query_gradients"_a,
+        "epsilon"_a = 0.004F, "stream"_a = 0,
+        nb::sig("def brute_force_query_gradients_triangle_soup(grad_output: "
+                "winder.types.Array[winder.types.Shape[winder.types.M], "
+                "winder.types.float32, winder.types.cuda], "
+                "triangles: "
+                "winder.types.Array[winder.types.Shape[winder.types.N, "
+                "typing.Literal[3], typing.Literal[3]], "
+                "winder.types.float32, winder.types.cuda], "
+                "queries: "
+                "winder.types.Array[winder.types.Shape[winder.types.M, "
+                "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+                "out_query_gradients: "
+                "winder.types.Array[winder.types.Shape[winder.types.M, "
+                "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+                "epsilon: float = 0.004, "
+                "stream: int = 0) -> None"),
+        (std::string(R"doc(
+                Computes the gradient of the loss with respect to the query
+                positions for an explicit triangle soup.
+
+                NOTE: Brute Force implementation: exact, but in `O(N*M)`!
+
+                This is the query-side counterpart of
+                `brute_force_gradients_triangle_soup`. For each query q_j:
+
+                    dL/dq_j = -g_j * (dW_j/dv0 + dW_j/dv1 + dW_j/dv2)
+
+                The three vertex gradients are computed exactly as in the
+                primitive-gradient kernel, then summed and negated.
+
+                Parameters
+                ----------
+                `grad_output` : Array
+                    (M,) float32 CUDA array representing the gradient of the
+                    loss with respect to the winding numbers at the query
+                    locations (dL/dw).
+                `triangles` : Array
+                    (N, 3, 3) float32 CUDA array holding N triangles.
+                    Note: Order the vertices counter-clockwise when seen
+                    from the front.
+                `queries` : Array
+                    (M, 3) float32 CUDA array of query points for which the
+                    gradient is evaluated.
+                `out_query_gradients` : Array
+                    (M, 3) float32 CUDA array pre-allocated by the caller.
+                    Will be filled with dL/dq for each query.
+            )doc") +
+         EPSILON_DOC + R"doc(
+                `stream` : int, optional
+                    The raw 64-bit identifier (handle) of a CUDA stream.
+                    Allows enqueuing operations asynchronously within deep learning frameworks.
+                    For example, in PyTorch pass: `torch.cuda.current_stream().cuda_stream`.
+                    Default is 0 (the default/null stream).
+            )doc")
+            .c_str());
+
+  m.def(
+      "brute_force_query_gradients_mesh",
+      nb::overload_cast<const Scalar_t &, const Vec3_t &, const TriangleIdx_t &,
+                        const Vec3_t &, Vec3_t &, float, const uint64_t>(
+          &brute_force_query_gradients),
+      "grad_output"_a, "vertices"_a, "triangle_indices"_a, "queries"_a,
+      "out_query_gradients"_a, "epsilon"_a = 0.004F, "stream"_a = 0,
+      nb::sig("def brute_force_query_gradients_mesh(grad_output: "
+              "winder.types.Array[winder.types.Shape[winder.types.M], "
+              "winder.types.float32, winder.types.cuda], "
+              "vertices: "
+              "winder.types.Array[winder.types.Shape[winder.types.K, "
+              "typing.Literal[3], typing.Literal[3]], "
+              "winder.types.float32, winder.types.cuda], "
+              "triangle_indices: "
+              "winder.types.Array[winder.types.Shape[winder.types.N, "
+              "typing.Literal[3]], winder.types.uint32, winder.types.cuda, "
+              "queries: "
+              "winder.types.Array[winder.types.Shape[winder.types.M, "
+              "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+              "out_query_gradients: "
+              "winder.types.Array[winder.types.Shape[winder.types.M, "
+              "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+              "epsilon: float = 0.004, "
+              "stream: int = 0) -> None"),
+      (std::string(R"doc(
+                Computes the gradient of the loss with respect to the query
+                positions for a mesh.
+
+                NOTE: Brute Force implementation: exact, but in `O(N*M)`!
+
+                This is the query-side counterpart of
+                `brute_force_gradients_triangle_soup`. For each query q_j:
+
+                    dL/dq_j = -g_j * (dW_j/dv0 + dW_j/dv1 + dW_j/dv2)
+
+                The three vertex gradients are computed exactly as in the
+                primitive-gradient kernel, then summed and negated.
+
+                Parameters
+                ----------
+                `grad_output` : Array
+                    (M,) float32 CUDA array representing the gradient of the
+                    loss with respect to the winding numbers at the query
+                    locations (dL/dw).
+                `vertices`  : Array
+                    (K, 3) float32 CUDA array representing the shared vertices used in the triangles
+                    for which the winding numbers and loss were computed.
+                `triangle_indices`: Array
+                    A (N, 3) index array, where each row defines the three vertices of a triangle.
+                    Note: Order the vertices counter-clockwise when seen from the front. 
+                `queries` : Array
+                    (M, 3) float32 CUDA array of query points for which the
+                    gradient is evaluated.
+                `out_query_gradients` : Array
+                    (M, 3) float32 CUDA array pre-allocated by the caller.
+                    Will be filled with dL/dq for each query.
+            )doc") +
+       EPSILON_DOC + R"doc(
+                `stream` : int, optional
+                    The raw 64-bit identifier (handle) of a CUDA stream.
+                    Allows enqueuing operations asynchronously within deep learning frameworks.
+                    For example, in PyTorch pass: `torch.cuda.current_stream().cuda_stream`.
+                    Default is 0 (the default/null stream).
+            )doc")
+          .c_str());
+
   // ===========================================================================
   // WindingNumberEngine
   // ===========================================================================
@@ -928,6 +1237,87 @@ NB_MODULE(winder_module, m) {
             EPSILON_DOC + R"doc(
                 `stream`  : int, optional
                     The raw 64-bit identifier (handle) of a CUDA stream. 
+                    Allows enqueuing operations asynchronously within deep learning frameworks.
+                    For example, in PyTorch pass: `torch.cuda.current_stream().cuda_stream`.
+                    Default is 0 (the default/null stream).
+            )doc")
+               .c_str())
+
+      .def("compute_query_gradients",
+           &WindingNumbersEngine::compute_query_gradients, "grad_output"_a,
+           "queries"_a, "out_query_gradients"_a, "beta"_a = -1.F,
+           "epsilon"_a = 0.004F, "stream"_a = 0,
+           nb::sig("def compute_query_gradients(self, grad_output: "
+                   "winder.types.Array[winder.types.Shape[winder.types.M], "
+                   "winder.types.float32, winder.types.cuda], "
+                   "queries: "
+                   "winder.types.Array[winder.types.Shape[winder.types.M, "
+                   "typing.Literal[3]], winder.types.float32, "
+                   "winder.types.cuda], "
+                   "out_query_gradients: "
+                   "winder.types.Array[winder.types.Shape[winder.types.M, "
+                   "typing.Literal[3]], winder.types.float32, "
+                   "winder.types.cuda], "
+                   "beta: float = -1, epsilon: float = 0.004, "
+                   "stream: int = 0) -> None"),
+           (std::string(R"doc(
+                Computes the gradient of a scalar loss with respect to the query
+                positions, using the same acceleration structure that this engine
+                uses for `compute`.
+
+                This is the query-side counterpart of `GradientEngine.compute`:
+                `GradientEngine` propagates the adjoint to the source geometry,
+                whereas this method propagates it to the query coordinates.
+
+                The intended usage pattern is:
+
+                    engine = WindingNumberEngine(triangles, stream)
+                    wn = torch.empty(M, device="cuda")
+                    engine.compute(queries, wn, beta=2.3, epsilon=0.004, stream=stream)
+
+                    loss = some_loss(wn)
+                    loss.backward()
+                    dL_dw = wn.grad                       # or any (M,) tensor
+
+                    grad_q = torch.empty(M, 3, device="cuda")
+                    engine.compute_query_gradients(dL_dw, queries, grad_q,
+                                                   beta=2.3, epsilon=0.004,
+                                                   stream=stream)
+
+                The BVH8 built at construction is reused; no re-build is triggered
+                by this call. The traversal is independent of `compute` — the
+                user is free to call it once, many times with different adjoints,
+                or not at all.
+
+                For each query index j the kernel computes:
+
+                    dL/dq_j = g_j * sum_i dw_i(q_j) / dq_j
+
+                where g_j = grad_output[j] is the adjoint supplied by the caller.
+                The adjoint is applied once per query, not per (query, primitive)
+                pair.
+
+                Parameters
+                ----------
+                `grad_output` : Array
+                    (M,) float32 CUDA array representing the gradient of the loss
+                    with respect to the winding numbers at each query. Must be
+                    aligned index-for-index with `queries`.
+                `queries` : Array
+                    (M, 3) float32 CUDA array of query points for which the
+                    gradient is evaluated. The order is preserved in the output.
+                `out_query_gradients` : Array
+                    (M, 3) float32 CUDA array pre-allocated by the caller.
+                    Will be filled with dL/dq for each query. 
+                `beta` : float
+                    Barnes-Hut opening criterion. Same semantics and defaults as
+                    in `compute`. Larger beta leads to more precise results but
+                    also slower execution. Use any negative number to get the
+                    default (2.0 for triangles, 2.3 for point clouds).
+            )doc") +
+            EPSILON_DOC + R"doc(
+                `stream` : int, optional
+                    The raw 64-bit identifier (handle) of a CUDA stream.
                     Allows enqueuing operations asynchronously within deep learning frameworks.
                     For example, in PyTorch pass: `torch.cuda.current_stream().cuda_stream`.
                     Default is 0 (the default/null stream).

@@ -1,5 +1,9 @@
 """Validate the fast (Barnes-Hut) winding-number gradient engine against brute force.
 
+Compares the analytic geometry gradients (and the scalar gradient with respect
+to the regularization length epsilon) of the fast engine against the exact
+brute-force reference.
+
 Usage examples:
     # Basic validation, all geometry types
     python validate_gradients.py --obj_file mesh.obj
@@ -16,6 +20,8 @@ Usage examples:
         --epsilon_sweep "0,0.001,0.002,0.004,0.008,0.016" --epsilon_sweep_only
 """
 
+from __future__ import annotations
+
 import argparse
 import csv
 import math
@@ -25,10 +31,9 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from time import time
-from typing import Optional
+from typing import Callable, Optional
 
 import igl
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
@@ -38,12 +43,18 @@ import winder
 DEFAULT_EPSILON = 0.004  # = 1/250, matches the library default
 
 
-def cuda_timer(fn, warmup: int = 3, iters: int = 10) -> float:
+# =========================================================================
+# CUDA helpers
+# =========================================================================
+
+
+def cuda_timer(fn: Callable[[], None], warmup: int = 3, iters: int = 10) -> float:
+    """Return the median wall time (ms) of `fn` measured with CUDA events."""
     for _ in range(warmup):
         fn()
     torch.cuda.synchronize()
 
-    times_ms = []
+    times_ms: list[float] = []
     for _ in range(iters):
         start = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
@@ -60,7 +71,10 @@ def cuda_timer(fn, warmup: int = 3, iters: int = 10) -> float:
 # =========================================================================
 
 
-def mesh_to_point_surfels(vertices: np.ndarray, indices: np.ndarray):
+def mesh_to_point_surfels(
+    vertices: np.ndarray, indices: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Convert a triangle mesh to per-face point surfels (points, normals, areas)."""
     v0 = vertices[indices[:, 0]]
     v1 = vertices[indices[:, 1]]
     v2 = vertices[indices[:, 2]]
@@ -79,13 +93,13 @@ def mesh_to_point_surfels(vertices: np.ndarray, indices: np.ndarray):
     )
 
 
-def generate_queries(vertices, mode, num_queries, seed):
+def generate_queries(
+    vertices: np.ndarray, mode: str, num_queries: int, seed: int
+) -> np.ndarray:
+    """Sample queries either on a regular grid or uniformly inside the AABB."""
     rng = np.random.default_rng(seed)
     min_box = vertices.min(axis=0)
     max_box = vertices.max(axis=0)
-    diag = float(np.linalg.norm(max_box - min_box))
-    # min_box = min_box - 0.5 * diag
-    # max_box = max_box + 0.5 * diag
 
     if mode == "grid":
         side = int(np.ceil(num_queries ** (1.0 / 3.0)))
@@ -99,36 +113,48 @@ def generate_queries(vertices, mode, num_queries, seed):
     return rng.uniform(min_box, max_box, size=(num_queries, 3)).astype(np.float32)
 
 
-def make_grad_output(query_count, seed, scale=1.0, device="cuda:0"):
+def make_grad_output(
+    query_count: int, seed: int, scale: float = 1.0, device: str = "cuda:0"
+) -> torch.Tensor:
+    """Random scalar adjoint grad_output of length `query_count`."""
     g = torch.Generator(device="cpu").manual_seed(seed)
     return (torch.randn(query_count, generator=g) * scale).to(device)
 
 
-def set_seeds(seed):
+def set_seeds(seed: int) -> None:
+    """Seed numpy, torch and CUDA RNGs."""
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
 
-def slice_mesh_in_half(vertices, indices, dim=2):
+def slice_mesh_in_half(
+    vertices: np.ndarray, indices: np.ndarray, dim: int = 2
+) -> tuple[np.ndarray, np.ndarray]:
+    """Keep triangles whose centroid lies above the median along `dim`."""
     centroids = vertices[indices].mean(axis=1)
     split = np.median(centroids[:, dim])
     return vertices, indices[centroids[:, dim] > split]
 
 
-def drop_half_of_the_triangles(vertices, indices, seed=0):
+def drop_half_of_the_triangles(
+    vertices: np.ndarray, indices: np.ndarray, seed: int = 0
+) -> tuple[np.ndarray, np.ndarray]:
+    """Drop a random half of the triangles (deterministic given `seed`)."""
     rng = np.random.default_rng(seed)
     choice = rng.choice(np.arange(len(indices)), len(indices) // 2, replace=False)
     return vertices, indices[choice]
 
 
 # =========================================================================
-# Validator
+# Dataclasses
 # =========================================================================
 
 
 @dataclass
 class GradientMetrics:
+    """Metrics produced by `validate_gradients` for one vector-valued gradient."""
+
     label: str
     n_scalars: int
     has_nan: bool
@@ -159,11 +185,32 @@ class GradientMetrics:
     failed_checks: tuple = field(default_factory=tuple)
 
 
-def _safe_quantile(x, q):
+@dataclass
+class ScalarGradientMetrics:
+    """Metrics produced by `validate_scalar_gradient` for the (1,) eps gradient."""
+
+    label: str
+    ref_val: float
+    fast_val: float
+    abs_err: float
+    rel_err: float
+    passed: bool
+    failed_checks: tuple = field(default_factory=tuple)
+
+
+# =========================================================================
+# Vector gradient validator
+# =========================================================================
+
+
+def _safe_quantile(x: np.ndarray, q: float) -> float:
     return float("nan") if x.size == 0 else float(np.quantile(x, q))
 
 
-def print_ascii_histogram(data, title, unit="", n_bins=12):
+def print_ascii_histogram(
+    data: np.ndarray, title: str, unit: str = "", n_bins: int = 12
+) -> None:
+    """Print a log-scale ASCII histogram of strictly positive `data`."""
     data = data[np.isfinite(data) & (data > 0)]
     if data.size == 0:
         print(f"\n  --- {title} --- (no data)")
@@ -191,27 +238,26 @@ def print_ascii_histogram(data, title, unit="", n_bins=12):
 
 
 def validate_gradients(
-    fast_grads,
-    ref_grads,
-    label,
+    fast_grads: torch.Tensor,
+    ref_grads: torch.Tensor,
+    label: str,
     *,
-    signal_threshold=1e-5,
-    strict=False,
-    rel_norm_tol_strict=5e-4,
-    rel_norm_tol_loose=1e-2,
-    cosine_tol_strict=0.999,
-    cosine_tol_loose=0.99,
-    masked_p99_rel_tol=5e-1,
-    per_vec_cos_p01_tol=0.99,
-    # NEW: magnitude-ratio gates. p50 is a *range* check (systematic
-    # scaling error); p01 is a lower bound (tail collapse).
-    mag_ratio_p50_range_strict=(0.99, 1.01),
-    mag_ratio_p50_range_loose=(0.90, 1.10),
-    mag_ratio_p01_tol_strict=0.95,
-    mag_ratio_p01_tol_loose=0.50,
-    worst_vectors_n=5,
-    verbose=True,
-):
+    signal_threshold: float = 1e-5,
+    strict: bool = False,
+    rel_norm_tol_strict: float = 5e-4,
+    rel_norm_tol_loose: float = 1e-2,
+    cosine_tol_strict: float = 0.999,
+    cosine_tol_loose: float = 0.99,
+    masked_p99_rel_tol: float = 5e-1,
+    per_vec_cos_p01_tol: float = 0.99,
+    mag_ratio_p50_range_strict: tuple[float, float] = (0.99, 1.01),
+    mag_ratio_p50_range_loose: tuple[float, float] = (0.90, 1.10),
+    mag_ratio_p01_tol_strict: float = 0.95,
+    mag_ratio_p01_tol_loose: float = 0.50,
+    worst_vectors_n: int = 5,
+    verbose: bool = True,
+) -> GradientMetrics:
+    """Compare two vector gradient fields and return a detailed metric bundle."""
     assert fast_grads.shape == ref_grads.shape
 
     fast = fast_grads.detach().float().reshape(-1)
@@ -317,17 +363,13 @@ def validate_gradients(
 
     rel_norm_tol = rel_norm_tol_strict if strict else rel_norm_tol_loose
     cosine_tol = cosine_tol_strict if strict else cosine_tol_loose
-    mag_range = (
-        mag_ratio_p50_range_strict if strict else mag_ratio_p50_range_loose
-    )
-    mag_p01_tol = (
-        mag_ratio_p01_tol_strict if strict else mag_ratio_p01_tol_loose
-    )
+    mag_range = mag_ratio_p50_range_strict if strict else mag_ratio_p50_range_loose
+    mag_p01_tol = mag_ratio_p01_tol_strict if strict else mag_ratio_p01_tol_loose
 
-    def _ok(v, cmp, thr):
+    def _ok(v: float, cmp: Callable[[float, float], bool], thr: float) -> bool:
         return True if (v is None or math.isnan(v)) else cmp(v, thr)
 
-    def _ok_range(v, lo, hi):
+    def _ok_range(v: float, lo: float, hi: float) -> bool:
         return True if (v is None or math.isnan(v)) else (lo <= v <= hi)
 
     checks = {
@@ -341,7 +383,7 @@ def validate_gradients(
     failed = tuple(k for k, v in checks.items() if not v)
     passed = not failed
 
-    worst_idxs = []
+    worst_idxs: list[int] = []
     if verbose:
         print(f"\n{'=' * 72}")
         print(f"  Gradient validation: {label}   [{fast.numel()} scalars]")
@@ -353,76 +395,38 @@ def validate_gradients(
         )
         print(f"  Global cosine (flattened)  : {cos_flat:.8f}   (tol {cosine_tol})")
         print(f"  Signal coverage            : {100.0 * signal_coverage:.2f}%")
-        print(f"  --- masked scalar rel err ---")
+        print("  --- masked scalar rel err ---")
         print(
             f"  mean / p50 / p95 / p99     : "
             f"{mean_rel:.3e} / {p50:.3e} / {p95:.3e} / {p99:.3e}"
         )
         print(f"  max                        : {mx:.3e}")
-        print(f"  --- per-vector ---")
+        print("  --- per-vector ---")
         print(
             f"  cos mean / p01 / min       : "
             f"{cos_mean:.6f} / {cos_p01:.6f} / {cos_min:.6f}"
         )
         print(f"  angle p99 / max (deg)      : {ang_p99:.4f} / {ang_max:.4f}")
-        print(f"  --- per-vector magnitude ratio ||fast||/||ref|| ---")
+        print("  --- per-vector magnitude ratio ||fast||/||ref|| ---")
         print(
             f"  mean / p01 / p50 / p99     : "
             f"{mag_ratio_mean:.6f} / {mag_ratio_p01:.6f} / "
             f"{mag_ratio_p50:.6f} / {mag_ratio_p99:.6f}"
         )
-        print(
-            f"  min / max                  : "
-            f"{mag_ratio_min:.6f} / {mag_ratio_max:.6f}"
-        )
-        print(
-            f"  p50 window (tol)           : "
-            f"[{mag_range[0]:.3f}, {mag_range[1]:.3f}]"
-        )
-        print(
-            f"  p01 lower bound (tol)      : "
-            f"{mag_p01_tol:.3f}"
-        )
+        print(f"  min / max                  : {mag_ratio_min:.6f} / {mag_ratio_max:.6f}")
+        print(f"  p50 window (tol)           : [{mag_range[0]:.3f}, {mag_range[1]:.3f}]")
+        print(f"  p01 lower bound (tol)      : {mag_p01_tol:.3f}")
 
         if rel_m.size:
             print_ascii_histogram(rel_m, "Log10 relative error")
         if vmask.any():
-            print_ascii_histogram(
-                np.degrees(
-                    np.arccos(
-                        np.clip(
-                            (fast_np3[vmask] * ref_np3[vmask]).sum(-1)
-                            / (
-                                np.linalg.norm(fast_np3[vmask], axis=-1)
-                                * np.linalg.norm(ref_np3[vmask], axis=-1)
-                                + 1e-30
-                            ),
-                            -1.0,
-                            1.0,
-                        )
-                    )
-                ),
-                "Angular error (deg)",
-            )
-            print_ascii_histogram(
-                mag_ratio,
-                "Magnitude ratio ||fast||/||ref||",
-            )
+            print_ascii_histogram(ang, "Angular error (deg)")
+            print_ascii_histogram(mag_ratio, "Magnitude ratio ||fast||/||ref||")
 
-        # ------------------------------------------------------------------
-        # Worst-primitive diagnostic. Fires only when a check fails, so it
-        # stays out of the way for passing runs.
-        # ------------------------------------------------------------------
         if failed and vmask.any() and worst_vectors_n > 0:
-            # Recover the indices (into the flattened (n,3) space) of the
-            # masked primitives so we can print the actual reference and
-            # fast vectors.
             vmask_idx = np.nonzero(vmask)[0]
 
-            # Rank by (1 - cos) to find the most directionally wrong ones.
             worst_by_cos_order = np.argsort(cos)[:worst_vectors_n]
-            # Rank by |log(mag_ratio)| to find the most magnitude-wrong ones
-            # (equal weight for under- and over-shoot).
             worst_by_mag_order = np.argsort(
                 -np.abs(np.log(np.clip(mag_ratio, 1e-30, None)))
             )[:worst_vectors_n]
@@ -440,9 +444,7 @@ def validate_gradients(
                 print(f"             ref ={b[k]}")
                 print(f"             fast={a[k]}")
 
-            print(
-                f"\n  --- worst {worst_vectors_n} primitives by magnitude ratio ---"
-            )
+            print(f"\n  --- worst {worst_vectors_n} primitives by magnitude ratio ---")
             for k in worst_by_mag_order:
                 prim_idx = int(vmask_idx[k])
                 print(
@@ -492,24 +494,99 @@ def validate_gradients(
 
 
 # =========================================================================
+# Scalar (epsilon) gradient validator
+# =========================================================================
+
+
+def validate_scalar_gradient(
+    fast_grad: torch.Tensor,
+    ref_grad: torch.Tensor,
+    label: str,
+    *,
+    abs_tol: float = 1e-3,
+    rel_tol: float = 1e-2,
+    abs_floor: float = 1e-2,
+    verbose: bool = True,
+) -> ScalarGradientMetrics:
+    """Compare two scalar (shape (1,)) gradients with a signal-aware denominator.
+
+    Passes if either the absolute error is small, or the relative error is small
+    relative to `max(|ref|, abs_floor)`. The floor prevents a false pass when the
+    reference value is near zero but the absolute difference is nevertheless
+    significant for the given kernel.
+    """
+    fast_val = float(fast_grad.detach().float().reshape(-1)[0].item())
+    ref_val = float(ref_grad.detach().float().reshape(-1)[0].item())
+
+    if math.isnan(fast_val) or math.isnan(ref_val):
+        if verbose:
+            print(f"\n  [eps-grad {label}] CRITICAL: NaN (fast={fast_val}, ref={ref_val})")
+        return ScalarGradientMetrics(
+            label=label,
+            ref_val=ref_val,
+            fast_val=fast_val,
+            abs_err=float("nan"),
+            rel_err=float("nan"),
+            passed=False,
+            failed_checks=("nan",),
+        )
+
+    abs_err = abs(fast_val - ref_val)
+    denom = max(abs(ref_val), abs_floor)
+    rel_err = abs_err / denom
+    passed = (abs_err < abs_tol) or (rel_err < rel_tol)
+    failed = () if passed else ("abs_or_rel_tol",)
+
+    if verbose:
+        print(f"\n--- epsilon gradient: {label} ---")
+        print(f"  Reference dL/d(eps)     : {ref_val:+.6e}")
+        print(f"  Fast      dL/d(eps)     : {fast_val:+.6e}")
+        print(f"  Absolute error          : {abs_err:.6e}   (tol {abs_tol:.1e})")
+        print(f"  Relative error          : {rel_err:.6e}   (tol {rel_tol:.1e})")
+        if passed:
+            print(f"\033[92m  ✓ PASS  [{label}]\033[0m")
+        else:
+            print(f"\033[91m  ✗ FAIL  [{label}]  failed: {', '.join(failed)}\033[0m")
+
+    return ScalarGradientMetrics(
+        label=label,
+        ref_val=ref_val,
+        fast_val=fast_val,
+        abs_err=abs_err,
+        rel_err=rel_err,
+        passed=passed,
+        failed_checks=failed,
+    )
+
+
+# =========================================================================
 # Low-level runners
 # =========================================================================
 
 
-def _to_cuda(x, dtype=None):
+def _to_cuda(x: np.ndarray, dtype: Optional[torch.dtype] = None) -> torch.Tensor:
     t = torch.from_numpy(np.ascontiguousarray(x))
     if dtype is not None:
         t = t.to(dtype)
     return t.to("cuda:0").contiguous()
 
 
-def _stream():
+def _stream() -> int:
     return torch.cuda.current_stream().cuda_stream
 
 
+def _empty_eps_grad(device: str = "cuda:0") -> torch.Tensor:
+    return torch.zeros(1, dtype=torch.float32, device=device)
+
+
 def run_brute_force_triangle_gradients(
-    triangles, queries, grad_output, epsilon=DEFAULT_EPSILON, out=None
-):
+    triangles: np.ndarray,
+    queries: np.ndarray,
+    grad_output: torch.Tensor,
+    epsilon: float = DEFAULT_EPSILON,
+    out: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return (geometry_grads, epsilon_grad) from the brute-force triangle kernel."""
     t = _to_cuda(triangles, torch.float32)
     q = _to_cuda(queries, torch.float32)
     g = grad_output if grad_output.is_cuda else grad_output.to("cuda:0")
@@ -518,14 +595,23 @@ def run_brute_force_triangle_gradients(
         out = torch.empty(
             [triangles.shape[0], 3, 3], device="cuda:0", dtype=torch.float32
         )
-    winder.brute_force_gradients_triangle_soup(g, t, q, out, epsilon, _stream())
+    eps_out = _empty_eps_grad()
+    winder.brute_force_gradients_triangle_soup(
+        g, t, q, out, eps_out, epsilon, _stream()
+    )
     torch.cuda.synchronize()
-    return out
+    return out, eps_out
 
 
 def run_fast_triangle_gradients(
-    triangles, queries, grad_output, beta, epsilon=DEFAULT_EPSILON, out=None
-):
+    triangles: np.ndarray,
+    queries: np.ndarray,
+    grad_output: torch.Tensor,
+    beta: Optional[float],
+    epsilon: float = DEFAULT_EPSILON,
+    out: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return (geometry_grads, epsilon_grad) from the fast triangle engine."""
     t = _to_cuda(triangles, torch.float32)
     q = _to_cuda(queries, torch.float32)
     g = grad_output if grad_output.is_cuda else grad_output.to("cuda:0")
@@ -534,21 +620,24 @@ def run_fast_triangle_gradients(
         out = torch.empty(
             [triangles.shape[0], 3, 3], device="cuda:0", dtype=torch.float32
         )
+    eps_out = _empty_eps_grad()
     engine = winder.GradientEngine(q, g, stream=_stream())
     engine.compute_triangle_soup(
-        t,
-        out,
-        -1.0 if beta is None else beta,
-        epsilon,
-        _stream(),
+        t, out, eps_out, -1.0 if beta is None else beta, epsilon, _stream()
     )
     torch.cuda.synchronize()
-    return out
+    return out, eps_out
 
 
 def run_brute_force_mesh_gradients(
-    vertices, indices, queries, grad_output, epsilon=DEFAULT_EPSILON, out=None
-):
+    vertices: np.ndarray,
+    indices: np.ndarray,
+    queries: np.ndarray,
+    grad_output: torch.Tensor,
+    epsilon: float = DEFAULT_EPSILON,
+    out: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return (geometry_grads, epsilon_grad) from the brute-force mesh kernel."""
     v = _to_cuda(vertices, torch.float32)
     idx = _to_cuda(indices.astype(np.uint32))
     q = _to_cuda(queries, torch.float32)
@@ -556,14 +645,22 @@ def run_brute_force_mesh_gradients(
     g = g.contiguous()
     if out is None:
         out = torch.empty_like(v)
-    winder.brute_force_gradients_mesh(g, v, idx, q, out, epsilon, _stream())
+    eps_out = _empty_eps_grad()
+    winder.brute_force_gradients_mesh(g, v, idx, q, out, eps_out, epsilon, _stream())
     torch.cuda.synchronize()
-    return out
+    return out, eps_out
 
 
 def run_fast_mesh_gradients(
-    vertices, indices, queries, grad_output, beta, epsilon=DEFAULT_EPSILON, out=None
-):
+    vertices: np.ndarray,
+    indices: np.ndarray,
+    queries: np.ndarray,
+    grad_output: torch.Tensor,
+    beta: Optional[float],
+    epsilon: float = DEFAULT_EPSILON,
+    out: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return (geometry_grads, epsilon_grad) from the fast mesh engine."""
     v = _to_cuda(vertices, torch.float32)
     idx = _to_cuda(indices.astype(np.uint32))
     q = _to_cuda(queries, torch.float32)
@@ -571,55 +668,67 @@ def run_fast_mesh_gradients(
     g = g.contiguous()
     if out is None:
         out = torch.empty_like(v)
+    eps_out = _empty_eps_grad()
     engine = winder.GradientEngine(q, g, stream=_stream())
     engine.compute_mesh(
-        v,
-        idx,
-        out,
-        -1.0 if beta is None else beta,
-        epsilon,
-        _stream(),
+        v, idx, out, eps_out, -1.0 if beta is None else beta, epsilon, _stream()
     )
     torch.cuda.synchronize()
-    return out
+    return out, eps_out
 
 
 def run_brute_force_point_normal_gradients(
-    points, normals, queries, grad_output, epsilon, out=None
-):
+    points: np.ndarray,
+    normals: np.ndarray,
+    queries: np.ndarray,
+    grad_output: torch.Tensor,
+    epsilon: float,
+    out: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return (geometry_grads, epsilon_grad) from the brute-force point-normal kernel."""
     p = _to_cuda(points, torch.float32)
     n = _to_cuda(normals, torch.float32)
     q = _to_cuda(queries, torch.float32)
     g = grad_output if grad_output.is_cuda else grad_output.to("cuda:0")
     g = g.contiguous()
     if out is None:
-        out = torch.empty([points.shape[0], 2, 3], device="cuda:0", dtype=torch.float32)
-    winder.brute_force_gradients_point_normal(g, p, n, q, out, epsilon, _stream())
+        out = torch.empty(
+            [points.shape[0], 2, 3], device="cuda:0", dtype=torch.float32
+        )
+    eps_out = _empty_eps_grad()
+    winder.brute_force_gradients_point_normal(
+        g, p, n, q, out, eps_out, epsilon, _stream()
+    )
     torch.cuda.synchronize()
-    return out
+    return out, eps_out
 
 
 def run_fast_point_normal_gradients(
-    points, normals, queries, grad_output, epsilon, beta, out=None
-):
+    points: np.ndarray,
+    normals: np.ndarray,
+    queries: np.ndarray,
+    grad_output: torch.Tensor,
+    epsilon: float,
+    beta: Optional[float],
+    out: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return (geometry_grads, epsilon_grad) from the fast point-normal engine."""
     p = _to_cuda(points, torch.float32)
     n = _to_cuda(normals, torch.float32)
     q = _to_cuda(queries, torch.float32)
     g = grad_output if grad_output.is_cuda else grad_output.to("cuda:0")
     g = g.contiguous()
     if out is None:
-        out = torch.empty([points.shape[0], 2, 3], device="cuda:0", dtype=torch.float32)
+        out = torch.empty(
+            [points.shape[0], 2, 3], device="cuda:0", dtype=torch.float32
+        )
+    eps_out = _empty_eps_grad()
     engine = winder.GradientEngine(q, g, stream=_stream())
     engine.compute_point_normal(
-        p,
-        n,
-        out,
-        -1.0 if beta is None else beta,
-        epsilon,
-        _stream(),
+        p, n, out, eps_out, -1.0 if beta is None else beta, epsilon, _stream()
     )
     torch.cuda.synchronize()
-    return out
+    return out, eps_out
 
 
 # =========================================================================
@@ -627,7 +736,10 @@ def run_fast_point_normal_gradients(
 # =========================================================================
 
 
-def _invariant_report(name, err, scale, tol_rel):
+def _invariant_report(
+    name: str, err: float, scale: float, tol_rel: float
+) -> bool:
+    """Print and return a pass/fail for an invariant with a relative tolerance."""
     rel = err / (scale + 1e-30)
     ok = rel < tol_rel
     status = "\033[92mPASS\033[0m" if ok else "\033[91mFAIL\033[0m"
@@ -635,22 +747,39 @@ def _invariant_report(name, err, scale, tol_rel):
     return ok
 
 
-def test_mesh_translation_invariance(vertices, indices, queries, g, beta, epsilon):
+def test_mesh_translation_invariance(
+    vertices: np.ndarray,
+    indices: np.ndarray,
+    queries: np.ndarray,
+    g: torch.Tensor,
+    beta: Optional[float],
+    epsilon: float,
+) -> bool:
+    """Check that translating geometry and queries together leaves gradients unchanged."""
     diag = float(np.linalg.norm(vertices.max(0) - vertices.min(0)))
     t = np.array([0.37, -0.41, 0.19], dtype=np.float32) * diag
-    a = run_fast_mesh_gradients(vertices, indices, queries, g, beta, epsilon)
-    b = run_fast_mesh_gradients(vertices + t, indices, queries + t, g, beta, epsilon)
+    a, _ = run_fast_mesh_gradients(vertices, indices, queries, g, beta, epsilon)
+    b, _ = run_fast_mesh_gradients(vertices + t, indices, queries + t, g, beta, epsilon)
     err = float((a - b).abs().max().item())
     return _invariant_report(
         "translation invariance", err, float(a.abs().max().item()), 1e-4
     )
 
 
-def test_mesh_query_permutation(vertices, indices, queries, g, beta, epsilon, seed=0):
+def test_mesh_query_permutation(
+    vertices: np.ndarray,
+    indices: np.ndarray,
+    queries: np.ndarray,
+    g: torch.Tensor,
+    beta: Optional[float],
+    epsilon: float,
+    seed: int = 0,
+) -> bool:
+    """Check that permuting the query set permutes the gradients but not their values."""
     n = queries.shape[0]
     perm = np.random.default_rng(seed).permutation(n)
-    a = run_fast_mesh_gradients(vertices, indices, queries, g, beta, epsilon)
-    b = run_fast_mesh_gradients(
+    a, _ = run_fast_mesh_gradients(vertices, indices, queries, g, beta, epsilon)
+    b, _ = run_fast_mesh_gradients(
         vertices, indices, queries[perm], g[perm], beta, epsilon
     )
     err = float((a - b).abs().max().item())
@@ -659,24 +788,47 @@ def test_mesh_query_permutation(vertices, indices, queries, g, beta, epsilon, se
     )
 
 
-def test_mesh_grad_output_linearity(vertices, indices, queries, g, beta, epsilon):
-    a = run_fast_mesh_gradients(vertices, indices, queries, g, beta, epsilon)
-    b = run_fast_mesh_gradients(vertices, indices, queries, 3.0 * g, beta, epsilon)
+def test_mesh_grad_output_linearity(
+    vertices: np.ndarray,
+    indices: np.ndarray,
+    queries: np.ndarray,
+    g: torch.Tensor,
+    beta: Optional[float],
+    epsilon: float,
+) -> bool:
+    """Check that scaling grad_output by 3 scales the geometry gradient by 3."""
+    a, _ = run_fast_mesh_gradients(vertices, indices, queries, g, beta, epsilon)
+    b, _ = run_fast_mesh_gradients(vertices, indices, queries, 3.0 * g, beta, epsilon)
     err = float((b - 3.0 * a).abs().max().item())
     scale = float(a.abs().max().item()) * 3.0
     return _invariant_report("grad_output linearity", err, scale, 1e-5)
 
 
-def test_mesh_determinism(vertices, indices, queries, g, beta, epsilon):
-    a = run_fast_mesh_gradients(vertices, indices, queries, g, beta, epsilon)
-    b = run_fast_mesh_gradients(vertices, indices, queries, g, beta, epsilon)
+def test_mesh_determinism(
+    vertices: np.ndarray,
+    indices: np.ndarray,
+    queries: np.ndarray,
+    g: torch.Tensor,
+    beta: Optional[float],
+    epsilon: float,
+) -> bool:
+    """Check that repeated invocations return identical results."""
+    a, _ = run_fast_mesh_gradients(vertices, indices, queries, g, beta, epsilon)
+    b, _ = run_fast_mesh_gradients(vertices, indices, queries, g, beta, epsilon)
     err = float((a - b).abs().max().item())
     return _invariant_report("determinism", err, 1.0, 0.0)
 
 
 def run_mesh_invariants(
-    vertices, indices, query_mode, query_count, beta, seed, epsilon
-):
+    vertices: np.ndarray,
+    indices: np.ndarray,
+    query_mode: str,
+    query_count: int,
+    beta: Optional[float],
+    seed: int,
+    epsilon: float,
+) -> bool:
+    """Run all mesh invariant checks and return True iff all pass."""
     print("\n=== Mesh gradient invariants (implementation-independent) ===")
     q = generate_queries(vertices, query_mode, query_count, seed)
     g = make_grad_output(query_count, seed + 1)
@@ -695,37 +847,50 @@ def run_mesh_invariants(
 
 
 def test_triangle_gradients(
-    vertices,
-    indices,
-    query_mode,
-    query_count,
-    beta,
-    num_trials,
-    base_seed,
-    epsilon,
-    verbose=True,
-):
+    vertices: np.ndarray,
+    indices: np.ndarray,
+    query_mode: str,
+    query_count: int,
+    beta: Optional[float],
+    num_trials: int,
+    base_seed: int,
+    epsilon: float,
+    verbose: bool = True,
+) -> tuple[list[GradientMetrics], list[ScalarGradientMetrics]]:
+    """Validate fast triangle gradients (v0/v1/v2 and epsilon) vs brute force."""
     triangles = vertices[indices]
-    all_metrics = []
+    all_metrics: list[GradientMetrics] = []
+    eps_metrics: list[ScalarGradientMetrics] = []
     for trial in range(num_trials):
         seed = base_seed + trial * 1009
         set_seeds(seed)
         queries = generate_queries(vertices, query_mode, query_count, seed)
         g = make_grad_output(query_count, seed + 1)
 
-        gt = run_brute_force_triangle_gradients(triangles, queries, g, epsilon)
-        fast = run_fast_triangle_gradients(triangles, queries, g, beta, epsilon)
+        gt, gt_eps = run_brute_force_triangle_gradients(triangles, queries, g, epsilon)
+        fast, fast_eps = run_fast_triangle_gradients(
+            triangles, queries, g, beta, epsilon
+        )
 
-        strict = beta is not None and beta >=10
+        strict = beta is not None and beta >= 10
         for idx, name in enumerate(["Triangle v0", "Triangle v1", "Triangle v2"]):
-            m = validate_gradients(
-                fast[:, idx],
-                gt[:, idx],
-                f"{name} [seed={seed}, eps={epsilon:g}]",
-                strict=strict,
+            all_metrics.append(
+                validate_gradients(
+                    fast[:, idx],
+                    gt[:, idx],
+                    f"{name} [seed={seed}, eps={epsilon:g}]",
+                    strict=strict,
+                    verbose=verbose,
+                )
+            )
+        eps_metrics.append(
+            validate_scalar_gradient(
+                fast_eps,
+                gt_eps,
+                f"Triangle [seed={seed}, eps={epsilon:g}]",
                 verbose=verbose,
             )
-            all_metrics.append(m)
+        )
 
     # --- Timing ---
     set_seeds(base_seed)
@@ -743,46 +908,61 @@ def test_triangle_gradients(
         warmup=2,
         iters=5,
     )
-    print(f"\n  Timing (median of 10, ms):")
+    print("\n  Timing (median of 10, ms):")
     print(f"    brute force     : {bf_ms:8.3f}")
     print(f"    fast (build+go) : {fast_ms:8.3f}   speedup {bf_ms / fast_ms:.2f}x")
     print(
         f"    fast (build only): {build_ms:8.3f}   "
         f"({100 * build_ms / fast_ms:.1f}% of fast path)"
     )
-    return all_metrics
+    return all_metrics, eps_metrics
 
 
 def test_mesh_gradients(
-    vertices,
-    indices,
-    query_mode,
-    query_count,
-    beta,
-    num_trials,
-    base_seed,
-    epsilon,
-    verbose=True,
-):
-    all_metrics = []
+    vertices: np.ndarray,
+    indices: np.ndarray,
+    query_mode: str,
+    query_count: int,
+    beta: Optional[float],
+    num_trials: int,
+    base_seed: int,
+    epsilon: float,
+    verbose: bool = True,
+) -> tuple[list[GradientMetrics], list[ScalarGradientMetrics]]:
+    """Validate fast mesh gradients (vertex + epsilon) vs brute force."""
+    all_metrics: list[GradientMetrics] = []
+    eps_metrics: list[ScalarGradientMetrics] = []
     for trial in range(num_trials):
         seed = base_seed + trial * 1009
         set_seeds(seed)
         queries = generate_queries(vertices, query_mode, query_count, seed)
         g = make_grad_output(query_count, seed + 1)
 
-        gt = run_brute_force_mesh_gradients(vertices, indices, queries, g, epsilon)
-        fast = run_fast_mesh_gradients(vertices, indices, queries, g, beta, epsilon)
-
-        strict = beta is not None and beta >=10
-        m = validate_gradients(
-            fast,
-            gt,
-            f"Mesh [seed={seed}, eps={epsilon:g}]",
-            strict=strict,
-            verbose=verbose,
+        gt, gt_eps = run_brute_force_mesh_gradients(
+            vertices, indices, queries, g, epsilon
         )
-        all_metrics.append(m)
+        fast, fast_eps = run_fast_mesh_gradients(
+            vertices, indices, queries, g, beta, epsilon
+        )
+
+        strict = beta is not None and beta >= 10
+        all_metrics.append(
+            validate_gradients(
+                fast,
+                gt,
+                f"Mesh [seed={seed}, eps={epsilon:g}]",
+                strict=strict,
+                verbose=verbose,
+            )
+        )
+        eps_metrics.append(
+            validate_scalar_gradient(
+                fast_eps,
+                gt_eps,
+                f"Mesh [seed={seed}, eps={epsilon:g}]",
+                verbose=verbose,
+            )
+        )
 
     set_seeds(base_seed)
     q = generate_queries(vertices, query_mode, query_count, base_seed)
@@ -799,53 +979,64 @@ def test_mesh_gradients(
         warmup=2,
         iters=5,
     )
-    print(f"\n  Timing (median of 10, ms):")
+    print("\n  Timing (median of 10, ms):")
     print(f"    brute force     : {bf_ms:8.3f}")
     print(f"    fast (build+go) : {fast_ms:8.3f}   speedup {bf_ms / fast_ms:.2f}x")
     print(
         f"    fast (build only): {build_ms:8.3f}   "
         f"({100 * build_ms / fast_ms:.1f}% of fast path)"
     )
-    return all_metrics
+    return all_metrics, eps_metrics
 
 
 def test_point_normal_gradients(
-    points,
-    normals,
-    areas,
-    query_mode,
-    query_count,
-    epsilon,
-    beta,
-    num_trials,
-    base_seed,
-    verbose=True,
-):
+    points: np.ndarray,
+    normals: np.ndarray,
+    areas: np.ndarray,
+    query_mode: str,
+    query_count: int,
+    epsilon: float,
+    beta: Optional[float],
+    num_trials: int,
+    base_seed: int,
+    verbose: bool = True,
+) -> tuple[list[GradientMetrics], list[ScalarGradientMetrics]]:
+    """Validate fast point-normal gradients (n, p, epsilon) vs brute force."""
     scaled_normals = normals * areas[:, None]
-    all_metrics = []
+    all_metrics: list[GradientMetrics] = []
+    eps_metrics: list[ScalarGradientMetrics] = []
     for trial in range(num_trials):
         seed = base_seed + trial * 1009
         set_seeds(seed)
         queries = generate_queries(points, query_mode, query_count, seed)
         g = make_grad_output(query_count, seed + 1)
 
-        gt = run_brute_force_point_normal_gradients(
+        gt, gt_eps = run_brute_force_point_normal_gradients(
             points, scaled_normals, queries, g, epsilon
         )
-        fast = run_fast_point_normal_gradients(
+        fast, fast_eps = run_fast_point_normal_gradients(
             points, scaled_normals, queries, g, epsilon, beta
         )
 
-        strict = beta is not None and beta >=10
+        strict = beta is not None and beta >= 10
         for idx, name in enumerate(["PointNormal n", "PointNormal p"]):
-            m = validate_gradients(
-                fast[:, idx],
-                gt[:, idx],
-                f"{name} [seed={seed}, eps={epsilon:g}]",
-                strict=strict,
+            all_metrics.append(
+                validate_gradients(
+                    fast[:, idx],
+                    gt[:, idx],
+                    f"{name} [seed={seed}, eps={epsilon:g}]",
+                    strict=strict,
+                    verbose=verbose,
+                )
+            )
+        eps_metrics.append(
+            validate_scalar_gradient(
+                fast_eps,
+                gt_eps,
+                f"PointNormal [seed={seed}, eps={epsilon:g}]",
                 verbose=verbose,
             )
-            all_metrics.append(m)
+        )
 
     set_seeds(base_seed)
     q = generate_queries(points, query_mode, query_count, base_seed)
@@ -866,14 +1057,14 @@ def test_point_normal_gradients(
         warmup=2,
         iters=5,
     )
-    print(f"\n  Timing (median of 10, ms):")
+    print("\n  Timing (median of 10, ms):")
     print(f"    brute force     : {bf_ms:8.3f}")
     print(f"    fast (build+go) : {fast_ms:8.3f}   speedup {bf_ms / fast_ms:.2f}x")
     print(
         f"    fast (build only): {build_ms:8.3f}   "
         f"({100 * build_ms / fast_ms:.1f}% of fast path)"
     )
-    return all_metrics
+    return all_metrics, eps_metrics
 
 
 # =========================================================================
@@ -882,24 +1073,26 @@ def test_point_normal_gradients(
 
 
 def run_beta_sweep(
-    vertices,
-    indices,
-    points,
-    normals,
-    areas,
-    query_mode,
-    query_count,
-    beta_values,
-    num_trials,
-    base_seed,
-    epsilon,
-):
+    vertices: np.ndarray,
+    indices: np.ndarray,
+    points: np.ndarray,
+    normals: np.ndarray,
+    areas: np.ndarray,
+    query_mode: str,
+    query_count: int,
+    beta_values: list[float],
+    num_trials: int,
+    base_seed: int,
+    epsilon: float,
+) -> tuple[dict, dict]:
+    """Sweep beta and report vector and scalar-gradient errors per geometry."""
     print("\n" + "=" * 88)
     print(f"  BETA SWEEP — approximation error vs beta  (epsilon = {epsilon:g})")
     print("=" * 88)
 
-    table = {}
-    timing = {}
+    table: dict[float, dict[str, list]] = {}
+    eps_table: dict[float, dict[str, list]] = {}
+    timing: dict[float, dict] = {}
 
     set_seeds(base_seed)
     timing_queries = generate_queries(vertices, query_mode, query_count, base_seed)
@@ -930,44 +1123,55 @@ def run_beta_sweep(
 
     for beta in beta_values:
         table[beta] = {"mesh": [], "triangle": [], "point_normal": []}
+        eps_table[beta] = {"mesh": [], "triangle": [], "point_normal": []}
         timing[beta] = {}
 
-        strict = False
         for trial in range(num_trials):
             seed = base_seed + trial * 1009
             set_seeds(seed)
             queries = generate_queries(vertices, query_mode, query_count, seed)
             g = make_grad_output(query_count, seed + 1)
 
-            gt = run_brute_force_mesh_gradients(vertices, indices, queries, g, epsilon)
-            fast = run_fast_mesh_gradients(vertices, indices, queries, g, beta, epsilon)
+            gt, gt_eps = run_brute_force_mesh_gradients(
+                vertices, indices, queries, g, epsilon
+            )
+            fast, fast_eps = run_fast_mesh_gradients(
+                vertices, indices, queries, g, beta, epsilon
+            )
             table[beta]["mesh"].append(
                 validate_gradients(
-                    fast,
-                    gt,
-                    f"mesh beta={beta} seed={seed}",
-                    strict=strict,
-                    verbose=False,
+                    fast, gt, f"mesh beta={beta} seed={seed}", verbose=False
+                )
+            )
+            eps_table[beta]["mesh"].append(
+                validate_scalar_gradient(
+                    fast_eps, gt_eps, f"mesh-eps beta={beta} seed={seed}", verbose=False
                 )
             )
 
-            gt = run_brute_force_triangle_gradients(tris, queries, g, epsilon)
-            fast = run_fast_triangle_gradients(tris, queries, g, beta, epsilon)
+            gt, gt_eps = run_brute_force_triangle_gradients(tris, queries, g, epsilon)
+            fast, fast_eps = run_fast_triangle_gradients(
+                tris, queries, g, beta, epsilon
+            )
             for idx in range(3):
                 table[beta]["triangle"].append(
                     validate_gradients(
                         fast[:, idx],
                         gt[:, idx],
                         f"tri{idx} beta={beta} seed={seed}",
-                        strict=strict,
                         verbose=False,
                     )
                 )
+            eps_table[beta]["triangle"].append(
+                validate_scalar_gradient(
+                    fast_eps, gt_eps, f"tri-eps beta={beta} seed={seed}", verbose=False
+                )
+            )
 
-            gt = run_brute_force_point_normal_gradients(
+            gt, gt_eps = run_brute_force_point_normal_gradients(
                 points, scaled_normals, queries, g, epsilon
             )
-            fast = run_fast_point_normal_gradients(
+            fast, fast_eps = run_fast_point_normal_gradients(
                 points, scaled_normals, queries, g, epsilon, beta
             )
             for idx in range(2):
@@ -976,27 +1180,31 @@ def run_beta_sweep(
                         fast[:, idx],
                         gt[:, idx],
                         f"pn{idx} beta={beta} seed={seed}",
-                        strict=strict,
                         verbose=False,
                     )
                 )
+            eps_table[beta]["point_normal"].append(
+                validate_scalar_gradient(
+                    fast_eps, gt_eps, f"pn-eps beta={beta} seed={seed}", verbose=False
+                )
+            )
 
-        def _build_mesh():
+        def _build_mesh() -> winder.GradientEngine:
             return winder.GradientEngine(
                 torch.from_numpy(timing_queries).cuda(), timing_g, stream=_stream()
             )
 
         timing[beta]["mesh"] = {"build_ms": cuda_timer(_build_mesh, warmup=2, iters=5)}
 
-        def _fast_mesh():
+        def _fast_mesh() -> None:
             run_fast_mesh_gradients(
                 vertices, indices, timing_queries, timing_g, beta, epsilon
             )
 
-        def _fast_tri():
+        def _fast_tri() -> None:
             run_fast_triangle_gradients(tris, timing_queries, timing_g, beta, epsilon)
 
-        def _fast_pn():
+        def _fast_pn() -> None:
             run_fast_point_normal_gradients(
                 points, scaled_normals, timing_queries, timing_g, epsilon, beta
             )
@@ -1008,9 +1216,10 @@ def run_beta_sweep(
     print(
         f"\n{'beta':>6} | {'geometry':<14} | "
         f"{'rel_norm(med)':>13} | {'p99_rel(med)':>12} | "
-        f"{'BF(ms)':>8} | {'fast(ms)':>9} | {'speedup':>8} | {'pass':>5}"
+        f"{'eps_rel(med)':>13} | {'eps_pass':>8} | "
+        f"{'BF(ms)':>8} | {'fast(ms)':>9} | {'speedup':>8}"
     )
-    print("-" * 108)
+    print("-" * 128)
 
     bf_ms_for = {"mesh": bf_mesh_ms, "triangle": bf_tri_ms, "point_normal": bf_pn_ms}
 
@@ -1021,21 +1230,35 @@ def run_beta_sweep(
                 continue
             rel_med = float(np.median([m.global_rel_norm_err for m in ms]))
             p99_med = float(np.median([m.masked_p99_rel for m in ms]))
-            all_pass = all(m.passed for m in ms)
+
+            ems = eps_table[beta][geom]
+            eps_rel_med = (
+                float(np.median([m.rel_err for m in ems]))
+                if ems
+                else float("nan")
+            )
+            eps_pass = all(m.passed for m in ems) if ems else True
+
             bf_ms = bf_ms_for[geom]
             fast_ms = timing[beta][geom]["total_ms"]
             speedup = bf_ms / fast_ms if fast_ms > 0 else float("nan")
             print(
                 f"{beta:>6.3f} | {geom:<14} | "
                 f"{rel_med:>13.3e} | {p99_med:>12.3e} | "
+                f"{eps_rel_med:>13.3e} | "
+                f"{'YES' if eps_pass else 'NO':>8} | "
                 f"{bf_ms:>8.3f} | {fast_ms:>9.3f} | "
-                f"{speedup:>7.2f}x | "
-                f"{'YES' if all_pass else 'NO':>5}"
+                f"{speedup:>7.2f}x"
             )
 
-    print("-" * 108)
-    non_monotone = []
-    prev_med = {"mesh": None, "triangle": None, "point_normal": None}
+    print("-" * 128)
+
+    non_monotone: list[tuple[str, float, float, float]] = []
+    prev_med: dict[str, Optional[float]] = {
+        "mesh": None,
+        "triangle": None,
+        "point_normal": None,
+    }
     for beta in sorted(beta_values):
         for geom in ("mesh", "triangle", "point_normal"):
             ms = table[beta][geom]
@@ -1063,24 +1286,19 @@ def run_beta_sweep(
 
 
 def run_epsilon_sweep(
-    vertices,
-    indices,
-    points,
-    normals,
-    areas,
-    query_mode,
-    query_count,
-    epsilon_values,
-    num_trials,
-    base_seed,
-    beta,
-):
-    """Sweep regularization strength at fixed beta.
-
-    At each epsilon, brute force and fast both use the same regularized kernel
-    (matching the C++ convention: epsilon is a fraction of the scene scale).
-    Reports the fast-vs-brute approximation error at each level.
-    """
+    vertices: np.ndarray,
+    indices: np.ndarray,
+    points: np.ndarray,
+    normals: np.ndarray,
+    areas: np.ndarray,
+    query_mode: str,
+    query_count: int,
+    epsilon_values: list[float],
+    num_trials: int,
+    base_seed: int,
+    beta: float,
+) -> dict:
+    """Sweep regularization strength at fixed beta and report errors per geometry."""
     print("\n" + "=" * 100)
     print(
         f"  EPSILON SWEEP — regularization strength vs fast-vs-brute error  (beta = {beta})"
@@ -1094,7 +1312,10 @@ def run_epsilon_sweep(
     timing_q = generate_queries(vertices, query_mode, query_count, base_seed)
     timing_g = make_grad_output(query_count, base_seed + 1)
 
-    table = {
+    table: dict[float, dict[str, list[GradientMetrics]]] = {
+        e: {"mesh": [], "triangle": [], "point_normal": []} for e in epsilon_values
+    }
+    eps_table: dict[float, dict[str, list[ScalarGradientMetrics]]] = {
         e: {"mesh": [], "triangle": [], "point_normal": []} for e in epsilon_values
     }
 
@@ -1106,20 +1327,24 @@ def run_epsilon_sweep(
             g = make_grad_output(query_count, seed + 1)
 
             # Mesh
-            gt = run_brute_force_mesh_gradients(vertices, indices, q, g, eps)
-            fast = run_fast_mesh_gradients(vertices, indices, q, g, beta, eps)
+            gt, gt_eps = run_brute_force_mesh_gradients(
+                vertices, indices, q, g, eps
+            )
+            fast, fast_eps = run_fast_mesh_gradients(
+                vertices, indices, q, g, beta, eps
+            )
             table[eps]["mesh"].append(
-                validate_gradients(
-                    fast,
-                    gt,
-                    f"mesh eps={eps:g} s={seed}",
-                    verbose=False,
+                validate_gradients(fast, gt, f"mesh eps={eps:g} s={seed}", verbose=False)
+            )
+            eps_table[eps]["mesh"].append(
+                validate_scalar_gradient(
+                    fast_eps, gt_eps, f"mesh-eps eps={eps:g} s={seed}", verbose=False
                 )
             )
 
             # Triangle
-            gt = run_brute_force_triangle_gradients(tris, q, g, eps)
-            fast = run_fast_triangle_gradients(tris, q, g, beta, eps)
+            gt, gt_eps = run_brute_force_triangle_gradients(tris, q, g, eps)
+            fast, fast_eps = run_fast_triangle_gradients(tris, q, g, beta, eps)
             for idx in range(3):
                 table[eps]["triangle"].append(
                     validate_gradients(
@@ -1129,12 +1354,17 @@ def run_epsilon_sweep(
                         verbose=False,
                     )
                 )
+            eps_table[eps]["triangle"].append(
+                validate_scalar_gradient(
+                    fast_eps, gt_eps, f"tri-eps eps={eps:g} s={seed}", verbose=False
+                )
+            )
 
             # PointNormal
-            gt = run_brute_force_point_normal_gradients(
+            gt, gt_eps = run_brute_force_point_normal_gradients(
                 points, scaled_normals, q, g, eps
             )
-            fast = run_fast_point_normal_gradients(
+            fast, fast_eps = run_fast_point_normal_gradients(
                 points, scaled_normals, q, g, eps, beta
             )
             for idx in range(2):
@@ -1146,13 +1376,19 @@ def run_epsilon_sweep(
                         verbose=False,
                     )
                 )
+            eps_table[eps]["point_normal"].append(
+                validate_scalar_gradient(
+                    fast_eps, gt_eps, f"pn-eps eps={eps:g} s={seed}", verbose=False
+                )
+            )
 
     print(
         f"\n{'epsilon':>9} | {'geometry':<14} | "
         f"{'rel_norm(med)':>13} | {'p99_rel(med)':>12} | "
-        f"{'cos(med)':>10} | {'fast(ms)':>9} | {'pass':>5}"
+        f"{'cos(med)':>10} | {'eps_rel(med)':>13} | {'eps_pass':>8} | "
+        f"{'fast(ms)':>9}"
     )
-    print("-" * 108)
+    print("-" * 128)
 
     for eps in epsilon_values:
         for geom in ("mesh", "triangle", "point_normal"):
@@ -1162,40 +1398,49 @@ def run_epsilon_sweep(
             rel_med = float(np.median([m.global_rel_norm_err for m in ms]))
             p99_med = float(np.median([m.masked_p99_rel for m in ms]))
             cos_med = float(np.median([m.global_cosine_flat for m in ms]))
-            all_pass = all(m.passed for m in ms)
 
-            def _timed(g=geom, e=eps):
+            ems = eps_table[eps][geom]
+            eps_rel_med = (
+                float(np.median([m.rel_err for m in ems]))
+                if ems
+                else float("nan")
+            )
+            eps_pass = all(m.passed for m in ems) if ems else True
+
+            def _timed(g: str = geom, e: float = eps) -> None:
                 if g == "mesh":
-                    return run_fast_mesh_gradients(
+                    run_fast_mesh_gradients(
                         vertices, indices, timing_q, timing_g, beta, e
                     )
-                if g == "triangle":
-                    return run_fast_triangle_gradients(
-                        tris, timing_q, timing_g, beta, e
+                elif g == "triangle":
+                    run_fast_triangle_gradients(tris, timing_q, timing_g, beta, e)
+                else:
+                    run_fast_point_normal_gradients(
+                        points, scaled_normals, timing_q, timing_g, e, beta
                     )
-                return run_fast_point_normal_gradients(
-                    points, scaled_normals, timing_q, timing_g, e, beta
-                )
 
             fast_ms = cuda_timer(_timed, warmup=2, iters=5)
 
             print(
                 f"{eps:>9.5f} | {geom:<14} | "
                 f"{rel_med:>13.3e} | {p99_med:>12.3e} | "
-                f"{cos_med:>10.6f} | {fast_ms:>9.3f} | "
-                f"{'YES' if all_pass else 'NO':>5}"
+                f"{cos_med:>10.6f} | "
+                f"{eps_rel_med:>13.3e} | "
+                f"{'YES' if eps_pass else 'NO':>8} | "
+                f"{fast_ms:>9.3f}"
             )
 
-    print("-" * 108)
+    print("-" * 128)
     print("\n  Notes:")
     print("    - Both brute force and fast use the SAME epsilon at each row.")
-    print("    - Larger epsilon → smoother kernel → better fast approximation.")
+    print("    - Larger epsilon -> smoother kernel -> better fast approximation.")
     print("    - rel_norm measures fast-vs-brute (not vs sharp truth).")
+    print("    - eps_rel is the fast-vs-brute relative error of dL/d(epsilon).")
     return table
 
 
 # =========================================================================
-# CSV + plotting
+# CSV + summary
 # =========================================================================
 
 CSV_FIELDS = [
@@ -1212,15 +1457,31 @@ CSV_FIELDS = [
     "pn_rel_norm_err",
     "tri_rel_norm_err",
     "mesh_rel_norm_err",
+    "pn_eps_rel_err",
+    "tri_eps_rel_err",
+    "mesh_eps_rel_err",
     "pn_passed",
     "tri_passed",
     "mesh_passed",
+    "pn_eps_passed",
+    "tri_eps_passed",
+    "mesh_eps_passed",
 ]
 
 
 def write_run_to_csv(
-    csv_path, unique_label, raw_label, args, pn_metrics, tri_metrics, mesh_metrics
-):
+    csv_path: str,
+    unique_label: str,
+    raw_label: str,
+    args: argparse.Namespace,
+    pn_metrics: Optional[list[GradientMetrics]],
+    tri_metrics: Optional[list[GradientMetrics]],
+    mesh_metrics: Optional[list[GradientMetrics]],
+    pn_eps: Optional[list[ScalarGradientMetrics]] = None,
+    tri_eps: Optional[list[ScalarGradientMetrics]] = None,
+    mesh_eps: Optional[list[ScalarGradientMetrics]] = None,
+) -> None:
+    """Append one row of aggregated metrics to `csv_path` (archives on header change)."""
     file_exists = os.path.exists(csv_path)
     if file_exists:
         with open(csv_path, newline="") as f:
@@ -1231,13 +1492,13 @@ def write_run_to_csv(
             print(f"[CSV] Header changed; archived previous file to {backup}")
             file_exists = False
 
-    def _avg(ms, attr):
+    def _avg(ms, attr: str) -> str:
         if not ms:
             return ""
         vals = [getattr(m, attr) for m in ms if math.isfinite(getattr(m, attr))]
         return f"{float(np.mean(vals)):.6e}" if vals else ""
 
-    def _pass(ms):
+    def _pass(ms) -> str:
         return "" if not ms else str(all(m.passed for m in ms))
 
     row = {
@@ -1254,9 +1515,15 @@ def write_run_to_csv(
         "pn_rel_norm_err": _avg(pn_metrics, "global_rel_norm_err"),
         "tri_rel_norm_err": _avg(tri_metrics, "global_rel_norm_err"),
         "mesh_rel_norm_err": _avg(mesh_metrics, "global_rel_norm_err"),
+        "pn_eps_rel_err": _avg(pn_eps, "rel_err"),
+        "tri_eps_rel_err": _avg(tri_eps, "rel_err"),
+        "mesh_eps_rel_err": _avg(mesh_eps, "rel_err"),
         "pn_passed": _pass(pn_metrics),
         "tri_passed": _pass(tri_metrics),
         "mesh_passed": _pass(mesh_metrics),
+        "pn_eps_passed": _pass(pn_eps),
+        "tri_eps_passed": _pass(tri_eps),
+        "mesh_eps_passed": _pass(mesh_eps),
     }
 
     with open(csv_path, "a", newline="") as f:
@@ -1268,12 +1535,8 @@ def write_run_to_csv(
     print(f"[CSV] Appended 1 row to {csv_path}")
 
 
-# =========================================================================
-# CLI
-# =========================================================================
-
-
-def _summarize(metrics_list, name):
+def _summarize(metrics_list, name: str) -> Optional[float]:
+    """Print a one-line summary of a list of GradientMetrics and return the mean error."""
     if not metrics_list:
         print(f"\n[{name}] no metrics produced.")
         return None
@@ -1292,7 +1555,29 @@ def _summarize(metrics_list, name):
     return mean_err
 
 
-def main():
+def _summarize_scalar(metrics_list, name: str) -> Optional[float]:
+    """Print a one-line summary of a list of ScalarGradientMetrics."""
+    if not metrics_list:
+        print(f"\n[{name} eps-grad] no metrics produced.")
+        return None
+    errs = [m.rel_err for m in metrics_list if math.isfinite(m.rel_err)]
+    any_failed = any(not m.passed for m in metrics_list)
+    mean_err = float(np.mean(errs)) if errs else float("nan")
+    status = "\033[91mFAIL\033[0m" if any_failed else "\033[92mPASS\033[0m"
+    print(
+        f"\n[{name} eps-grad] mean rel_err = {mean_err:.3e},  overall: {status}  "
+        f"({sum(m.passed for m in metrics_list)}/{len(metrics_list)} sub-checks passed)"
+    )
+    return mean_err
+
+
+# =========================================================================
+# CLI
+# =========================================================================
+
+
+def main() -> None:
+    """Command-line entry point."""
     parser = argparse.ArgumentParser(
         description="Validate fast (Barnes-Hut) winding-number gradients against brute force."
     )
@@ -1397,7 +1682,12 @@ def main():
     # ---------------------------------------------------------------
     # Main geometry validation
     # ---------------------------------------------------------------
-    pn_metrics = tri_metrics = mesh_metrics = None
+    pn_metrics: Optional[list[GradientMetrics]] = None
+    tri_metrics: Optional[list[GradientMetrics]] = None
+    mesh_metrics: Optional[list[GradientMetrics]] = None
+    pn_eps: Optional[list[ScalarGradientMetrics]] = None
+    tri_eps: Optional[list[ScalarGradientMetrics]] = None
+    mesh_eps: Optional[list[ScalarGradientMetrics]] = None
 
     if args.geometry_type in ("Mesh", "All") and not args.skip_invariants:
         run_mesh_invariants(
@@ -1414,7 +1704,7 @@ def main():
         print("\n" + "=" * 72)
         print("  PointNormal gradient validation")
         print("=" * 72)
-        pn_metrics = test_point_normal_gradients(
+        pn_metrics, pn_eps = test_point_normal_gradients(
             points,
             normals,
             areas,
@@ -1426,6 +1716,7 @@ def main():
             args.seed,
         )
         _summarize(pn_metrics, "PointNormal")
+        _summarize_scalar(pn_eps, "PointNormal")
         for metric in pn_metrics:
             for idx in metric.worst_idxs:
                 p = points[idx]
@@ -1436,7 +1727,7 @@ def main():
         print("\n" + "=" * 72)
         print("  Triangle gradient validation")
         print("=" * 72)
-        tri_metrics = test_triangle_gradients(
+        tri_metrics, tri_eps = test_triangle_gradients(
             vertices,
             indices,
             args.query_mode,
@@ -1447,6 +1738,7 @@ def main():
             args.epsilon,
         )
         _summarize(tri_metrics, "Triangle")
+        _summarize_scalar(tri_eps, "Triangle")
         for metric in tri_metrics:
             for idx in metric.worst_idxs:
                 tri_idxs = indices[idx]
@@ -1457,7 +1749,7 @@ def main():
         print("\n" + "=" * 72)
         print("  Mesh gradient validation")
         print("=" * 72)
-        mesh_metrics = test_mesh_gradients(
+        mesh_metrics, mesh_eps = test_mesh_gradients(
             vertices,
             indices,
             args.query_mode,
@@ -1468,13 +1760,13 @@ def main():
             args.epsilon,
         )
         _summarize(mesh_metrics, "Mesh")
+        _summarize_scalar(mesh_eps, "Mesh")
         for metric in mesh_metrics:
             for idx in metric.worst_idxs:
-                tri_indices = np.where((indices == idx).any(axis=1))[0]
-                tri_indices = indices[tri_indices]
-                for tri_idx in tri_indices:
-                    tri = vertices[tri_idx]
-                    print(f"Bad Vertex appearing in Trinalge {idx}: {tri}")
+                tri_rows = np.where((indices == idx).any(axis=1))[0]
+                for row in tri_rows:
+                    tri = vertices[indices[row]]
+                    print(f"Bad Vertex {idx} in Triangle row {row}: {tri}")
 
     # ---------------------------------------------------------------
     # CSV
@@ -1489,6 +1781,9 @@ def main():
             pn_metrics,
             tri_metrics,
             mesh_metrics,
+            pn_eps,
+            tri_eps,
+            mesh_eps,
         )
 
 

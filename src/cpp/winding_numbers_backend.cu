@@ -222,7 +222,7 @@ void WindingNumbersBackend<Triangle>::initialize_triangle_data(
                    m_to_internal + m_count);
   // sorts both morton_codes and m_to_internal
   thrust::stable_sort_by_key(m_build_stream_policy, geometry_morton_codes,
-                      geometry_morton_codes + m_count, m_to_internal);
+                             geometry_morton_codes + m_count, m_to_internal);
   // sort triangles using m_to_internal
   gather_triangles_soa(triangles, m_to_internal, m_sorted_geometry, m_count,
                        m_norm, m_build_stream);
@@ -371,7 +371,7 @@ void WindingNumbersBackend<PointNormal>::initialize_point_data(
                    m_to_internal + m_count);
   // sorts both morton_codes and m_to_internal
   thrust::stable_sort_by_key(m_build_stream_policy, geometry_morton_codes,
-                      geometry_morton_codes + m_count, m_to_internal);
+                             geometry_morton_codes + m_count, m_to_internal);
 
   gather_point_normals_soa(points, normals, m_to_internal, m_sorted_geometry,
                            m_count, m_norm, m_build_stream);
@@ -536,7 +536,7 @@ auto WindingNumbersBackend<Geometry>::compute(const float *queries,
   thrust::sequence(compute_stream_policy, queries_to_internal,
                    queries_to_internal + query_count);
   thrust::stable_sort_by_key(compute_stream_policy, queries_morton,
-                      queries_morton + query_count, queries_to_internal);
+                             queries_morton + query_count, queries_to_internal);
 
   // free morton code memory
   CUDA_CHECK(cudaFreeAsync(queries_morton, compute_stream));
@@ -573,6 +573,89 @@ auto WindingNumbersBackend<Geometry>::compute(const float *queries,
       scene_scale,
       m_norm};
   compute_winding_numbers<Geometry>(params, m_device, compute_stream);
+  // free temporary memory
+  CUDA_CHECK(cudaFreeAsync(queries_to_internal, compute_stream));
+  CUDA_CHECK(cudaFreeAsync(global_counter, compute_stream));
+
+  CUDA_CHECK(cudaEventRecord(finish, compute_stream));
+  // free events
+  CUDA_CHECK(cudaEventDestroy(start));
+  CUDA_CHECK(cudaEventDestroy(finish));
+}
+
+template <IsGeometry Geometry>
+auto WindingNumbersBackend<Geometry>::compute_query_gradients(
+    const float *grad_output, const float *queries, size_t query_count,
+    float *out_query_gradients, float beta, float epsilon, size_t stream) const
+    -> void {
+  if (m_count == 0) {
+    return;
+  }
+  cudaEvent_t start, finish;
+  CUDA_CHECK(cudaEventCreate(&start));
+  CUDA_CHECK(cudaEventCreate(&finish));
+
+  ScopedCudaDevice device_scope{m_device};
+  const Vec3 *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
+
+  // convert stream to cuda stream
+  cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
+  auto compute_stream_policy = thrust::cuda::par.on(compute_stream);
+  CUDA_CHECK(cudaEventRecord(start, compute_stream));
+
+  uint32_t *queries_to_internal;
+  uint64_t *queries_morton;
+  CUDA_CHECK(cudaMallocAsync(&queries_to_internal,
+                             query_count * sizeof(uint32_t), compute_stream));
+  CUDA_CHECK(cudaMallocAsync(&queries_morton, query_count * sizeof(uint64_t),
+                             compute_stream));
+
+  // sort queries by morton code, scaled with bvh8s aabb
+  thrust::transform(compute_stream_policy, queries_vec3,
+                    queries_vec3 + query_count, queries_morton,
+                    GeometryToMorton<Vec3>{});
+
+  thrust::sequence(compute_stream_policy, queries_to_internal,
+                   queries_to_internal + query_count);
+  thrust::stable_sort_by_key(compute_stream_policy, queries_morton,
+                             queries_morton + query_count, queries_to_internal);
+
+  // free morton code memory
+  CUDA_CHECK(cudaFreeAsync(queries_morton, compute_stream));
+
+  // make sure stream 0 has finished building the tree
+  CUDA_CHECK(
+      cudaStreamWaitEvent(compute_stream, m_tree_construction_finished_event));
+
+  if (beta < 0.F) {
+    // defaults from Fast Winding Numbers paper
+    beta = GeometryTraits<Geometry>::default_beta;
+  }
+  epsilon = std::max(0.F, epsilon);
+  float scene_scale = 1.F;
+  uint32_t leaf_count = (m_count + LEAF_SIZE - 1) / LEAF_SIZE;
+  uint32_t *global_counter;
+  CUDA_CHECK(
+      cudaMallocAsync(&global_counter, sizeof(uint32_t), compute_stream));
+  ComputeQueryGradientParams<Geometry> params{
+      .queries=queries_vec3,
+      .sort_indirections=queries_to_internal,
+      .bvh8_nodes = m_bvh8_nodes,
+      .bvh8_leaf_pointers=m_bvh8_leaf_pointers,
+      .node_coefficients=m_tailor_coefficients,
+      .leaf_coefficients=m_leaf_coefficients,
+      .leaf_aabbs=m_binary_aabbs + leaf_count - 1,
+      .sorted_geometry=SoAView<Geometry>{m_sorted_geometry, m_count},
+      .query_count=(uint32_t)query_count,
+      .geometry_count=(uint32_t)m_count,
+      .grad_output=grad_output,
+      .out_query_gradients=out_query_gradients,
+      .global_device_counter=global_counter,
+      .beta=beta,
+      .epsilon=epsilon,
+      .scene_scale=scene_scale,
+      .norm=m_norm};
+  query_gradient_traversal(params, m_device, compute_stream);
   // free temporary memory
   CUDA_CHECK(cudaFreeAsync(queries_to_internal, compute_stream));
   CUDA_CHECK(cudaFreeAsync(global_counter, compute_stream));

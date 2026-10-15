@@ -629,3 +629,33 @@ Mat3x3_bf16::operator*(const Vec3_bf16 &v) const -> Vec3_bf16 {
 #endif
   return res;
 }
+
+__host__ __device__ __forceinline__ auto
+Mat3x3_f16::operator*(const Vec3_f16 &v) const -> Vec3_f16 {
+  Vec3_f16 res;
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 530
+  const half2 v_xy = __halves2half2(v.x, v.y);
+  // --- Row 0 ---
+  const half2 r0_xy = __halves2half2(data[0], data[1]);
+  const half2 p0 = __hmul2(r0_xy, v_xy);
+  const half xy_sum0 = __hadd(__low2half(p0), __high2half(p0));
+  res.x = __hfma(data[2], v.z, xy_sum0);
+
+  // --- Row 1 ---
+  const half2 r1_xy = __halves2half2(data[3], data[4]);
+  const half2 p1 = __hmul2(r1_xy, v_xy);
+  const half xy_sum1 = __hadd(__low2half(p1), __high2half(p1));
+  res.y = __hfma(data[5], v.z, xy_sum1);
+
+  // --- Row 2 ---
+  const half2 r2_xy = __halves2half2(data[6], data[7]);
+  const half2 p2 = __hmul2(r2_xy, v_xy);
+  const half xy_sum2 = __hadd(__low2half(p2), __high2half(p2));
+  res.z = __hfma(data[8], v.z, xy_sum2);
+#else
+  res.x = data[0] * v.x + data[1] * v.y + data[2] * v.z;
+  res.y = data[3] * v.x + data[4] * v.y + data[5] * v.z;
+  res.z = data[6] * v.x + data[7] * v.y + data[8] * v.z;
+#endif
+  return res;
+}
