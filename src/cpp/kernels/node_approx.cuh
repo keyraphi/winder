@@ -8,15 +8,17 @@
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 
-__device__ __forceinline__ auto should_node_be_approximated(const Vec3 &query,
-                                                            const AABB &aabb,
-                                                            const float beta_2)
+__device__ __forceinline__ auto
+should_node_be_approximated(const Vec3 &query, const AABB &aabb,
+                            const float beta_2, const float two_eps = 0.F)
     -> bool {
-  float max_distance_to_center = __half2float(aabb.max_distance);
+  float R = __half2float(aabb.max_distance);
   Vec3 com = aabb.center_of_mass;
   float dist_query_to_com2 = (query - com).length2();
-  return dist_query_to_com2 >
-         max_distance_to_center * max_distance_to_center * beta_2;
+  float threshold_r2 = R * R * beta_2;
+    const float Re = R + two_eps;
+    const float threshhold_e2 = Re * Re;
+    return dist_query_to_com2 > fmaxf(threshold_r2, threshhold_e2);
 }
 
 __device__ __forceinline__ auto
@@ -357,26 +359,243 @@ __device__ __forceinline__ auto compute_node_approximation(
   return result;
 }
 
+// General quadric form in bf16, using pre-packed monomials.
+//   q(M) = m0 * P.a + m1 * P.b + m2 * Q.a + m3 * Q.b + m4 * S.a + m5 * S.b
+// where P = (r_a^2, r_a r_b), Q = (r_a r_c, r_b^2), S = (r_b r_c, r_c^2)
+// are the shared monomial packs.
+__device__ __forceinline__ auto
+quadric_bf16(__nv_bfloat16 m0, __nv_bfloat16 m1, __nv_bfloat16 m2,
+             __nv_bfloat16 m3, __nv_bfloat16 m4, __nv_bfloat16 m5,
+             __nv_bfloat162 P, __nv_bfloat162 Q, __nv_bfloat162 S)
+    -> __nv_bfloat16 {
+  __nv_bfloat162 acc = __hmul2(__halves2bfloat162(m0, m1), P);
+  acc = __hfma2(__halves2bfloat162(m2, m3), Q, acc);
+  acc = __hfma2(__halves2bfloat162(m4, m5), S, acc);
+  return __hadd(__low2bfloat16(acc), __high2bfloat16(acc));
+}
+
 // =============================================================================
+// Second-order (M2) contribution to the query gradient of one node.
+//
+// Field:   f2(q) = s / (4π R^4),  s = 15 Q_rrr - 6 (V1 . r_hat) - 3 (V2 .
+// r_hat) Grad:    ∇_q f2 = [ -u + (u . r_hat + 4 s) r_hat ] / (4π R^5)
+//
+// where
+//   u_l = 15 (2 A_l + C_l) - 6 V1_l - 3 V2_l
+//   A_l = C_ljk r_hat_j r_hat_k        (free first index)
+//   C_l = C_ijl r_hat_i r_hat_j        (free third index)
+//
+// M is symmetric in its first two indices, so A_l and C_l are two independent
+// quadratic forms of the same tensor. All arithmetic is done in bf16 with the
+// same packing as computeSecondOrderContribution; the final 1/(4π R^5) is
+// applied in fp32 by the caller.
+// =============================================================================
+__device__ __forceinline__ auto
+computeSecondOrderQueryGrad(const Tensor3_bf16_compressed &C,
+                            const Vec3_f16 &r_hat_f16) -> Vec3 {
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800)
+  using bf16 = __nv_bfloat16;
+  using bf162 = __nv_bfloat162;
+
+  const bf16 two = __float2bfloat16(2.0F);
+  const bf16 three = __float2bfloat16(3.0F);
+  const bf16 four = __float2bfloat16(4.0F);
+  const bf16 six = __float2bfloat16(6.0F);
+  const bf16 fifteen = __float2bfloat16(15.0F);
+
+  const Vec3_bf16 r = Vec3_bf16::from_f16(r_hat_f16);
+  const bf16 rx = r.x;
+  const bf16 ry = r.y;
+  const bf16 rz = r.z;
+
+  // --- Vector traces (identical to computeSecondOrderContribution) ---
+  const bf16 v1x = __hadd(__hadd(C.data[0], C.data[4]), C.data[8]);
+  const bf16 v1y = __hadd(__hadd(C.data[3], C.data[10]), C.data[14]);
+  const bf16 v1z = __hadd(__hadd(C.data[6], C.data[13]), C.data[17]);
+  const bf16 v2x = __hadd(__hadd(C.data[0], C.data[9]), C.data[15]);
+  const bf16 v2y = __hadd(__hadd(C.data[1], C.data[10]), C.data[16]);
+  const bf16 v2z = __hadd(__hadd(C.data[2], C.data[11]), C.data[17]);
+
+  const bf16 v1_dot_r =
+      __hadd(__hadd(__hmul(v1x, rx), __hmul(v1y, ry)), __hmul(v1z, rz));
+  const bf16 v2_dot_r =
+      __hadd(__hadd(__hmul(v2x, rx), __hmul(v2y, ry)), __hmul(v2z, rz));
+
+  // --- Quadratic monomials ---
+  const bf16 rxx = __hmul(rx, rx);
+  const bf16 ryy = __hmul(ry, ry);
+  const bf16 rzz = __hmul(rz, rz);
+  const bf16 rxy = __hmul(rx, ry);
+  const bf16 rxz = __hmul(rx, rz);
+  const bf16 ryz = __hmul(ry, rz);
+
+  // --- Monomial packs (single for A, doubled for C) ---
+  const bf162 mA_P = __halves2bfloat162(rxx, rxy);
+  const bf162 mA_Q = __halves2bfloat162(rxz, ryy);
+  const bf162 mA_S = __halves2bfloat162(ryz, rzz);
+  const bf162 mC_P = __halves2bfloat162(rxx, __hadd(rxy, rxy));
+  const bf162 mC_Q = __halves2bfloat162(__hadd(rxz, rxz), ryy);
+  const bf162 mC_S = __halves2bfloat162(__hadd(ryz, ryz), rzz);
+
+  // --- A_0, A_1, A_2 ---
+  const bf16 A0 = quadric_bf16(
+      C.data[0], __hadd(C.data[1], C.data[3]), __hadd(C.data[2], C.data[6]),
+      C.data[4], __hadd(C.data[5], C.data[7]), C.data[8], mA_P, mA_Q, mA_S);
+
+  const bf16 A1 = quadric_bf16(
+      C.data[3], __hadd(C.data[4], C.data[9]), __hadd(C.data[5], C.data[12]),
+      C.data[10], __hadd(C.data[11], C.data[13]), C.data[14], mA_P, mA_Q, mA_S);
+
+  const bf16 A2 = quadric_bf16(
+      C.data[6], __hadd(C.data[7], C.data[12]), __hadd(C.data[8], C.data[15]),
+      C.data[13], __hadd(C.data[14], C.data[16]), C.data[17], mA_P, mA_Q, mA_S);
+
+  // --- C_0, C_1, C_2 ---
+  const bf16 C0 = quadric_bf16(C.data[0], C.data[3], C.data[6], C.data[9],
+                               C.data[12], C.data[15], mC_P, mC_Q, mC_S);
+  const bf16 C1 = quadric_bf16(C.data[1], C.data[4], C.data[7], C.data[10],
+                               C.data[13], C.data[16], mC_P, mC_Q, mC_S);
+  const bf16 C2 = quadric_bf16(C.data[2], C.data[5], C.data[8], C.data[11],
+                               C.data[14], C.data[17], mC_P, mC_Q, mC_S);
+
+  // --- u = 15 (2 A + C) - 6 V1 - 3 V2 ---
+  const bf16 ux = __hsub(
+      __hsub(__hmul(fifteen, __hadd(__hmul(two, A0), C0)), __hmul(six, v1x)),
+      __hmul(three, v2x));
+  const bf16 uy = __hsub(
+      __hsub(__hmul(fifteen, __hadd(__hmul(two, A1), C1)), __hmul(six, v1y)),
+      __hmul(three, v2y));
+  const bf16 uz = __hsub(
+      __hsub(__hmul(fifteen, __hadd(__hmul(two, A2), C2)), __hmul(six, v1z)),
+      __hmul(three, v2z));
+
+  // --- Scalar numerator s: identical packing to the field version ---
+  const bf16 rxx_x = __hmul(rxx, rx);
+  const bf16 rxx_y = __hmul(rxx, ry);
+  const bf16 rxx_z = __hmul(rxx, rz);
+  const bf16 rxy2_x = __hmul(__hmul(rxy, rx), two);
+  const bf16 rxy2_y = __hmul(__hmul(rxy, ry), two);
+  const bf16 rxz2_y = __hmul(__hmul(rxz, ry), two);
+  const bf16 rxz2_x = __hmul(__hmul(rxz, rx), two);
+  const bf16 ryz2_x = __hmul(__hmul(ryz, rx), two);
+  const bf16 rxz2_z = __hmul(__hmul(rxz, rz), two);
+  const bf16 ryy_x = __hmul(ryy, rx);
+  const bf16 ryy_y = __hmul(ryy, ry);
+  const bf16 ryy_z = __hmul(ryy, rz);
+  const bf16 ryz2_y = __hmul(__hmul(ryz, ry), two);
+  const bf16 ryz2_z = __hmul(__hmul(ryz, rz), two);
+  const bf16 rzz_x = __hmul(rzz, rx);
+  const bf16 rzz_y = __hmul(rzz, ry);
+  const bf16 rzz_z = __hmul(rzz, rz);
+
+  bf162 cubic_acc = __hmul2(__halves2bfloat162(C.data[0], C.data[1]),
+                            __halves2bfloat162(rxx_x, rxx_y));
+  cubic_acc = __hfma2(__halves2bfloat162(C.data[2], C.data[3]),
+                      __halves2bfloat162(rxx_z, rxy2_x), cubic_acc);
+  cubic_acc = __hfma2(__halves2bfloat162(C.data[4], C.data[5]),
+                      __halves2bfloat162(rxy2_y, rxz2_y), cubic_acc);
+  cubic_acc = __hfma2(__halves2bfloat162(C.data[6], C.data[7]),
+                      __halves2bfloat162(rxz2_x, ryz2_x), cubic_acc);
+  cubic_acc = __hfma2(__halves2bfloat162(C.data[8], C.data[9]),
+                      __halves2bfloat162(rxz2_z, ryy_x), cubic_acc);
+  cubic_acc = __hfma2(__halves2bfloat162(C.data[10], C.data[11]),
+                      __halves2bfloat162(ryy_y, ryy_z), cubic_acc);
+  cubic_acc = __hfma2(__halves2bfloat162(C.data[12], C.data[13]),
+                      __halves2bfloat162(ryz2_x, ryz2_y), cubic_acc);
+  cubic_acc = __hfma2(__halves2bfloat162(C.data[14], C.data[15]),
+                      __halves2bfloat162(ryz2_z, rzz_x), cubic_acc);
+  cubic_acc = __hfma2(__halves2bfloat162(C.data[16], C.data[17]),
+                      __halves2bfloat162(rzz_y, rzz_z), cubic_acc);
+  const bf16 cubic =
+      __hadd(__low2bfloat16(cubic_acc), __high2bfloat16(cubic_acc));
+
+  const bf16 s = __hsub(__hmul(fifteen, cubic),
+                        __hfma(six, v1_dot_r, __hmul(three, v2_dot_r)));
+
+  // --- Final combination: -u + (u.r_hat + 4 s) r_hat ---
+  const bf16 u_dot_r =
+      __hadd(__hadd(__hmul(ux, rx), __hmul(uy, ry)), __hmul(uz, rz));
+  const bf16 coef = __hfma(four, s, u_dot_r);
+
+  return Vec3{
+      .x = __bfloat162float(__hfma(coef, rx, __hneg(ux))),
+      .y = __bfloat162float(__hfma(coef, ry, __hneg(uy))),
+      .z = __bfloat162float(__hfma(coef, rz, __hneg(uz))),
+  };
+
+#else
+  // -------------------- fp32 fallback --------------------
+  const Vec3 r_hat = Vec3::from_f16(r_hat_f16);
+  const float rx = r_hat.x, ry = r_hat.y, rz = r_hat.z;
+  const float rx2 = rx * rx, ry2 = ry * ry, rz2 = rz * rz;
+  const float rxy = rx * ry, rxz = rx * rz, ryz = ry * rz;
+
+  float c[18];
+#pragma unroll
+  for (int i = 0; i < 18; ++i) {
+    c[i] = __bfloat162float(C.data[i]);
+  }
+
+  const float v1x = c[0] + c[4] + c[8];
+  const float v1y = c[3] + c[10] + c[14];
+  const float v1z = c[6] + c[13] + c[17];
+  const float v2x = c[0] + c[9] + c[15];
+  const float v2y = c[1] + c[10] + c[16];
+  const float v2z = c[2] + c[11] + c[17];
+
+  const float v1_dot_r = v1x * rx + v1y * ry + v1z * rz;
+  const float v2_dot_r = v2x * rx + v2y * ry + v2z * rz;
+
+  // A_l = C_ljk r_j r_k
+  const float A0 = c[0] * rx2 + (c[1] + c[3]) * rxy + (c[2] + c[6]) * rxz +
+                   c[4] * ry2 + (c[5] + c[7]) * ryz + c[8] * rz2;
+  const float A1 = c[3] * rx2 + (c[4] + c[9]) * rxy + (c[5] + c[12]) * rxz +
+                   c[10] * ry2 + (c[11] + c[13]) * ryz + c[14] * rz2;
+  const float A2 = c[6] * rx2 + (c[7] + c[12]) * rxy + (c[8] + c[15]) * rxz +
+                   c[13] * ry2 + (c[14] + c[16]) * ryz + c[17] * rz2;
+
+  // C_l = C_ijl r_i r_j
+  const float C0 = c[0] * rx2 + 2.f * c[3] * rxy + 2.f * c[6] * rxz +
+                   c[9] * ry2 + 2.f * c[12] * ryz + c[15] * rz2;
+  const float C1 = c[1] * rx2 + 2.f * c[4] * rxy + 2.f * c[7] * rxz +
+                   c[10] * ry2 + 2.f * c[13] * ryz + c[16] * rz2;
+  const float C2 = c[2] * rx2 + 2.f * c[5] * rxy + 2.f * c[8] * rxz +
+                   c[11] * ry2 + 2.f * c[14] * ryz + c[17] * rz2;
+
+  const float ux = 15.f * (2.f * A0 + C0) - 6.f * v1x - 3.f * v2x;
+  const float uy = 15.f * (2.f * A1 + C1) - 6.f * v1y - 3.f * v2y;
+  const float uz = 15.f * (2.f * A2 + C2) - 6.f * v1z - 3.f * v2z;
+
+  const float cubic =
+      c[0] * rx2 * rx + c[1] * rx2 * ry + c[2] * rx2 * rz +
+      c[3] * 2.f * rxy * rx + c[4] * 2.f * rxy * ry + c[5] * 2.f * rxz * ry +
+      c[6] * 2.f * rxz * rx + c[7] * 2.f * ryz * rx + c[8] * 2.f * rxz * rz +
+      c[9] * ry2 * rx + c[10] * ry2 * ry + c[11] * ry2 * rz +
+      c[12] * 2.f * ryz * rx + c[13] * 2.f * ryz * ry + c[14] * 2.f * ryz * rz +
+      c[15] * rz2 * rx + c[16] * rz2 * ry + c[17] * rz2 * rz;
+  const float s = 15.f * cubic - 6.f * v1_dot_r - 3.f * v2_dot_r;
+
+  const float u_dot_r = ux * rx + uy * ry + uz * rz;
+  const float coef = u_dot_r + 4.f * s;
+
+  return Vec3{
+      .x = -ux + coef * rx,
+      .y = -uy + coef * ry,
+      .z = -uz + coef * rz,
+  };
+#endif
+}
+
 // Far-field query gradient for one node.
-//
-//   ∇_q f0 = [ 3 (M0 · r_hat) r_hat - M0 ] / (4π R³)
-//   ∇_q f1 = 3 / (4π R⁴) [ (tr(M1) - 5 q_rr) r_hat + 2 M1_sym r_hat ]
-//
-// with q_rr = r_hat^T M1 r_hat. Only the symmetric part of M1 enters the
-// gradient; the antisymmetric part contracts against the symmetric outer
-// product r_hat r_hat^T and vanishes.
-//
-// M2 is intentionally omitted in the fast path for now // TODO analyze error
-// =============================================================================
 __device__ __forceinline__ auto compute_node_query_grad_approximation(
     const Vec3 &query, const Vec3 &center_of_mass, const Vec3_f16 &M0_f16,
-    const Mat3x3_f16 &M1_f16) -> Vec3 {
+    const Mat3x3_f16 &M1_f16, const Tensor3_bf16_compressed &M2_bf16) -> Vec3 {
 
   const Vec3 r = center_of_mass - query;
   const float inv_R = r.inv_length();
   const float inv_R3 = inv_R * inv_R * inv_R;
   const float inv_R4 = inv_R3 * inv_R;
+  const float inv_R5 = inv_R3 * inv_R * inv_R;
 
   const Vec3_f16 r_hat = Vec3_f16::from_float(r * inv_R);
 
@@ -422,9 +641,12 @@ __device__ __forceinline__ auto compute_node_query_grad_approximation(
   const Vec3_f16 grad1_h = Vec3_f16::fma(r_hat, tr_5q, v * two_h);
 
   const float scale1 = 3.F * INV_4PI * inv_R4;
-  grad.x += __half2float(grad1_h.x) * scale1;
-  grad.y += __half2float(grad1_h.y) * scale1;
-  grad.z += __half2float(grad1_h.z) * scale1;
+  grad += Vec3::from_f16(grad1_h) * scale1;
+
+  // Second order -------------------------------------------------------------
+  const Vec3 grad2 = computeSecondOrderQueryGrad(M2_bf16, r_hat);
+  const float scale2 = INV_4PI * inv_R5;
+  grad += grad2 * scale2;
 
   return grad;
 }

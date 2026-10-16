@@ -4,6 +4,7 @@ float64 autograd on a mesh sliced from an OBJ file.
 The script compares three geometry types (Triangle soup, shared-vertex Mesh,
 PointNormal surfels) at one or more epsilon values.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -135,7 +136,7 @@ def generate_queries(
     if mode == "adversarial":
         k = num_queries // 7
         k_v = k_e = k_f = k_n = k_m = k_r = k
-        k_i = num_queries - 6 * k        # interior
+        k_i = num_queries - 6 * k  # interior
 
         # --- singular (on surface) ---------------------------------------
         vi = rng.integers(0, len(vertices), size=k_v)
@@ -311,9 +312,7 @@ def pytorch_triangle_winding_grads_chunked_64(
         div_norm = 1.0 + cos_ab + cos_ac + cos_bc
 
         if apply_bump:
-            u = (det_norm * det_norm + div_norm * div_norm) / (
-                eps_tensor * eps_tensor
-            )
+            u = (det_norm * det_norm + div_norm * div_norm) / (eps_tensor * eps_tensor)
             w = torch_angular_bump(u)
             shift = eps_tensor * inv_sqrt2 * w
             det_norm = det_norm + shift
@@ -377,9 +376,7 @@ def pytorch_mesh_winding_grads_chunked_64(
         div_norm = 1.0 + cos_ab + cos_ac + cos_bc
 
         if apply_bump:
-            u = (det_norm * det_norm + div_norm * div_norm) / (
-                eps_tensor * eps_tensor
-            )
+            u = (det_norm * det_norm + div_norm * div_norm) / (eps_tensor * eps_tensor)
             w = torch_angular_bump(u)
             shift = eps_tensor * inv_sqrt2 * w
             det_norm = det_norm + shift
@@ -395,6 +392,7 @@ def pytorch_mesh_winding_grads_chunked_64(
 def cuda_s_regularization(t: torch.Tensor) -> torch.Tensor:
     """S-regularization used by the CUDA point-normal kernel."""
     return torch.erf(t) - _TWO_OVER_SQRT_PI * t * torch.exp(-t * t)
+
 
 def pytorch_point_normal_grads_chunked_64(
     points: torch.Tensor,
@@ -438,7 +436,7 @@ def pytorch_point_normal_grads_chunked_64(
         # Rebuild per chunk so autograd never reuses a freed graph.
         if use_reg:
             inv_epsilon_world = 1.0 / (eps_tensor * scale)
-            near_limit_constant = four_over_3sqrt_pi * (inv_epsilon_world ** 3)
+            near_limit_constant = four_over_3sqrt_pi * (inv_epsilon_world**3)
         else:
             # Sharp branch: no eps in the graph at all.
             inv_epsilon_world = None
@@ -478,6 +476,198 @@ def pytorch_point_normal_grads_chunked_64(
 
     eps_grad = eps_tensor.grad if use_reg else None
     return p.grad, n.grad, eps_grad
+
+
+def pytorch_triangle_query_grads_chunked_64(
+    vertices: torch.Tensor,
+    queries: torch.Tensor,
+    grad_output: torch.Tensor,
+    eps_tensor: torch.Tensor,
+    scale: float,
+    reg_mode: str = "sharp",
+    chunk_size: int = 50,
+) -> torch.Tensor:
+    """Float64 autograd gradient w.r.t. triangle-soup query positions.
+
+    Vertices are treated as constants; only the queries carry grad. Matches
+    `brute_force_query_gradients_triangle_soup`.
+    """
+    q = queries.clone().detach().requires_grad_(True)
+    num_queries = queries.shape[0]
+    inv_two_pi = 1.0 / (2.0 * math.pi)
+    inv_sqrt2 = 1.0 / math.sqrt(2.0)
+    apply_bump = float(eps_tensor.detach()) > 0.0
+
+    # Broadcast vertices once; no grad flows back to them.
+    v0 = vertices[:, 0, :][None, :, :]
+    v1 = vertices[:, 1, :][None, :, :]
+    v2 = vertices[:, 2, :][None, :, :]
+
+    for i in range(0, num_queries, chunk_size):
+        q_chunk = q[i : i + chunk_size]
+        g_chunk = grad_output[i : i + chunk_size]
+
+        # Rebuild the eps edge each chunk so autograd is free after backward().
+        eps_world = eps_tensor * scale
+
+        qbc = q_chunk[:, None, :]
+        a = v0 - qbc
+        b = v1 - qbc
+        c = v2 - qbc
+
+        r_a, r_b, r_c = torch_regularized_edge_lengths(a, b, c, eps_world, reg_mode)
+        inv_a = 1.0 / r_a
+        inv_b = 1.0 / r_b
+        inv_c = 1.0 / r_c
+
+        cos_ab = torch.sum(a * b, dim=-1) * inv_a * inv_b
+        cos_ac = torch.sum(a * c, dim=-1) * inv_a * inv_c
+        cos_bc = torch.sum(b * c, dim=-1) * inv_b * inv_c
+
+        cross_bc = torch.cross(b, c, dim=-1)
+        det_norm = torch.sum(a * cross_bc, dim=-1) * inv_a * inv_b * inv_c
+        div_norm = 1.0 + cos_ab + cos_ac + cos_bc
+
+        if apply_bump:
+            u = (det_norm * det_norm + div_norm * div_norm) / (eps_tensor * eps_tensor)
+            w = torch_angular_bump(u)
+            shift = eps_tensor * inv_sqrt2 * w
+            det_norm = det_norm + shift
+            div_norm = div_norm + shift
+
+        sol_angle = torch.atan2(det_norm, div_norm) * inv_two_pi
+        loss_chunk = torch.sum(sol_angle * g_chunk[:, None])
+        loss_chunk.backward()
+
+    return q.grad
+
+
+def pytorch_mesh_query_grads_chunked_64(
+    vertices: torch.Tensor,
+    indices: torch.Tensor,
+    queries: torch.Tensor,
+    grad_output: torch.Tensor,
+    eps_tensor: torch.Tensor,
+    scale: float,
+    reg_mode: str = "sharp",
+    chunk_size: int = 50,
+) -> torch.Tensor:
+    """Float64 autograd gradient w.r.t. mesh query positions."""
+    q = queries.clone().detach().requires_grad_(True)
+    num_queries = queries.shape[0]
+    inv_two_pi = 1.0 / (2.0 * math.pi)
+    inv_sqrt2 = 1.0 / math.sqrt(2.0)
+    apply_bump = float(eps_tensor.detach()) > 0.0
+
+    # Gather triangles from static vertices once.
+    tri_v = vertices[indices]
+    v0 = tri_v[:, 0, :][None, :, :]
+    v1 = tri_v[:, 1, :][None, :, :]
+    v2 = tri_v[:, 2, :][None, :, :]
+
+    for i in range(0, num_queries, chunk_size):
+        q_chunk = q[i : i + chunk_size]
+        g_chunk = grad_output[i : i + chunk_size]
+        eps_world = eps_tensor * scale
+
+        qbc = q_chunk[:, None, :]
+        a = v0 - qbc
+        b = v1 - qbc
+        c = v2 - qbc
+
+        r_a, r_b, r_c = torch_regularized_edge_lengths(a, b, c, eps_world, reg_mode)
+        inv_a = 1.0 / r_a
+        inv_b = 1.0 / r_b
+        inv_c = 1.0 / r_c
+
+        cos_ab = torch.sum(a * b, dim=-1) * inv_a * inv_b
+        cos_ac = torch.sum(a * c, dim=-1) * inv_a * inv_c
+        cos_bc = torch.sum(b * c, dim=-1) * inv_b * inv_c
+
+        cross_bc = torch.cross(b, c, dim=-1)
+        det_norm = torch.sum(a * cross_bc, dim=-1) * inv_a * inv_b * inv_c
+        div_norm = 1.0 + cos_ab + cos_ac + cos_bc
+
+        if apply_bump:
+            u = (det_norm * det_norm + div_norm * div_norm) / (eps_tensor * eps_tensor)
+            w = torch_angular_bump(u)
+            shift = eps_tensor * inv_sqrt2 * w
+            det_norm = det_norm + shift
+            div_norm = div_norm + shift
+
+        sol_angle = torch.atan2(det_norm, div_norm) * inv_two_pi
+        loss_chunk = torch.sum(sol_angle * g_chunk[:, None])
+        loss_chunk.backward()
+
+    return q.grad
+
+
+def pytorch_point_normal_query_grads_chunked_64(
+    points: torch.Tensor,
+    normals: torch.Tensor,
+    queries: torch.Tensor,
+    grad_output: torch.Tensor,
+    eps_tensor: torch.Tensor,
+    scale: float,
+    s_regularization_fn: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
+    chunk_size: int = 50,
+) -> torch.Tensor:
+    """Float64 autograd gradient w.r.t. point-normal query positions."""
+    q = queries.clone().detach().requires_grad_(True)
+    num_queries = queries.shape[0]
+
+    four_over_3sqrt_pi = 4.0 / (3.0 * math.sqrt(math.pi))
+    inv_four_pi = 1.0 / (4.0 * math.pi)
+
+    eps_value = float(eps_tensor.detach())
+    use_reg = eps_value > 0.0
+
+    if use_reg and s_regularization_fn is None:
+        raise ValueError("s_regularization_fn is required when eps > 0.")
+
+    # Static broadcasts for p and n.
+    p_bc = points[None, :, :]
+    n_bc = normals[None, :, :]
+
+    for i in range(0, num_queries, chunk_size):
+        q_chunk = q[i : i + chunk_size]
+        g_chunk = grad_output[i : i + chunk_size]
+
+        if use_reg:
+            inv_epsilon_world = 1.0 / (eps_tensor * scale)
+            near_limit_constant = four_over_3sqrt_pi * (inv_epsilon_world**3)
+        else:
+            inv_epsilon_world = None
+            near_limit_constant = None
+
+        q_bc = q_chunk[:, None, :]
+        d = p_bc - q_bc
+        dist2 = torch.sum(d * d, dim=-1)
+
+        inv_distance = torch.rsqrt(dist2 + 1e-30)
+        inv_dist2 = inv_distance * inv_distance
+        inv_dist3 = inv_dist2 * inv_distance
+
+        dot_n_d = torch.sum(n_bc * d, dim=-1)
+
+        if use_reg:
+            distance = dist2 * inv_distance
+            t = distance * inv_epsilon_world
+            s_val = s_regularization_fn(t)
+            s_reg_term = s_val * inv_dist3
+            s_over_dist3 = torch.where(
+                t < 0.1,
+                near_limit_constant,
+                torch.where(t < 2.0, s_reg_term, inv_dist3),
+            )
+        else:
+            s_over_dist3 = inv_dist3
+
+        contributions = dot_n_d * inv_four_pi * s_over_dist3
+        loss_chunk = torch.sum(contributions * g_chunk[:, None])
+        loss_chunk.backward()
+
+    return q.grad
 
 
 # =============================================================================
@@ -684,15 +874,9 @@ def _as_eps_tensor(
 # Tests
 # =============================================================================
 def test_triangle_gradients(
-    vertices: np.ndarray,
-    indices: np.ndarray,
-    query_mode: str,
-    query_count: int,
-    epsilon: float,
-    reg_mode: str,
-    seed: int = 0,
-) -> bool:
-    """Verify triangle-soup gradients (geometry + eps) against autograd."""
+    vertices, indices, query_mode, query_count, epsilon, reg_mode, seed=0,
+) -> dict[str, bool]:
+    """Verify triangle-soup primitive AND query gradients against autograd."""
     print(f"\n=== Triangle Gradients: eps={epsilon:g}, reg={reg_mode} ===")
     rng = np.random.default_rng(seed)
 
@@ -707,17 +891,19 @@ def test_triangle_gradients(
     g_out_tensor = torch.from_numpy(grad_output).cuda()
     cuda_grads = torch.empty_like(t_tensor, dtype=torch.float32).cuda()
     cuda_eps_grad = torch.zeros(1, dtype=torch.float32).cuda()
+    cuda_q_grads = torch.empty_like(q_tensor)
 
     scale = scene_scale(triangles.reshape(-1, 3))
+    stream = torch.cuda.current_stream().cuda_stream
 
+    # --- Primitive gradients ---
     winder.brute_force_gradients_triangle_soup(
-        g_out_tensor,
-        t_tensor,
-        q_tensor,
-        cuda_grads,
-        cuda_eps_grad,
-        epsilon,
-        torch.cuda.current_stream().cuda_stream,
+        g_out_tensor, t_tensor, q_tensor, cuda_grads, cuda_eps_grad,
+        epsilon, stream,
+    )
+    # --- Query gradients ---
+    winder.brute_force_query_gradients_triangle_soup(
+        g_out_tensor, t_tensor, q_tensor, cuda_q_grads, epsilon, stream,
     )
 
     print(
@@ -727,41 +913,40 @@ def test_triangle_gradients(
     q_64 = q_tensor.to(torch.float64)
     g_out_64 = g_out_tensor.to(torch.float64)
 
+    # Primitive reference
     eps_t = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True)
     ref_grads_64, ref_eps_grad_64 = pytorch_triangle_winding_grads_chunked_64(
-        t_64,
-        q_64,
-        g_out_64,
-        eps_tensor=eps_t,
-        scale=scale,
-        reg_mode=reg_mode,
+        t_64, q_64, g_out_64, eps_tensor=eps_t, scale=scale, reg_mode=reg_mode,
     )
     ref_grads_32 = ref_grads_64.to(torch.float32)
     ref_eps_32 = _as_eps_tensor(ref_eps_grad_64)
 
+    # Query reference (fresh eps tensor so its .grad doesn't contaminate)
+    eps_t_q = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True)
+    ref_q_64 = pytorch_triangle_query_grads_chunked_64(
+        t_64, q_64, g_out_64, eps_tensor=eps_t_q, scale=scale, reg_mode=reg_mode,
+    )
+    ref_q_32 = ref_q_64.to(torch.float32)
+
     ok_geom = validate_gradients(
-        cuda_grads,
-        ref_grads_32,
+        cuda_grads, ref_grads_32,
         f"Triangles eps={epsilon:g} reg={reg_mode}",
     )
     ok_eps = validate_scalar_gradient(
-        cuda_eps_grad,
-        ref_eps_32,
+        cuda_eps_grad, ref_eps_32,
         f"Triangles eps={epsilon:g} reg={reg_mode}",
     )
-    return ok_geom and ok_eps
+    ok_q = validate_gradients(
+        cuda_q_grads, ref_q_32,
+        f"Triangle query eps={epsilon:g} reg={reg_mode}",
+    )
+    return {"primitive": ok_geom and ok_eps, "query": ok_q}
 
 
 def test_mesh_gradients(
-    vertices: np.ndarray,
-    indices: np.ndarray,
-    query_mode: str,
-    query_count: int,
-    epsilon: float,
-    reg_mode: str,
-    seed: int = 0,
-) -> bool:
-    """Verify shared-vertex mesh gradients (geometry + eps) against autograd."""
+    vertices, indices, query_mode, query_count, epsilon, reg_mode, seed=0,
+) -> dict[str, bool]:
+    """Verify shared-vertex mesh primitive AND query gradients against autograd."""
     print(f"\n=== Mesh Gradients: eps={epsilon:g}, reg={reg_mode} ===")
     rng = np.random.default_rng(seed)
 
@@ -775,19 +960,18 @@ def test_mesh_gradients(
     g_out_tensor = torch.from_numpy(grad_output).cuda()
     cuda_grads = torch.empty_like(v_tensor)
     cuda_eps_grad = torch.zeros(1, dtype=torch.float32).cuda()
+    cuda_q_grads = torch.empty_like(q_tensor)
 
     used_vertices = vertices[indices].reshape(-1, 3)
     scale = scene_scale(used_vertices)
+    stream = torch.cuda.current_stream().cuda_stream
 
     winder.brute_force_gradients_mesh(
-        g_out_tensor,
-        v_tensor,
-        idx_u32,
-        q_tensor,
-        cuda_grads,
-        cuda_eps_grad,
-        epsilon,
-        torch.cuda.current_stream().cuda_stream,
+        g_out_tensor, v_tensor, idx_u32, q_tensor, cuda_grads, cuda_eps_grad,
+        epsilon, stream,
+    )
+    winder.brute_force_query_gradients_mesh(
+        g_out_tensor, v_tensor, idx_u32, q_tensor, cuda_q_grads, epsilon, stream,
     )
 
     print(f"Evaluating PyTorch float64 autograd across {len(vertices)} vertices...")
@@ -797,39 +981,38 @@ def test_mesh_gradients(
 
     eps_t = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True)
     ref_grads_64, ref_eps_grad_64 = pytorch_mesh_winding_grads_chunked_64(
-        v_64,
-        idx_i64,
-        q_64,
-        g_out_64,
-        eps_tensor=eps_t,
-        scale=scale,
+        v_64, idx_i64, q_64, g_out_64, eps_tensor=eps_t, scale=scale,
         reg_mode=reg_mode,
     )
     ref_grads_32 = ref_grads_64.to(torch.float32)
     ref_eps_32 = _as_eps_tensor(ref_eps_grad_64)
 
+    eps_t_q = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True)
+    ref_q_64 = pytorch_mesh_query_grads_chunked_64(
+        v_64, idx_i64, q_64, g_out_64, eps_tensor=eps_t_q, scale=scale,
+        reg_mode=reg_mode,
+    )
+    ref_q_32 = ref_q_64.to(torch.float32)
+
     ok_geom = validate_gradients(
-        cuda_grads,
-        ref_grads_32,
+        cuda_grads, ref_grads_32,
         f"Mesh eps={epsilon:g} reg={reg_mode}",
     )
     ok_eps = validate_scalar_gradient(
-        cuda_eps_grad,
-        ref_eps_32,
+        cuda_eps_grad, ref_eps_32,
         f"Mesh eps={epsilon:g} reg={reg_mode}",
     )
-    return ok_geom and ok_eps
+    ok_q = validate_gradients(
+        cuda_q_grads, ref_q_32,
+        f"Mesh query eps={epsilon:g} reg={reg_mode}",
+    )
+    return {"primitive": ok_geom and ok_eps, "query": ok_q}
 
 
 def test_point_normal_gradients(
-    vertices: np.ndarray,
-    indices: np.ndarray,
-    query_mode: str,
-    query_count: int,
-    epsilon: float,
-    seed: int = 0,
-) -> bool:
-    """Verify point-normal surfel gradients (geometry + eps) against autograd."""
+    vertices, indices, query_mode, query_count, epsilon, seed=0,
+) -> dict[str, bool]:
+    """Verify point-normal primitive AND query gradients against autograd."""
     print(f"\n=== PointNormal Gradients: eps={epsilon:g} ===")
     rng = np.random.default_rng(seed)
 
@@ -852,16 +1035,17 @@ def test_point_normal_gradients(
     g_out_tensor = torch.from_numpy(grad_output).to(torch.float32).cuda()
     cuda_grads = torch.empty([p_tensor.shape[0], 2, 3], dtype=torch.float32).cuda()
     cuda_eps_grad = torch.zeros(1, dtype=torch.float32).cuda()
+    cuda_q_grads = torch.empty_like(q_tensor)
+
+    stream = torch.cuda.current_stream().cuda_stream
 
     winder.brute_force_gradients_point_normal(
-        g_out_tensor,
-        p_tensor,
-        n_tensor,
-        q_tensor,
-        cuda_grads,
-        cuda_eps_grad,
-        epsilon,
-        torch.cuda.current_stream().cuda_stream,
+        g_out_tensor, p_tensor, n_tensor, q_tensor, cuda_grads, cuda_eps_grad,
+        epsilon, stream,
+    )
+    winder.brute_force_query_gradients_point_normal(
+        g_out_tensor, p_tensor, n_tensor, q_tensor, cuda_q_grads, epsilon,
+        stream,
     )
 
     cuda_n_grads = cuda_grads[:, 0, :]
@@ -876,12 +1060,7 @@ def test_point_normal_gradients(
     eps_t = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True)
     ref_p_grad_64, ref_n_grad_64, ref_eps_grad_64 = (
         pytorch_point_normal_grads_chunked_64(
-            p_64,
-            n_64,
-            q_64,
-            g_out_64,
-            eps_tensor=eps_t,
-            scale=scale,
+            p_64, n_64, q_64, g_out_64, eps_tensor=eps_t, scale=scale,
             s_regularization_fn=cuda_s_regularization,
         )
     )
@@ -889,23 +1068,26 @@ def test_point_normal_gradients(
     ref_n_grad_32 = ref_n_grad_64.to(torch.float32)
     ref_eps_32 = _as_eps_tensor(ref_eps_grad_64)
 
+    eps_t_q = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True)
+    ref_q_64 = pytorch_point_normal_query_grads_chunked_64(
+        p_64, n_64, q_64, g_out_64, eps_tensor=eps_t_q, scale=scale,
+        s_regularization_fn=cuda_s_regularization,
+    )
+    ref_q_32 = ref_q_64.to(torch.float32)
+
     ok_n = validate_gradients(
-        cuda_n_grads,
-        ref_n_grad_32,
-        f"PointNormal(n) eps={epsilon:g}",
+        cuda_n_grads, ref_n_grad_32, f"PointNormal(n) eps={epsilon:g}",
     )
     ok_p = validate_gradients(
-        cuda_p_grads,
-        ref_p_grad_32,
-        f"PointNormal(p) eps={epsilon:g}",
+        cuda_p_grads, ref_p_grad_32, f"PointNormal(p) eps={epsilon:g}",
     )
     ok_eps = validate_scalar_gradient(
-        cuda_eps_grad,
-        ref_eps_32,
-        f"PointNormal(eps) eps={epsilon:g}",
+        cuda_eps_grad, ref_eps_32, f"PointNormal(eps) eps={epsilon:g}",
     )
-    return ok_n and ok_p and ok_eps
-
+    ok_q = validate_gradients(
+        cuda_q_grads, ref_q_32, f"PointNormal(query) eps={epsilon:g}",
+    )
+    return {"primitive": ok_n and ok_p and ok_eps, "query": ok_q}
 
 # =============================================================================
 # Mesh slicing helpers
@@ -996,67 +1178,60 @@ def main() -> None:
     else:
         eps_values = [args.epsilon]
 
-    results: list[tuple[float, dict[str, bool]]] = []
+    results: list[tuple[float, dict[str, dict[str, bool]]]] = []
     for eps in eps_values:
         print(f"\n{'=' * 72}")
         print(f"  eps = {eps:g}")
         print(f"{'=' * 72}")
-        per_eps: dict[str, bool] = {}
+        per_eps: dict[str, dict[str, bool]] = {}
 
         if args.geometry_type in ["Triangle", "all"]:
             per_eps["Triangle"] = test_triangle_gradients(
-                vertices,
-                indices,
-                args.query_mode,
-                args.query_count,
-                eps,
-                args.reg_mode,
-                seed=args.seed,
+                vertices, indices, args.query_mode, args.query_count,
+                eps, args.reg_mode, seed=args.seed,
             )
 
         if args.geometry_type in ["Mesh", "all"]:
             per_eps["Mesh"] = test_mesh_gradients(
-                vertices,
-                indices,
-                args.query_mode,
-                args.query_count,
-                eps,
-                args.reg_mode,
-                seed=args.seed,
+                vertices, indices, args.query_mode, args.query_count,
+                eps, args.reg_mode, seed=args.seed,
             )
 
         if args.geometry_type in ["PointNormal", "all"]:
             per_eps["PointNormal"] = test_point_normal_gradients(
-                vertices,
-                indices,
-                args.query_mode,
-                args.query_count,
-                eps,
-                seed=args.seed,
+                vertices, indices, args.query_mode, args.query_count,
+                eps, seed=args.seed,
             )
 
         results.append((eps, per_eps))
 
-    # Summary table
-    print(f"\n{'=' * 72}")
+    print(f"\n{'=' * 84}")
     print("  Summary")
-    print(f"{'=' * 72}")
+    print(f"{'=' * 84}")
     print(
-        f"  {'epsilon':>9} | {'reg':>8} | {'Triangle':>8} | {'Mesh':>8} | {'PointNormal':>11}"
+        f"  {'epsilon':>9} | {'reg':>8} | "
+        f"{'Tri':>5} | {'Tri-q':>6} | "
+        f"{'Mesh':>5} | {'Mesh-q':>7} | "
+        f"{'PN':>5} | {'PN-q':>6}"
     )
-    print("-" * 72)
+    print("-" * 84)
+
+    def _cell(per_eps, geom, kind):
+        if geom not in per_eps:
+            return "  n/a "
+        return "  ✓   " if per_eps[geom].get(kind, False) else "  ✗   "
+
     for eps, per_eps in results:
-
-        def _mk(k: str) -> str:
-            if k not in per_eps:
-                return "  n/a  "
-            return "  ✓    " if per_eps[k] else "  ✗    "
-
         print(
             f"  {eps:>9.5f} | {args.reg_mode:>8} | "
-            f"{_mk('Triangle')} | {_mk('Mesh')} | {_mk('PointNormal')}"
+            f"{_cell(per_eps, 'Triangle', 'primitive')} | "
+            f"{_cell(per_eps, 'Triangle', 'query')} | "
+            f"{_cell(per_eps, 'Mesh', 'primitive')} | "
+            f"{_cell(per_eps, 'Mesh', 'query')} | "
+            f"{_cell(per_eps, 'PointNormal', 'primitive')} | "
+            f"{_cell(per_eps, 'PointNormal', 'query')}"
         )
-    print(f"{'=' * 72}")
+    print(f"{'=' * 84}")
 
 
 if __name__ == "__main__":

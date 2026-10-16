@@ -146,6 +146,8 @@ __global__ void __launch_bounds__(128) traverse_geometry_tree_kernel(
     }
     stack_ptr++; // increment stack pointer for all lanes
 
+    float two_eps = 0.F;
+    two_eps = 2.F * ctx.eps_length;
     // Do traversal as full warps
     while (true) {
       // Check if stack is empty
@@ -182,8 +184,8 @@ __global__ void __launch_bounds__(128) traverse_geometry_tree_kernel(
       // Check the nodes parent_aabb. If it is too far away approximate using
       // taylor coefficients
       bool need_taylor_coefficients =
-          is_active &&
-          should_node_be_approximated(my_query, current_node.getAABB(), beta_2);
+          is_active && should_node_be_approximated(
+                           my_query, current_node.getAABB(), beta_2, two_eps);
 
       uint32_t load_taylor_coefficients_mask =
           __ballot_sync(0xFFFFFFFF, need_taylor_coefficients);
@@ -217,7 +219,8 @@ __global__ void __launch_bounds__(128) traverse_geometry_tree_kernel(
           Vec3 approx_grad = compute_node_query_grad_approximation(
               my_query, parent_aabb.center_of_mass,
               current_node_coefficients.zero_order,
-              current_node_coefficients.first_order);
+              current_node_coefficients.first_order,
+              current_node_coefficients.second_order);
           kahan_add(my_result, approx_grad, my_comp);
         }
 
@@ -253,8 +256,8 @@ __global__ void __launch_bounds__(128) traverse_geometry_tree_kernel(
           AABB child_aabb = leaf_aabbs[leaf_idx];
 
           bool need_taylor_coefficients =
-              is_still_active &&
-              should_node_be_approximated(my_query, child_aabb, beta_2);
+              is_still_active && should_node_be_approximated(
+                                     my_query, child_aabb, beta_2, two_eps);
           uint32_t load_taylor_coefficients_mask =
               __ballot_sync(0xFFFFFFFF, need_taylor_coefficients);
           if (load_taylor_coefficients_mask > 0) {
@@ -279,7 +282,8 @@ __global__ void __launch_bounds__(128) traverse_geometry_tree_kernel(
               Vec3 approx_gradient = compute_node_query_grad_approximation(
                   my_query, leaf_center_of_mass,
                   current_leaf_coefficients.zero_order,
-                  current_leaf_coefficients.first_order);
+                  current_leaf_coefficients.first_order,
+                  current_leaf_coefficients.second_order);
               kahan_add(my_result, approx_gradient, my_comp);
             }
             is_detail_eval_needed = false;
@@ -479,8 +483,9 @@ void compute_winding_numbers(
 }
 
 template <IsGeometry Geometry>
-void query_gradient_traversal(const ComputeQueryGradientParams<Geometry> &params,
-                             int device_id, const cudaStream_t &stream) {
+void query_gradient_traversal(
+    const ComputeQueryGradientParams<Geometry> &params, int device_id,
+    const cudaStream_t &stream) {
   if (params.query_count == 0) {
     return;
   }
