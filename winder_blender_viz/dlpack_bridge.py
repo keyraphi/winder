@@ -243,9 +243,30 @@ class CudaBuffer:
         if res != 0:
             raise MemoryError(f"cudaMalloc failed with code {res}")
         self.ptr = ptr
+        self._owns_memory = True
 
         # Keep references to DLPack buffers alive as long as this CudaBuffer exists.
         self._dlpack_buffers = []
+
+    def slice_rows(self, n_rows: int):
+        """View of the first `n_rows` rows. Shares the underlying GPU memory.
+
+        Used to pass a sub-range to the engine without reallocating. The
+        returned buffer does NOT own its memory — the parent must outlive it.
+        """
+        assert 0 <= n_rows <= self.shape[0], "slice_rows out of bounds"
+        child = CudaBuffer.__new__(CudaBuffer)
+        child.shape = (int(n_rows),) + self.shape[1:]
+        child.dtype = self.dtype
+        child.ndim = len(child.shape)
+        child.size = int(np.prod(child.shape))
+        child.itemsize = self.dtype.itemsize
+        child.nbytes = child.size * child.itemsize
+        child.device_id = self.device_id
+        child.ptr = self.ptr
+        child._owns_memory = False
+        child._dlpack_buffers = []
+        return child
 
     def copy_from_numpy_async(self, host_arr: np.ndarray, stream=None):
         assert host_arr.nbytes == self.nbytes, "Array byte size mismatch"
@@ -336,6 +357,8 @@ class CudaBuffer:
         return (2, self.device_id)
 
     def __del__(self):
+        if not getattr(self, "_owns_memory", True):
+            return
         if hasattr(self, "ptr") and self.ptr:
             _cudart.cudaFree(self.ptr)
             self.ptr = None

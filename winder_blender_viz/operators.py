@@ -9,19 +9,29 @@ import bpy
 from .bvh_parser import build_bvh_wireframe_mesh, parse_bvh_dot
 
 from .dlpack_bridge import CudaBuffer, CudaStream
+from .nodes_builder import (
+    build_quiver_geometry_nodes,
+    build_marching_cubes_contour_nodes,
+    build_query_grad_geometry_nodes,
+    build_streamline_geometry_nodes,
+    get_or_create_quiver_material,
+    get_or_create_query_grad_material,
+    get_or_create_streamline_material,
+    get_or_create_volume_material,
+)
 from .winder_wrapper import (
     extract_geometry_data,
     extract_combined_geometry_data,
     compute_winding_field,
     compute_geometry_gradients,
+    compute_query_gradients,
+    trace_query_streamlines,
+    update_mesh_from_lines,
+    build_streamline_mesh,
     dump_forward_bvh,
     dump_backward_bvh,
-)
-from .nodes_builder import (
-    build_quiver_geometry_nodes,
-    build_marching_cubes_contour_nodes,
-    get_or_create_quiver_material,
-    get_or_create_volume_material,
+    _seed_on_point_normal,
+    _seed_on_triangles,
 )
 
 
@@ -197,6 +207,7 @@ def recompute_winding_field(context, obj):
         q_buf.copy_from_numpy_async(queries, stream=stream)
 
         geom_data = extract_geometry_data(obj, props.geometry_mode, stream=stream)
+        stream.keep_alive(geom_data)
         stream.keep_alive(
             compute_winding_field(
                 geom_data, q_buf, out_w_buf, props.epsilon, stream=stream
@@ -556,6 +567,9 @@ def update_all_winding_fields(self, context):
         except Exception as e:
             print(f"[Winder] Error updating winding field for '{mesh_obj.name}': {e}")
 
+    update_all_query_gradients(self, context)
+    update_all_streamlines(self, context)
+
     if hasattr(context, "screen") and context.screen:
         for area in context.screen.areas:
             if area.type == "VIEW_3D":
@@ -633,19 +647,21 @@ class WM_OT_create_optimization(bpy.types.Operator):
 
             # 2. Extract geometry and compute winding field for Source
             src_geom = extract_geometry_data(source_obj, mode=mode, stream=stream)
-            src_refs = compute_winding_field(
-                src_geom, q_buf, w_src_buf, props.epsilon, stream=stream
+            stream.keep_alive(
+                compute_winding_field(
+                    src_geom, q_buf, w_src_buf, props.epsilon, stream=stream
+                )
             )
-            stream.keep_alive(src_geom, src_refs)
 
             # 3. Extract combined target geometry and compute Target field
             tgt_geom = extract_combined_geometry_data(
                 target_objs, mode=mode, stream=stream
             )
-            tgt_refs = compute_winding_field(
-                tgt_geom, q_buf, w_tgt_buf, props.epsilon, stream=stream
+            stream.keep_alive(
+                compute_winding_field(
+                    tgt_geom, q_buf, w_tgt_buf, props.epsilon, stream=stream
+                )
             )
-            stream.keep_alive(tgt_geom, tgt_refs)
 
             # 4. Download source and target fields to calculate Loss & dL/dw
             host_w_src = np.empty(num_q, dtype=np.float32)
@@ -681,15 +697,16 @@ class WM_OT_create_optimization(bpy.types.Operator):
 
             stream.keep_alive(dL_dw_buf, out_grad_buf)
 
-            grad_refs = compute_geometry_gradients(
-                src_geom,
-                q_buf,
-                dL_dw_buf,
-                out_grad_buf,
-                epsilon=props.epsilon,
-                stream=stream,
+            stream.keep_alive(
+                compute_geometry_gradients(
+                    src_geom,
+                    q_buf,
+                    dL_dw_buf,
+                    out_grad_buf,
+                    epsilon=props.epsilon,
+                    stream=stream,
+                )
             )
-            stream.keep_alive(grad_refs)
 
             out_grad_buf.copy_to_numpy_async(grad_data, stream=stream)
 
@@ -884,4 +901,418 @@ class WM_OT_dump_backward_bvh(bpy.types.Operator):
             {"INFO"},
             f"Created Backward BVH8 Mesh for {obj.name} ({len(nodes)} total AABB nodes)",
         )
+        return {"FINISHED"}
+
+
+
+def get_or_create_query_grad_quiver(context, obj, props):
+    """Retrieves or creates the query-gradient quiver object for a source mesh."""
+    quiver_name = f"QueryGradQuiver_{obj.name}"
+    quiver_obj = bpy.data.objects.get(quiver_name)
+
+    if quiver_obj is None:
+        quiver_mesh = bpy.data.meshes.new(f"QueryGradQuivers_{obj.name}")
+        quiver_mesh.materials.append(get_or_create_query_grad_material())
+        quiver_obj = bpy.data.objects.new(quiver_name, quiver_mesh)
+        quiver_obj.matrix_world = mathutils.Matrix.Identity(4)
+        context.collection.objects.link(quiver_obj)
+
+        gn_tree = build_query_grad_geometry_nodes(
+            default_scale=float(props.query_grad_scale)
+        )
+        mod = quiver_obj.modifiers.new(name="GNQueryGradQuiver", type="NODES")
+        mod.node_group = gn_tree
+
+    return quiver_obj
+
+
+def _recompute_query_gradients(context, obj) -> int:
+    """Core query-gradient computation for a single mesh object.
+
+    Returns the number of arrows that were generated. Safe to call from a
+    property update callback (does not touch selection state).
+    """
+    props = context.scene.winder_props
+    res = props.query_res
+    padding = props.grid_padding
+    stride = max(1, int(props.query_grad_stride))
+
+    quiver_obj = get_or_create_query_grad_quiver(context, obj, props)
+
+    with CudaStream() as stream:
+        # 1. Generate the full query grid and subsample it
+        queries_full, shape_full, _ = get_grid_queries(obj, res=res, padding=padding)
+        q3d = queries_full.reshape(shape_full + (3,))
+        sub = q3d[::stride, ::stride, ::stride]
+        queries = sub.reshape(-1, 3).astype(np.float32)
+        num_q = len(queries)
+
+        if num_q == 0:
+            return 0
+
+        q_buf = CudaBuffer(queries.shape, dtype=np.float32)
+        q_buf.copy_from_numpy_async(queries, stream=stream)
+
+        # 2. Adjoint = 1 for every query → raw ∇_x W(x)
+        ones = np.ones(num_q, dtype=np.float32)
+        ones_buf = CudaBuffer((num_q,), dtype=np.float32)
+        ones_buf.copy_from_numpy_async(ones, stream=stream)
+
+        out_g_buf = CudaBuffer((num_q, 3), dtype=np.float32)
+
+        # 3. Compute query gradients
+        geom_data = extract_geometry_data(obj, props.geometry_mode, stream=stream)
+        stream.keep_alive(geom_data)
+        # Important: feed the result of compute_query_gradients directly into
+        # keep_alive. Do NOT capture the return value in a local — the engine
+        # would outlive the `with` block and its destructor would try to
+        # cudaStreamSynchronize on a destroyed stream.
+        stream.keep_alive(
+            compute_query_gradients(
+                geom_data,
+                q_buf,
+                ones_buf,
+                out_g_buf,
+                epsilon=props.epsilon,
+                stream=stream,
+            )
+        )
+
+        grad_data = np.empty((num_q, 3), dtype=np.float32)
+        out_g_buf.copy_to_numpy_async(grad_data, stream=stream)
+
+    # ---- Post-processing (stream already synced + destroyed) ----
+    mags = np.linalg.norm(grad_data, axis=1)
+    safe_mags = np.maximum(mags[:, None], 1e-12)
+    dirs = (grad_data / safe_mags).astype(np.float32)
+
+    quiver_mesh = quiver_obj.data
+    quiver_mesh.clear_geometry()
+    quiver_mesh.from_pydata(queries.tolist(), [], [])
+
+    if "gradient_dir" in quiver_mesh.attributes:
+        attr_dir = quiver_mesh.attributes["gradient_dir"]
+    else:
+        attr_dir = quiver_mesh.attributes.new(
+            name="gradient_dir", type="FLOAT_VECTOR", domain="POINT"
+        )
+    attr_dir.data.foreach_set("vector", dirs.ravel())
+
+    if "gradient_mag" in quiver_mesh.attributes:
+        attr_mag = quiver_mesh.attributes["gradient_mag"]
+    else:
+        attr_mag = quiver_mesh.attributes.new(
+            name="gradient_mag", type="FLOAT", domain="POINT"
+        )
+    attr_mag.data.foreach_set("value", mags.ravel())
+
+    quiver_mesh.update()
+
+    # Sync arrow scale on the modifier in case it drifted
+    _apply_query_grad_scale_to_object(quiver_obj, props.query_grad_scale)
+    return num_q
+
+
+def _apply_query_grad_scale_to_object(quiver_obj, new_scale: float):
+    """Sets the 'Arrow Scale' input socket on the quiver's GN modifier."""
+    for mod in quiver_obj.modifiers:
+        if mod.type != "NODES" or not mod.node_group:
+            continue
+        for item in mod.node_group.interface.items_tree:
+            if (
+                item.item_type == "SOCKET"
+                and getattr(item, "in_out", "") == "INPUT"
+                and item.name == "Arrow Scale"
+            ):
+                try:
+                    mod[item.identifier] = float(new_scale)
+                except Exception:
+                    pass
+                return
+
+
+def update_all_query_gradients(self, context):
+    """Property-update callback: recompute all existing query-gradient quivers."""
+    target_objs = []
+    for obj in bpy.data.objects:
+        if obj.type == "MESH" and bpy.data.objects.get(f"QueryGradQuiver_{obj.name}"):
+            target_objs.append(obj)
+
+    for obj in target_objs:
+        try:
+            _recompute_query_gradients(context, obj)
+        except Exception as e:
+            print(f"[Winder] Query gradient update error for '{obj.name}': {e}")
+
+    if hasattr(context, "screen") and context.screen:
+        for area in context.screen.areas:
+            if area.type == "VIEW_3D":
+                area.tag_redraw()
+
+
+def update_query_grad_scale(self, context):
+    """Fast-path: only update the modifier socket (no GPU recompute)."""
+    new_scale = float(self.query_grad_scale)
+    for obj in bpy.data.objects:
+        if obj.type != "MESH":
+            continue
+        q_obj = bpy.data.objects.get(f"QueryGradQuiver_{obj.name}")
+        if not q_obj:
+            continue
+        _apply_query_grad_scale_to_object(q_obj, new_scale)
+
+    if hasattr(context, "screen") and context.screen:
+        for area in context.screen.areas:
+            if area.type == "VIEW_3D":
+                area.tag_redraw()
+
+
+class WM_OT_create_query_gradients(bpy.types.Operator):
+    bl_idname = "winder.create_query_gradients"
+    bl_label = "Visualize Query Gradients"
+    bl_description = (
+        "Compute ∇_x W(x) (spatial gradient of the winding field) at "
+        "subsampled query grid points and visualize with instanced arrows"
+    )
+
+    def execute(self, context):
+        obj = context.active_object
+        if not obj or obj.type != "MESH":
+            self.report({"ERROR"}, "Select a Mesh Object")
+            return {"CANCELLED"}
+
+        props = context.scene.winder_props
+        try:
+            num_q = _recompute_query_gradients(context, obj)
+        except Exception as e:
+            self.report({"ERROR"}, f"Query gradient failed: {e}")
+            return {"CANCELLED"}
+
+        if num_q == 0:
+            self.report({"WARNING"}, "No query points after subsampling")
+            return {"CANCELLED"}
+
+        quiver_obj = bpy.data.objects.get(f"QueryGradQuiver_{obj.name}")
+        if quiver_obj:
+            bpy.ops.object.select_all(action="DESELECT")
+            quiver_obj.select_set(True)
+            context.view_layer.objects.active = quiver_obj
+
+        self.report(
+            {"INFO"},
+            f"Query gradients: {num_q} arrows "
+            f"(res={props.query_res}, stride={props.query_grad_stride})",
+        )
+        return {"FINISHED"}
+
+
+def _ensure_streamline_modifier(streamline_obj, props, diag):
+    """Ensure the streamline object has exactly one GN modifier with the
+    correct node group. Idempotent — safe to call on every recompute."""
+    gn = build_streamline_geometry_nodes(radius=props.streamline_radius * diag)
+
+    for mod in streamline_obj.modifiers:
+        if mod.type == "NODES" and mod.node_group == gn:
+            _apply_streamline_radius(streamline_obj, props.streamline_radius * diag)
+            return
+
+    mod = streamline_obj.modifiers.new(name="GNStreamlines", type="NODES")
+    mod.node_group = gn
+    _apply_streamline_radius(streamline_obj, props.streamline_radius * diag)
+
+
+def _recompute_streamlines(context, obj):
+    """Build or update the streamline object for a single mesh.
+
+    Updates the mesh data in place when the object already exists, so this
+    is safe to call from property update callbacks and depsgraph timers.
+    """
+    props = context.scene.winder_props
+
+    bbox = np.array(
+        [obj.matrix_world @ mathutils.Vector(c) for c in obj.bound_box],
+        dtype=np.float32,
+    )
+    center = (bbox.min(axis=0) + bbox.max(axis=0)) * 0.5
+    diag = float(np.linalg.norm(bbox.max(axis=0) - bbox.min(axis=0)))
+    if diag < 1e-6:
+        diag = 1.0
+
+    pad = (props.grid_padding + 0.3) * diag
+    half = (bbox.max(axis=0) - bbox.min(axis=0)) * 0.5 + pad
+    bounds_min = (center - half).astype(np.float32)
+    bounds_max = (center + half).astype(np.float32)
+
+    step_size = float(props.streamline_step) * diag
+    max_length = float(props.streamline_max_length) * diag
+
+    with CudaStream() as stream:
+        geom_data = extract_geometry_data(obj, props.geometry_mode, stream=stream)
+        stream.keep_alive(geom_data)
+
+        rng = np.random.default_rng(42)
+        n_seeds = int(props.streamline_count)
+        mode = props.geometry_mode
+        jitter_scale = float(props.streamline_seed_jitter) * diag
+
+        if mode == "PointNormal":
+            pts = np.empty((geom_data["count"], 3), np.float32)
+            geom_data["points"].copy_to_numpy_async(pts, stream=stream)
+            stream.synchronize()
+            seeds = _seed_on_point_normal(pts, n_seeds, rng, jitter_scale)
+        elif mode == "Triangle":
+            tris = np.empty((geom_data["count"], 3, 3), np.float32)
+            geom_data["triangles"].copy_to_numpy_async(tris, stream=stream)
+            stream.synchronize()
+            seeds = _seed_on_triangles(tris, n_seeds, rng, jitter_scale)
+        else:  # Mesh
+            verts = np.empty((geom_data["num_verts"], 3), np.float32)
+            idxs = np.empty((geom_data["num_tris"], 3), np.uint32)
+            geom_data["vertices"].copy_to_numpy_async(verts, stream=stream)
+            geom_data["triangle_indices"].copy_to_numpy_async(idxs, stream=stream)
+            stream.synchronize()
+            seeds = _seed_on_triangles(verts[idxs], n_seeds, rng, jitter_scale)
+
+        line_points, line_mags, line_counts = trace_query_streamlines(
+            geom_data, seeds, step_size,
+            int(props.streamline_max_steps), max_length,
+            bounds_min, bounds_max, float(props.streamline_min_grad),
+            float(props.epsilon), -1.0,
+            bool(props.streamline_bidirectional), stream,
+        )
+
+    num_lines = int(np.sum(line_counts >= 2))
+
+    obj_name = f"Streamlines_{obj.name}"
+    streamline_obj = bpy.data.objects.get(obj_name)
+
+    if streamline_obj is None:
+        # First-time creation: fresh object, mesh, and modifier
+        mesh = build_streamline_mesh(
+            line_points, line_mags, line_counts, f"{obj_name}_Mesh"
+        )
+        streamline_obj = bpy.data.objects.new(obj_name, mesh)
+        context.collection.objects.link(streamline_obj)
+        streamline_obj.matrix_world = mathutils.Matrix.Identity(4)
+        _ensure_streamline_modifier(streamline_obj, props, diag)
+    else:
+        # Update in place: mesh data rewritten, object and modifier untouched
+        if streamline_obj.data is None:
+            streamline_obj.data = bpy.data.meshes.new(f"{obj_name}_Mesh")
+        update_mesh_from_lines(
+            streamline_obj.data, line_points, line_mags, line_counts
+        )
+        _ensure_streamline_modifier(streamline_obj, props, diag)
+
+    return num_lines
+
+
+def _apply_streamline_radius(streamline_obj, radius):
+    """Set the Radius socket on the streamline GN modifier.
+
+    Updates both the node group interface default and the modifier input
+    override. Either one alone is sometimes ignored by the depsgraph; doing
+    both is reliable across Blender versions.
+    """
+    radius = float(radius)
+    for mod in streamline_obj.modifiers:
+        if mod.type != "NODES" or not mod.node_group:
+            continue
+
+        target_identifier = None
+        for item in mod.node_group.interface.items_tree:
+            if (
+                item.item_type == "SOCKET"
+                and getattr(item, "in_out", "") == "INPUT"
+                and item.name == "Radius"
+            ):
+                item.default_value = radius
+                target_identifier = item.identifier
+                break
+
+        if target_identifier is None:
+            print(
+                f"[Winder] No 'Radius' socket on {streamline_obj.name}'s GN group"
+            )
+            return
+
+        try:
+            mod[target_identifier] = radius
+        except Exception as e:
+            print(
+                f"[Winder] Failed to set radius override on "
+                f"{streamline_obj.name}: {e}"
+            )
+
+        streamline_obj.update_tag()
+        return
+
+
+def update_all_streamlines(self, context):
+    target_objs = []
+    for obj in bpy.data.objects:
+        if obj.type == "MESH" and bpy.data.objects.get(f"Streamlines_{obj.name}"):
+            target_objs.append(obj)
+
+    for obj in target_objs:
+        try:
+            _recompute_streamlines(context, obj)
+        except Exception as e:
+            print(f"[Winder] Streamline update error for '{obj.name}': {e}")
+
+    if hasattr(context, "screen") and context.screen:
+        for area in context.screen.areas:
+            if area.type == "VIEW_3D":
+                area.tag_redraw()
+
+
+def update_streamline_radius(self, context):
+    """Fast path: only update the modifier socket, no GPU recompute."""
+    for obj in bpy.data.objects:
+        if obj.type != "MESH":
+            continue
+        sl = bpy.data.objects.get(f"Streamlines_{obj.name}")
+        if not sl:
+            continue
+        bbox = np.array(
+            [obj.matrix_world @ mathutils.Vector(c) for c in obj.bound_box],
+            dtype=np.float32,
+        )
+        diag = float(np.linalg.norm(bbox.max(axis=0) - bbox.min(axis=0)))
+        if diag < 1e-6:
+            diag = 1.0
+        _apply_streamline_radius(sl, self.streamline_radius * diag)
+
+    if hasattr(context, "screen") and context.screen:
+        for area in context.screen.areas:
+            if area.type == "VIEW_3D":
+                area.tag_redraw()
+
+class WM_OT_create_query_streamlines(bpy.types.Operator):
+    bl_idname = "winder.create_query_streamlines"
+    bl_label = "Create Field Lines"
+    bl_description = (
+        "Trace streamlines of the winding-field gradient ∇_x W(x) from seeds "
+        "sampled on the surface, integrate both directions, and render as tubes"
+    )
+
+    def execute(self, context):
+        obj = context.active_object
+        if not obj or obj.type != "MESH":
+            self.report({"ERROR"}, "Select a Mesh Object")
+            return {"CANCELLED"}
+
+        try:
+            n_lines = _recompute_streamlines(context, obj)
+        except Exception as e:
+            self.report({"ERROR"}, f"Streamline tracing failed: {e}")
+            return {"CANCELLED"}
+
+        if n_lines == 0:
+            self.report({"WARNING"}, "No streamlines generated — try more seeds or larger step")
+            return {"CANCELLED"}
+
+        # Leave selection untouched — the user pressed the button on `obj`,
+        # and the source object must remain active.
+        self.report({"INFO"}, f"Traced {n_lines} field lines from {obj.name}")
         return {"FINISHED"}

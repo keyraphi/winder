@@ -1313,7 +1313,7 @@ NB_MODULE(winder_module, m) {
                     Barnes-Hut opening criterion. Same semantics and defaults as
                     in `compute`. Larger beta leads to more precise results but
                     also slower execution. Use any negative number to get the
-                    default (2.0 for triangles, 2.3 for point clouds).
+                    default (2.0 for triangles, 3.3 for point clouds).
             )doc") +
             EPSILON_DOC + R"doc(
                 `stream` : int, optional

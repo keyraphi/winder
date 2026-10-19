@@ -3,6 +3,7 @@ import numpy as np
 import bpy
 
 from .operators import recompute_winding_field
+from .operators import recompute_winding_field, _recompute_streamlines
 
 _RECOMPUTE_TIMER_SCHEDULED = False
 _TARGET_OBJ_NAME = None
@@ -70,6 +71,12 @@ def _deferred_recompute_callback():
                 recompute_winding_field(bpy.context, obj)
             except Exception as e:
                 print(f"[Winder] Live recompute error: {e}")
+            # Refresh any streamlines attached to this object
+            if bpy.data.objects.get(f"Streamlines_{obj.name}"):
+                try:
+                    _recompute_streamlines(bpy.context, obj)
+                except Exception as e:
+                    print(f"[Winder] Live streamline recompute error: {e}")
 
     return None  # Unregisters timer
 
