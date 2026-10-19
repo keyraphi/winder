@@ -155,7 +155,7 @@ def brute_force_winding_numbers_triangle_soup(triangles: winder.types.Array[wind
          Default is 0 (the default/null stream).
     """
 
-def brute_force_gradients_point_normal(grad_output: winder.types.Array[winder.types.Shape[winder.types.M], winder.types.float32, winder.types.cuda], points: winder.types.Array[winder.types.Shape[winder.types.N, Literal[3]], winder.types.float32, winder.types.cuda], scaled_normals: winder.types.Array[winder.types.Shape[winder.types.N, Literal[3]], winder.types.float32, winder.types.cuda], queries: winder.types.Array[winder.types.Shape[winder.types.M, Literal[3]], winder.types.float32, winder.types.cuda], out_gradients: winder.types.Array[winder.types.Shape[winder.types.N, Literal[2], Literal[3]], winder.types.float32, winder.types.cuda], epsilon: float = 0.004, stream: int = 0) -> None:
+def brute_force_gradients_point_normal(grad_output: winder.types.Array[winder.types.Shape[winder.types.M], winder.types.float32, winder.types.cuda], points: winder.types.Array[winder.types.Shape[winder.types.N, Literal[3]], winder.types.float32, winder.types.cuda], scaled_normals: winder.types.Array[winder.types.Shape[winder.types.N, Literal[3]], winder.types.float32, winder.types.cuda], queries: winder.types.Array[winder.types.Shape[winder.types.M, Literal[3]], winder.types.float32, winder.types.cuda], out_gradients: winder.types.Array[winder.types.Shape[winder.types.N, Literal[2], Literal[3]], winder.types.float32, winder.types.cuda], epsilon_gradient: winder.types.Array[winder.types.Shape[Literal[1]], winder.types.float32, winder.types.cuda], epsilon: float = 0.004, stream: int = 0) -> None:
     """
     Compute the partial derivatives w.r.t. the given point
      positions and scaled normals.
@@ -212,6 +212,28 @@ def brute_force_gradients_point_normal(grad_output: winder.types.Array[winder.ty
         Negative values disable regularization (treated as 0). The default
         is 1/250 = 0.004.
 
+    `epsilon` : float, optional
+        Dimensionless regularization scale for the singular winding-number
+        kernel, expressed as a fraction of the scene's bounding box diagonal.
+        The input geometry is normalized internally, so epsilon is invariant
+        to the units and scale of the input, and is safe to optimize as a
+        trainable parameter across meshes of different sizes.
+
+        Regularization sets a softening length (epsilon * diag) below which
+        the unregularized kernel is replaced by a smooth falloff that is
+        finite at zero distance. This prevents NaN/Inf when a query lands
+        near a source primitive (a point for point clouds, a triangle edge
+        or vertex for triangle soups), and stabilizes both the forward
+        winding-number field and its gradient with respect to the geometry.
+
+        Behavior as a function of `t = d / (epsilon * diag)`, where `d` is
+        the distance from the query to the nearest source primitive:
+          - large t : unregularized field
+          - small t : smooth falloff, finite at t = 0
+
+        Negative values disable regularization (treated as 0). The default
+        is 1/250 = 0.004.
+
      `stream` : int, optional
          The raw 64-bit identifier (handle) of a CUDA stream. 
          Allows enqueuing operations asynchronously within deep learning frameworks.
@@ -219,7 +241,74 @@ def brute_force_gradients_point_normal(grad_output: winder.types.Array[winder.ty
          Default is 0 (the default/null stream).
     """
 
-def brute_force_gradients_mesh(grad_output: winder.types.Array[winder.types.Shape[winder.types.M], winder.types.float32, winder.types.cuda], vertices: winder.types.Array[winder.types.Shape[winder.types.K, Literal[3]], winder.types.float32, winder.types.cuda], triangle_indices: winder.types.Array[winder.types.Shape[winder.types.N, Literal[3]], winder.types.uint32, winder.types.cuda], queries: winder.types.Array[winder.types.Shape[winder.types.M, Literal[3]], winder.types.float32, winder.types.cuda], out_gradients: winder.types.Array[winder.types.Shape[winder.types.K, Literal[3]], winder.types.float32, winder.types.cuda], epsilon: float = 0.004, stream: int = 0) -> None:
+def brute_force_query_gradients_point_normal(grad_output: winder.types.Array[winder.types.Shape[winder.types.M], winder.types.float32, winder.types.cuda], points: winder.types.Array[winder.types.Shape[winder.types.N, Literal[3]], winder.types.float32, winder.types.cuda], scaled_normals: winder.types.Array[winder.types.Shape[winder.types.N, Literal[3]], winder.types.float32, winder.types.cuda], queries: winder.types.Array[winder.types.Shape[winder.types.M, Literal[3]], winder.types.float32, winder.types.cuda], out_query_gradients: winder.types.Array[winder.types.Shape[winder.types.M, Literal[3]], winder.types.float32, winder.types.cuda], epsilon: float = 0.004, stream: int = 0) -> None:
+    """
+    Computes the gradient of the loss with respect to the query
+     positions for a point cloud with scaled normals.
+
+     NOTE: Brute Force implementation: exact, but in `O(N*M)`!
+
+     This is the query-side counterpart of
+     `brute_force_gradients_point_normal`. For each query position
+     `q_j`, it computes:
+
+         dL/dq_j = g_j * sum_i dw_i(q_j) / dq_j
+                 = -g_j * sum_i dw_i(q_j) / dp_i
+
+     The two gradients are transposes of each other at the loss
+     level, not negatives, so they must both be computed
+     independently. Callers who need both gradients should call
+     both functions; they share no state.
+
+     Parameters
+     ----------
+     `grad_output` : Array
+         (M,) float32 CUDA array representing the gradient of the
+         loss with respect to the winding numbers at the query
+         locations (dL/dw). Aligned with `queries`.
+     `points` : Array
+         (N, 3) float32 CUDA array of point positions.
+     `scaled_normals` : Array
+         (N, 3) float32 CUDA array of scaled normals.
+         The scaled normal direction is the orientation,
+         the scale the associated voronoi area.
+     `queries` : Array
+         (M, 3) float32 CUDA array of query points for which the
+         gradient is evaluated.
+     `out_query_gradients` : Array
+         (M, 3) float32 CUDA array pre-allocated by the caller.
+         Will be filled with dL/dq for each query.
+
+    `epsilon` : float, optional
+        Dimensionless regularization scale for the singular winding-number
+        kernel, expressed as a fraction of the scene's bounding box diagonal.
+        The input geometry is normalized internally, so epsilon is invariant
+        to the units and scale of the input, and is safe to optimize as a
+        trainable parameter across meshes of different sizes.
+
+        Regularization sets a softening length (epsilon * diag) below which
+        the unregularized kernel is replaced by a smooth falloff that is
+        finite at zero distance. This prevents NaN/Inf when a query lands
+        near a source primitive (a point for point clouds, a triangle edge
+        or vertex for triangle soups), and stabilizes both the forward
+        winding-number field and its gradient with respect to the geometry.
+
+        Behavior as a function of `t = d / (epsilon * diag)`, where `d` is
+        the distance from the query to the nearest source primitive:
+          - large t : unregularized field
+          - small t : smooth falloff, finite at t = 0
+
+        Negative values disable regularization (treated as 0). The default
+        is 1/250 = 0.004.
+
+     `stream` : int, optional
+         The raw 64-bit identifier (handle) of a CUDA stream.
+         Allows enqueuing operations asynchronously within deep learning frameworks.
+         For example, in PyTorch pass: `torch.cuda.current_stream().cuda_stream`.
+         Default is 0 (the default/null stream).
+    """
+
+def brute_force_gradients_mesh(grad_output: winder.types.Array[winder.types.Shape[winder.types.M], winder.types.float32, winder.types.cuda], vertices: winder.types.Array[winder.types.Shape[winder.types.K, Literal[3]], winder.types.float32, winder.types.cuda], triangle_indices: winder.types.Array[winder.types.Shape[winder.types.N, Literal[3]], winder.types.uint32, winder.types.cuda], queries: winder.types.Array[winder.types.Shape[winder.types.M, Literal[3]], winder.types.float32, winder.types.cuda], out_gradients: winder.types.Array[winder.types.Shape[winder.types.K, Literal[3]], winder.types.float32, winder.types.cuda], epsilon_gradient: winder.types.Array[winder.types.Shape[Literal[1]], winder.types.float32, winder.types.cuda], epsilon: float = 0.004, stream: int = 0) -> None:
     """
     Compute the partial derivatives w.r.t. the given triangle mesh vertex
      positions (shared vertices, indexed triangles).
@@ -274,6 +363,28 @@ def brute_force_gradients_mesh(grad_output: winder.types.Array[winder.types.Shap
         Negative values disable regularization (treated as 0). The default
         is 1/250 = 0.004.
 
+    `epsilon` : float, optional
+        Dimensionless regularization scale for the singular winding-number
+        kernel, expressed as a fraction of the scene's bounding box diagonal.
+        The input geometry is normalized internally, so epsilon is invariant
+        to the units and scale of the input, and is safe to optimize as a
+        trainable parameter across meshes of different sizes.
+
+        Regularization sets a softening length (epsilon * diag) below which
+        the unregularized kernel is replaced by a smooth falloff that is
+        finite at zero distance. This prevents NaN/Inf when a query lands
+        near a source primitive (a point for point clouds, a triangle edge
+        or vertex for triangle soups), and stabilizes both the forward
+        winding-number field and its gradient with respect to the geometry.
+
+        Behavior as a function of `t = d / (epsilon * diag)`, where `d` is
+        the distance from the query to the nearest source primitive:
+          - large t : unregularized field
+          - small t : smooth falloff, finite at t = 0
+
+        Negative values disable regularization (treated as 0). The default
+        is 1/250 = 0.004.
+
      `stream` : int, optional
          The raw 64-bit identifier (handle) of a CUDA stream. 
          Allows enqueuing operations asynchronously within deep learning frameworks.
@@ -281,7 +392,7 @@ def brute_force_gradients_mesh(grad_output: winder.types.Array[winder.types.Shap
          Default is 0 (the default/null stream).
     """
 
-def brute_force_gradients_triangle_soup(grad_output: winder.types.Array[winder.types.Shape[winder.types.M], winder.types.float32, winder.types.cuda], triangles: winder.types.Array[winder.types.Shape[winder.types.N, Literal[3], Literal[3]], winder.types.uint32, winder.types.cuda], queries: winder.types.Array[winder.types.Shape[winder.types.M, Literal[3]], winder.types.float32, winder.types.cuda], out_gradients: winder.types.Array[winder.types.Shape[winder.types.N, Literal[3], Literal[3]], winder.types.float32, winder.types.cuda], epsilon: float = 0.004, stream: int = 0) -> None:
+def brute_force_gradients_triangle_soup(grad_output: winder.types.Array[winder.types.Shape[winder.types.M], winder.types.float32, winder.types.cuda], triangles: winder.types.Array[winder.types.Shape[winder.types.N, Literal[3], Literal[3]], winder.types.uint32, winder.types.cuda], queries: winder.types.Array[winder.types.Shape[winder.types.M, Literal[3]], winder.types.float32, winder.types.cuda], out_gradients: winder.types.Array[winder.types.Shape[winder.types.N, Literal[3], Literal[3]], winder.types.float32, winder.types.cuda], epsilon_gradient: winder.types.Array[winder.types.Shape[Literal[1]], winder.types.float32, winder.types.cuda], epsilon: float = 0.004, stream: int = 0) -> None:
     """
     Compute the partial derivatives w.r.t. the vertices of an explicit
      triangle soup.
@@ -333,8 +444,154 @@ def brute_force_gradients_triangle_soup(grad_output: winder.types.Array[winder.t
         Negative values disable regularization (treated as 0). The default
         is 1/250 = 0.004.
 
+    `epsilon` : float, optional
+        Dimensionless regularization scale for the singular winding-number
+        kernel, expressed as a fraction of the scene's bounding box diagonal.
+        The input geometry is normalized internally, so epsilon is invariant
+        to the units and scale of the input, and is safe to optimize as a
+        trainable parameter across meshes of different sizes.
+
+        Regularization sets a softening length (epsilon * diag) below which
+        the unregularized kernel is replaced by a smooth falloff that is
+        finite at zero distance. This prevents NaN/Inf when a query lands
+        near a source primitive (a point for point clouds, a triangle edge
+        or vertex for triangle soups), and stabilizes both the forward
+        winding-number field and its gradient with respect to the geometry.
+
+        Behavior as a function of `t = d / (epsilon * diag)`, where `d` is
+        the distance from the query to the nearest source primitive:
+          - large t : unregularized field
+          - small t : smooth falloff, finite at t = 0
+
+        Negative values disable regularization (treated as 0). The default
+        is 1/250 = 0.004.
+
      `stream` : int, optional
          The raw 64-bit identifier (handle) of a CUDA stream. 
+         Allows enqueuing operations asynchronously within deep learning frameworks.
+         For example, in PyTorch pass: `torch.cuda.current_stream().cuda_stream`.
+         Default is 0 (the default/null stream).
+    """
+
+def brute_force_query_gradients_triangle_soup(grad_output: winder.types.Array[winder.types.Shape[winder.types.M], winder.types.float32, winder.types.cuda], triangles: winder.types.Array[winder.types.Shape[winder.types.N, Literal[3], Literal[3]], winder.types.float32, winder.types.cuda], queries: winder.types.Array[winder.types.Shape[winder.types.M, Literal[3]], winder.types.float32, winder.types.cuda], out_query_gradients: winder.types.Array[winder.types.Shape[winder.types.M, Literal[3]], winder.types.float32, winder.types.cuda], epsilon: float = 0.004, stream: int = 0) -> None:
+    """
+    Computes the gradient of the loss with respect to the query
+     positions for an explicit triangle soup.
+
+     NOTE: Brute Force implementation: exact, but in `O(N*M)`!
+
+     This is the query-side counterpart of
+     `brute_force_gradients_triangle_soup`. For each query q_j:
+
+         dL/dq_j = -g_j * (dW_j/dv0 + dW_j/dv1 + dW_j/dv2)
+
+     The three vertex gradients are computed exactly as in the
+     primitive-gradient kernel, then summed and negated.
+
+     Parameters
+     ----------
+     `grad_output` : Array
+         (M,) float32 CUDA array representing the gradient of the
+         loss with respect to the winding numbers at the query
+         locations (dL/dw).
+     `triangles` : Array
+         (N, 3, 3) float32 CUDA array holding N triangles.
+         Note: Order the vertices counter-clockwise when seen
+         from the front.
+     `queries` : Array
+         (M, 3) float32 CUDA array of query points for which the
+         gradient is evaluated.
+     `out_query_gradients` : Array
+         (M, 3) float32 CUDA array pre-allocated by the caller.
+         Will be filled with dL/dq for each query.
+
+    `epsilon` : float, optional
+        Dimensionless regularization scale for the singular winding-number
+        kernel, expressed as a fraction of the scene's bounding box diagonal.
+        The input geometry is normalized internally, so epsilon is invariant
+        to the units and scale of the input, and is safe to optimize as a
+        trainable parameter across meshes of different sizes.
+
+        Regularization sets a softening length (epsilon * diag) below which
+        the unregularized kernel is replaced by a smooth falloff that is
+        finite at zero distance. This prevents NaN/Inf when a query lands
+        near a source primitive (a point for point clouds, a triangle edge
+        or vertex for triangle soups), and stabilizes both the forward
+        winding-number field and its gradient with respect to the geometry.
+
+        Behavior as a function of `t = d / (epsilon * diag)`, where `d` is
+        the distance from the query to the nearest source primitive:
+          - large t : unregularized field
+          - small t : smooth falloff, finite at t = 0
+
+        Negative values disable regularization (treated as 0). The default
+        is 1/250 = 0.004.
+
+     `stream` : int, optional
+         The raw 64-bit identifier (handle) of a CUDA stream.
+         Allows enqueuing operations asynchronously within deep learning frameworks.
+         For example, in PyTorch pass: `torch.cuda.current_stream().cuda_stream`.
+         Default is 0 (the default/null stream).
+    """
+
+def brute_force_query_gradients_mesh(grad_output: winder.types.Array[winder.types.Shape[winder.types.M], winder.types.float32, winder.types.cuda], vertices: winder.types.Array[winder.types.Shape[winder.types.K, Literal[3], Literal[3]], winder.types.float32, winder.types.cuda], triangle_indices: winder.types.Array[winder.types.Shape[winder.types.N, Literal[3]], winder.types.uint32, winder.types.cuda, queries: winder.types.Array[winder.types.Shape[winder.types.M, Literal[3]], winder.types.float32, winder.types.cuda], out_query_gradients: winder.types.Array[winder.types.Shape[winder.types.M, Literal[3]], winder.types.float32, winder.types.cuda], epsilon: float = 0.004, stream: int = 0) -> None:
+    """
+    Computes the gradient of the loss with respect to the query
+     positions for a mesh.
+
+     NOTE: Brute Force implementation: exact, but in `O(N*M)`!
+
+     This is the query-side counterpart of
+     `brute_force_gradients_triangle_soup`. For each query q_j:
+
+         dL/dq_j = -g_j * (dW_j/dv0 + dW_j/dv1 + dW_j/dv2)
+
+     The three vertex gradients are computed exactly as in the
+     primitive-gradient kernel, then summed and negated.
+
+     Parameters
+     ----------
+     `grad_output` : Array
+         (M,) float32 CUDA array representing the gradient of the
+         loss with respect to the winding numbers at the query
+         locations (dL/dw).
+     `vertices`  : Array
+         (K, 3) float32 CUDA array representing the shared vertices used in the triangles
+         for which the winding numbers and loss were computed.
+     `triangle_indices`: Array
+         A (N, 3) index array, where each row defines the three vertices of a triangle.
+         Note: Order the vertices counter-clockwise when seen from the front. 
+     `queries` : Array
+         (M, 3) float32 CUDA array of query points for which the
+         gradient is evaluated.
+     `out_query_gradients` : Array
+         (M, 3) float32 CUDA array pre-allocated by the caller.
+         Will be filled with dL/dq for each query.
+
+    `epsilon` : float, optional
+        Dimensionless regularization scale for the singular winding-number
+        kernel, expressed as a fraction of the scene's bounding box diagonal.
+        The input geometry is normalized internally, so epsilon is invariant
+        to the units and scale of the input, and is safe to optimize as a
+        trainable parameter across meshes of different sizes.
+
+        Regularization sets a softening length (epsilon * diag) below which
+        the unregularized kernel is replaced by a smooth falloff that is
+        finite at zero distance. This prevents NaN/Inf when a query lands
+        near a source primitive (a point for point clouds, a triangle edge
+        or vertex for triangle soups), and stabilizes both the forward
+        winding-number field and its gradient with respect to the geometry.
+
+        Behavior as a function of `t = d / (epsilon * diag)`, where `d` is
+        the distance from the query to the nearest source primitive:
+          - large t : unregularized field
+          - small t : smooth falloff, finite at t = 0
+
+        Negative values disable regularization (treated as 0). The default
+        is 1/250 = 0.004.
+
+     `stream` : int, optional
+         The raw 64-bit identifier (handle) of a CUDA stream.
          Allows enqueuing operations asynchronously within deep learning frameworks.
          For example, in PyTorch pass: `torch.cuda.current_stream().cuda_stream`.
          Default is 0 (the default/null stream).
@@ -444,6 +701,91 @@ class WindingNumberEngine:
              Default is 0 (the default/null stream).
         """
 
+    def compute_query_gradients(self, grad_output: winder.types.Array[winder.types.Shape[winder.types.M], winder.types.float32, winder.types.cuda], queries: winder.types.Array[winder.types.Shape[winder.types.M, Literal[3]], winder.types.float32, winder.types.cuda], out_query_gradients: winder.types.Array[winder.types.Shape[winder.types.M, Literal[3]], winder.types.float32, winder.types.cuda], beta: float = -1, epsilon: float = 0.004, stream: int = 0) -> None:
+        """
+        Computes the gradient of a scalar loss with respect to the query
+         positions, using the same acceleration structure that this engine
+         uses for `compute`.
+
+         This is the query-side counterpart of `GradientEngine.compute`:
+         `GradientEngine` propagates the adjoint to the source geometry,
+         whereas this method propagates it to the query coordinates.
+
+         The intended usage pattern is:
+
+             engine = WindingNumberEngine(triangles, stream)
+             wn = torch.empty(M, device="cuda")
+             engine.compute(queries, wn, beta=2.3, epsilon=0.004, stream=stream)
+
+             loss = some_loss(wn)
+             loss.backward()
+             dL_dw = wn.grad                       # or any (M,) tensor
+
+             grad_q = torch.empty(M, 3, device="cuda")
+             engine.compute_query_gradients(dL_dw, queries, grad_q,
+                                            beta=2.3, epsilon=0.004,
+                                            stream=stream)
+
+         The BVH8 built at construction is reused; no re-build is triggered
+         by this call. The traversal is independent of `compute` — the
+         user is free to call it once, many times with different adjoints,
+         or not at all.
+
+         For each query index j the kernel computes:
+
+             dL/dq_j = g_j * sum_i dw_i(q_j) / dq_j
+
+         where g_j = grad_output[j] is the adjoint supplied by the caller.
+         The adjoint is applied once per query, not per (query, primitive)
+         pair.
+
+         Parameters
+         ----------
+         `grad_output` : Array
+             (M,) float32 CUDA array representing the gradient of the loss
+             with respect to the winding numbers at each query. Must be
+             aligned index-for-index with `queries`.
+         `queries` : Array
+             (M, 3) float32 CUDA array of query points for which the
+             gradient is evaluated. The order is preserved in the output.
+         `out_query_gradients` : Array
+             (M, 3) float32 CUDA array pre-allocated by the caller.
+             Will be filled with dL/dq for each query. 
+         `beta` : float
+             Barnes-Hut opening criterion. Same semantics and defaults as
+             in `compute`. Larger beta leads to more precise results but
+             also slower execution. Use any negative number to get the
+             default (2.0 for triangles, 2.3 for point clouds).
+
+        `epsilon` : float, optional
+            Dimensionless regularization scale for the singular winding-number
+            kernel, expressed as a fraction of the scene's bounding box diagonal.
+            The input geometry is normalized internally, so epsilon is invariant
+            to the units and scale of the input, and is safe to optimize as a
+            trainable parameter across meshes of different sizes.
+
+            Regularization sets a softening length (epsilon * diag) below which
+            the unregularized kernel is replaced by a smooth falloff that is
+            finite at zero distance. This prevents NaN/Inf when a query lands
+            near a source primitive (a point for point clouds, a triangle edge
+            or vertex for triangle soups), and stabilizes both the forward
+            winding-number field and its gradient with respect to the geometry.
+
+            Behavior as a function of `t = d / (epsilon * diag)`, where `d` is
+            the distance from the query to the nearest source primitive:
+              - large t : unregularized field
+              - small t : smooth falloff, finite at t = 0
+
+            Negative values disable regularization (treated as 0). The default
+            is 1/250 = 0.004.
+
+         `stream` : int, optional
+             The raw 64-bit identifier (handle) of a CUDA stream.
+             Allows enqueuing operations asynchronously within deep learning frameworks.
+             For example, in PyTorch pass: `torch.cuda.current_stream().cuda_stream`.
+             Default is 0 (the default/null stream).
+        """
+
     def dump(self) -> str:
         """
         Returns a detailed .dot string representation of the internal BVH8 Tree.
@@ -470,7 +812,7 @@ class GradientEngine:
             Default is 0 (the default/null stream).
         """
 
-    def compute_mesh(self, vertices: winder.types.Array[winder.types.Shape[winder.types.K, Literal[3]], winder.types.float32, winder.types.cuda], triangle_indices: winder.types.Array[winder.types.Shape[winder.types.N, Literal[3]], winder.types.uint32, winder.types.cuda], out_gradients: winder.types.Array[winder.types.Shape[winder.types.K, Literal[3]], winder.types.float32, winder.types.cuda], beta: float = -1, epsilon: float = 0.004, stream: int = 0) -> None:
+    def compute_mesh(self, vertices: winder.types.Array[winder.types.Shape[winder.types.K, Literal[3]], winder.types.float32, winder.types.cuda], triangle_indices: winder.types.Array[winder.types.Shape[winder.types.N, Literal[3]], winder.types.uint32, winder.types.cuda], out_gradients: winder.types.Array[winder.types.Shape[winder.types.K, Literal[3]], winder.types.float32, winder.types.cuda], epsilon_gradient: winder.types.Array[winder.types.Shape[Literal[1]], winder.types.float32, winder.types.cuda], beta: float = -1, epsilon: float = 0.004, stream: int = 0) -> None:
         """
         Compute the partial derivatives w.r.t. the given triangle mesh vertex
          positions (shared vertices, indexed triangles).
@@ -519,6 +861,28 @@ class GradientEngine:
             Negative values disable regularization (treated as 0). The default
             is 1/250 = 0.004.
 
+        `epsilon` : float, optional
+            Dimensionless regularization scale for the singular winding-number
+            kernel, expressed as a fraction of the scene's bounding box diagonal.
+            The input geometry is normalized internally, so epsilon is invariant
+            to the units and scale of the input, and is safe to optimize as a
+            trainable parameter across meshes of different sizes.
+
+            Regularization sets a softening length (epsilon * diag) below which
+            the unregularized kernel is replaced by a smooth falloff that is
+            finite at zero distance. This prevents NaN/Inf when a query lands
+            near a source primitive (a point for point clouds, a triangle edge
+            or vertex for triangle soups), and stabilizes both the forward
+            winding-number field and its gradient with respect to the geometry.
+
+            Behavior as a function of `t = d / (epsilon * diag)`, where `d` is
+            the distance from the query to the nearest source primitive:
+              - large t : unregularized field
+              - small t : smooth falloff, finite at t = 0
+
+            Negative values disable regularization (treated as 0). The default
+            is 1/250 = 0.004.
+
          `stream` : int, optional
              The raw 64-bit identifier (handle) of a CUDA stream. 
              Allows enqueuing operations asynchronously within deep learning frameworks.
@@ -526,7 +890,7 @@ class GradientEngine:
              Default is 0 (the default/null stream).
         """
 
-    def compute_triangle_soup(self, triangles: winder.types.Array[winder.types.Shape[winder.types.N, Literal[3], Literal[3]], winder.types.float32, winder.types.cuda], out_gradients: winder.types.Array[winder.types.Shape[winder.types.N, Literal[3], Literal[3]], winder.types.float32, winder.types.cuda], beta: float = -1, epsilon: float = 0.004, stream: int = 0) -> None:
+    def compute_triangle_soup(self, triangles: winder.types.Array[winder.types.Shape[winder.types.N, Literal[3], Literal[3]], winder.types.float32, winder.types.cuda], out_gradients: winder.types.Array[winder.types.Shape[winder.types.N, Literal[3], Literal[3]], winder.types.float32, winder.types.cuda], epsilon_gradient: winder.types.Array[winder.types.Shape[Literal[1]], winder.types.float32, winder.types.cuda], beta: float = -1, epsilon: float = 0.004, stream: int = 0) -> None:
         """
         Compute the partial derivatives w.r.t. the vertices of an explicit
          triangle soup.
@@ -572,6 +936,28 @@ class GradientEngine:
             Negative values disable regularization (treated as 0). The default
             is 1/250 = 0.004.
 
+        `epsilon` : float, optional
+            Dimensionless regularization scale for the singular winding-number
+            kernel, expressed as a fraction of the scene's bounding box diagonal.
+            The input geometry is normalized internally, so epsilon is invariant
+            to the units and scale of the input, and is safe to optimize as a
+            trainable parameter across meshes of different sizes.
+
+            Regularization sets a softening length (epsilon * diag) below which
+            the unregularized kernel is replaced by a smooth falloff that is
+            finite at zero distance. This prevents NaN/Inf when a query lands
+            near a source primitive (a point for point clouds, a triangle edge
+            or vertex for triangle soups), and stabilizes both the forward
+            winding-number field and its gradient with respect to the geometry.
+
+            Behavior as a function of `t = d / (epsilon * diag)`, where `d` is
+            the distance from the query to the nearest source primitive:
+              - large t : unregularized field
+              - small t : smooth falloff, finite at t = 0
+
+            Negative values disable regularization (treated as 0). The default
+            is 1/250 = 0.004.
+
          `stream` : int, optional
              The raw 64-bit identifier (handle) of a CUDA stream. 
              Allows enqueuing operations asynchronously within deep learning frameworks.
@@ -579,7 +965,7 @@ class GradientEngine:
              Default is 0 (the default/null stream).
         """
 
-    def compute_point_normal(self, points: winder.types.Array[winder.types.Shape[winder.types.N, Literal[3]], winder.types.float32, winder.types.cuda], scaled_normals: winder.types.Array[winder.types.Shape[winder.types.N, Literal[3]], winder.types.float32, winder.types.cuda], out_gradients: winder.types.Array[winder.types.Shape[winder.types.N, Literal[2], Literal[3]], winder.types.float32, winder.types.cuda], beta: float = -1, epsilon: float = 0.004, stream: int = 0) -> None:
+    def compute_point_normal(self, points: winder.types.Array[winder.types.Shape[winder.types.N, Literal[3]], winder.types.float32, winder.types.cuda], scaled_normals: winder.types.Array[winder.types.Shape[winder.types.N, Literal[3]], winder.types.float32, winder.types.cuda], out_gradients: winder.types.Array[winder.types.Shape[winder.types.N, Literal[2], Literal[3]], winder.types.float32, winder.types.cuda], epsilon_gradient: winder.types.Array[winder.types.Shape[Literal[1]], winder.types.float32, winder.types.cuda], beta: float = -1, epsilon: float = 0.004, stream: int = 0) -> None:
         """
         Compute the partial derivatives w.r.t. the given point positions
          and scaled normals.
@@ -609,6 +995,28 @@ class GradientEngine:
              Larger beta leads to more precise results, but also slower execution.
              Use any negative number to get default values.
              Default for point clouds is 2.3.
+
+        `epsilon` : float, optional
+            Dimensionless regularization scale for the singular winding-number
+            kernel, expressed as a fraction of the scene's bounding box diagonal.
+            The input geometry is normalized internally, so epsilon is invariant
+            to the units and scale of the input, and is safe to optimize as a
+            trainable parameter across meshes of different sizes.
+
+            Regularization sets a softening length (epsilon * diag) below which
+            the unregularized kernel is replaced by a smooth falloff that is
+            finite at zero distance. This prevents NaN/Inf when a query lands
+            near a source primitive (a point for point clouds, a triangle edge
+            or vertex for triangle soups), and stabilizes both the forward
+            winding-number field and its gradient with respect to the geometry.
+
+            Behavior as a function of `t = d / (epsilon * diag)`, where `d` is
+            the distance from the query to the nearest source primitive:
+              - large t : unregularized field
+              - small t : smooth falloff, finite at t = 0
+
+            Negative values disable regularization (treated as 0). The default
+            is 1/250 = 0.004.
 
         `epsilon` : float, optional
             Dimensionless regularization scale for the singular winding-number

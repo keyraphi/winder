@@ -1940,8 +1940,8 @@ def main() -> None:
     parser.add_argument(
         "--beta",
         type=float,
-        default=None,
-        help="Barnes-Hut approximation parameter (-1 for exact).",
+        default=-1,
+        help="Barnes-Hut approximation parameter.",
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--num_trials", type=int, default=1)
@@ -1979,7 +1979,7 @@ def main() -> None:
     # ---------------------------------------------------------------
     if args.epsilon_sweep:
         eps_values = [float(x) for x in args.epsilon_sweep.split(",") if x.strip()]
-        beta = args.beta if args.beta is not None else 2.3
+        beta = args.beta if args.beta is not None else -1
         run_epsilon_sweep(
             vertices,
             indices,
