@@ -629,7 +629,7 @@ auto WindingNumbersBackend<Geometry>::compute_query_gradients(
 
   if (beta < 0.F) {
     // defaults from Fast Winding Numbers paper
-    beta = GeometryTraits<Geometry>::default_beta;
+    beta = GeometryTraits<Geometry>::default_query_beta;
   }
   epsilon = std::max(0.F, epsilon);
   float scene_scale = 1.F;
