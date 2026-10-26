@@ -58,7 +58,7 @@
                         <span class="text-amber-400 text-base leading-none mt-0.5 select-none">⚠️</span>
                         <div>
                             <strong class="text-amber-400 font-semibold block mb-0.5 uppercase tracking-wider text-[11px]">Early Alpha &bull; Active Development</strong>
-                            Only the forward pass is implemented so far. The backward pass is currently under active research and engineering-please do not expect a finalized or production-stable product yet.
+                            Only the forward pass is implemented so far. The backward pass is currently under active research and engineering—please do not expect a finalized or production-stable product yet.
           </div>
         </div>
             <div class="text-sm md:text-base text-slate-400 font-medium mb-8">
@@ -107,7 +107,7 @@
         <h3 class="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
             🧭 The Inside-Outside Dilemma: A Story of Broken Geometry
         </h3>
-
+        
         <div class="text-slate-600 text-sm md:text-base space-y-4 leading-relaxed max-w-none mb-8">
             <p>
                 Imagine you are slicing a crappy 3D model for a 3D printer, converting a complex video game asset into a signed distance field, or you are training a
@@ -124,7 +124,7 @@
             <p>
                 If your 3D model is a perfect, watertight (manifold) mesh, this is easy. You cast a ray from your query point; if it crosses
                 the mesh boundary an odd number of times, you're inside. But perfect 3D models are rare. Real-world 3D
-                data-whether harvested from raw LiDAR scans, chaotic CAD conversions, or raw triangle meshes-is inherently
+                data—whether harvested from raw LiDAR scans, chaotic CAD conversions, or raw triangle meshes—is inherently
                 <strong>broken</strong>. It is full of cracks, missing patches, self-intersections, and floating geometry.
             </p>
             <p>
@@ -133,7 +133,7 @@
         </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start border-t border-slate-200/60 pt-6">
-
+            
             <div class="lg:col-span-7 text-slate-600 text-sm md:text-base space-y-4 leading-relaxed">
                 <p>
                     This is where the seminal work of <a href="https://dl.acm.org/doi/10.1145/2461912.2461916" target="_blank"
@@ -190,18 +190,18 @@
 
             <div class="lg:col-span-5 lg:sticky lg:top-6 space-y-3">
                 <div class="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-square shadow-md">
-                    <video
-                        class="w-full h-full object-cover"
-                        controls
+                    <video 
+                        class="w-full h-full object-cover" 
+                        controls 
                         preload="metadata"
-                        muted
+                        muted 
                         playsinline
                         poster="media/showcase_poster.jpg">
                         <source src="media/showcase_video.mp4" type="video/mp4">
                         Your browser does not support HTML5 video streaming.
                     </video>
                 </div>
-
+                
                 <div class="mt-6 pt-4 border-t border-slate-200/60 text-xs text-slate-500 italic leading-relaxed">
                     <strong>Figure 1.1: Generalized Winding Numbers Demonstration.</strong> The video above shows a 2.1M
                     <a href="https://www.thingiverse.com/thing:3874385" target="_blank" class="text-cyan-600 font-medium hover:underline">
@@ -213,7 +213,7 @@
                     iso-surfaces inherent to the winding field representation.
                 </div>
             </div>
-
+            
         </div>
     </div>
 
@@ -346,291 +346,203 @@
                 negative. Left: Progressive cross-sectional scans. Right: Path-traced 3D volumetric field.
             </span>
         </div>
-    <h4 class="text-sm font-semibold uppercase tracking-wider text-slate-400 mt-8 mb-2">
-      Source Singularities &amp; Regularization
-    </h4>
+        <h4 class="text-sm font-semibold uppercase tracking-wider text-slate-400 mt-8 mb-2">Singularity &amp; Boundary Regularization</h4>
+        <p class="mb-4">
+            A fundamental issue with the classical formulation of the point dipole sum is its singular behavior: as a query point
+            $x$ approaches a source point $p_i$, the denominator $\|p_i - x\|^3$ approaches zero, causing the evaluation to diverge
+            to infinity ($\pm \infty$). To resolve this and ensure smooth, continuous evaluations, we use the regularized potential
+            formulation proposed by
+            <a href="https://dl.acm.org/doi/10.1145/3687914" target="_blank" class="text-cyan-600 font-medium hover:underline">Chen et al.</a> 
+            This replaces the singular potential field with a smooth, regularized counterpart controlled by a spatial scale parameter $\epsilon$:
+        </p>
 
-    <p class="mb-4">
-        Both primitive types we support — point dipoles and triangles — produce winding fields that are
-        mathematically smooth everywhere away from their source geometry, but become singular in the
-        immediate neighborhood of that source. For a robust differentiable pipeline it is not enough that
-        the <em>forward</em> winding number be well-defined: the <em>partial derivatives</em> with respect
-        to geometry parameters (positions, normals, vertex coordinates) must also remain bounded and
-        continuous in the vicinity of the source. Otherwise every gradient-based optimizer will at some
-        point sample a query on or near a primitive and immediately see an near infinite value, poisoning the
-        optimization.
-    </p>
-
-    <p class="mb-4">
-        The two primitives exhibit structurally different kinds of singular behavior, and both need to be
-        addressed before the same smooth-kernel formalism can be applied to them.
-    </p>
-
-    <!-- ================================================================= -->
-    <!-- POINT-NORMAL SINGULARITIES                                        -->
-    <!-- ================================================================= -->
-    <h5 class="text-sm font-semibold text-slate-700 mt-6 mb-2">Point-Normal Singularities</h5>
-
-    <p class="mb-4">
-        The classical formulation of the point dipole sum contains a naked divergence in the denominator.
-        As the query point $x$ approaches a source point $p_i$, the term
-        $\frac{(p_i - x) \cdot n_i}{\|p_i - x\|^3}$ blows up as $\|p_i - x\|^{-3}$ and the winding
-        number evaluation diverges to $\pm\infty$. Even the forward field is undefined at the source, and
-        the backward pass produces a $\|p_i - x\|^{-4}$ singularity in the position gradient and a
-        $\|p_i - x\|^{-3}$ singularity in the normal gradient.
-    </p>
-
-    <p class="mb-4">
-        The regularization strategy is to introduce a characteristic length scale $\epsilon$ and replace
-        the raw reciprocal-cube kernel with a smooth, bounded, non-dimensionalized modifier $S(t)$, where
-        $t = \frac{\|p_i - x\|}{\epsilon}$ is a relative distance parameter. The regularized winding
-        field becomes:
-    </p>
-
-    <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
-        $$\mathcal{W}_{\text{points},\epsilon}(x) = \frac{1}{4\pi} \sum_{i} \frac{(p_i - x) \cdot n_i}{\|p_i - x\|^3} S(t) a_i$$
-    </div>
-
-    <p class="mb-4">
-        Following the formulation of <a href="https://dl.acm.org/doi/10.1145/3687914" target="_blank"
-            class="text-cyan-600 font-medium hover:underline">Chen et al. (2024)</a>, we use the following
-        piecewise-smooth modifier with a Taylor expansion at the origin, the error-function kernel in the
-        transition region, and identity in the free-space limit:
-    </p>
-
-    <div id="RegularizationModifier" class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-sm space-y-4">
-        <div>
-            <span class="text-xs font-mono text-slate-500 block mb-1">Point-Normal Regularization Modifier $S(t)$:</span>
-            $$S(t) = \begin{cases}
-                \frac{4}{3\sqrt{\pi}} t^3 & \text{for } t < 0.1 \quad \text{(Taylor expansion near the source)} \\
-                \operatorname{erf}(t) - \frac{2t}{\sqrt{\pi}} e^{-t^2} & \text{for } 0.1 \le t < 2.0 \quad \text{(smooth transition)} \\
-                1.0 & \text{for } t \ge 2.0 \quad \text{(unregularized Poisson kernel)}
-            \end{cases}$$
+        <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
+            $$\mathcal{W}_{\text{points},\epsilon}(x) = \frac{1}{4\pi} \sum_{i} \frac{(p_i - x) \cdot n_i}{\|p_i - x\|^3} S(t) a_i$$
         </div>
-    </div>
 
-    <p class="mb-4">
-        The leading behavior at the origin is $S(t) \sim t^3$, so the product
-        $S(t) / \|p_i - x\|^3$ becomes $O(1)$ rather than $O(\|p_i - x\|^{-3})$. The regularized winding
-        number is therefore continuous and finite even when the query lies exactly on a source point, and
-        every derivative of the field is bounded. Beyond $t = 2$, the modifier is identically $1$ and the
-        evaluation smoothly recovers the classical unregularized Poisson kernel.
-    </p>
+        <p class="mb-4">
+            Where $t = \frac{\|p_i - x\|}{\epsilon}$ is a non-dimensional distance parameter, and $S(t)$ is a smooth regularization scaling modifier defined piecewise based on the proximity to the source point:
+        </p>
 
-    <!-- ================================================================= -->
-    <!-- TRIANGLE SINGULARITIES                                            -->
-    <!-- ================================================================= -->
-    <h5 class="text-sm font-semibold text-slate-700 mt-8 mb-2">Triangle Singularities</h5>
-
-    <p class="mb-4">
-        The triangle solid-angle formulation behaves differently. Recall the Van Oosterom and Strackee
-        signed solid angle used for the forward pass:
-    </p>
-
-    <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
-        $$\Omega_t(x) = 2 \arctan\left(\frac{N}{D}\right), \quad
-        \begin{cases}
-            N = a \cdot (b \times c) \\
-            D = \|a\|\|b\|\|c\| + (a \cdot b)\|c\| + (b \cdot c)\|a\| + (c \cdot a)\|b\|
-        \end{cases}$$
-    </div>
-
-    <p class="mb-4">
-        where $a = v_0 - x$, $b = v_1 - x$ and $c = v_2 - x$ are the vertex offsets relative to the query.
-        Because $\arctan$ is bounded, the <em>forward</em> winding number never diverges. However, the
-        <em>backward</em> pass requires the partial derivatives $\frac{\partial \Omega_t}{\partial v_k}$
-        with respect to each vertex. These take the form:
-    </p>
-
-    <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
-        $$\frac{\partial \Omega_t}{\partial v_k} = \frac{2}{N^2 + D^2}\left(D \frac{\partial N}{\partial v_k} - N \frac{\partial D}{\partial v_k}\right)$$
-    </div>
-
-    <p class="mb-4">
-        The denominator $N^2 + D^2$ vanishes at every point on the triangle's boundary. Consider a query
-        lying on the interior of the triangle (in its plane): all three offsets $a, b, c$ lie in the plane
-        and the numerator vanishes because $b \times c$ is perpendicular to that plane. Simultaneously, the
-        angle identity $\cos \theta_a + \cos \theta_b + \cos \theta_c = -1$ on the interior plane (where
-        $\theta_a, \theta_b, \theta_c$ are the angles between the offset vectors) forces $D = 0$ as well.
-        A similar cancellation occurs on the interior of every edge and at every vertex, where the offset
-        vectors become mutually collinear. As the query approaches <em>any</em> point of the triangle
-        (edge, vertex, or interior), $N^2 + D^2$ shrinks quadratically with the perpendicular distance
-        $\delta$ to the surface, while the numerator vanishes only <em>linearly</em>. The gradient of the
-        winding number therefore scales as $1/\delta$ and diverges to infinity at the boundary.
-    </p>
-
-    <p class="mb-4">
-        This is the correct mathematical behavior of the exact kernel: crossing the triangle flips the
-        winding number by $\pm 1$, so the gradient contains a delta-function sheet concentrated on the
-        triangle's surface. Any attempt to numerically differentiate the exact kernel near the boundary
-        will produce arbitrary large adjoints.
-    </p>
-
-    <!-- ================================================================= -->
-    <!-- UNIFIED REGULARIZATION                                            -->
-    <!-- ================================================================= -->
-    <h5 class="text-sm font-semibold text-slate-700 mt-8 mb-2">Unified Edge-Length Regularization</h5>
-
-    <p class="mb-4">
-        The observation that both primitives suffer from the same class of divergence — an inverse power
-        of a distance that is allowed to vanish — suggests a unified regularization strategy. Rather than
-        modifying the winding number formula term by term, we introduce the regularization at the level of
-        the underlying edge lengths. Every place the unregularized formula consumes a raw Euclidean
-        distance $\|a\|$, we instead substitute a regularized length $r_a$ that is smooth, finite at
-        $\|a\| = 0$, and that smoothly converges to $\|a\|$ once the offset becomes sufficiently large.
-    </p>
-
-    <p class="mb-4">
-        The library provides three interchangeable regularizers with this property, selected at runtime
-        through the <code>DefaultReg</code> template parameter:
-    </p>
-
-    <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-sm space-y-4">
-        <div>
-            <span class="text-xs font-mono text-slate-500 block mb-1">Sharp (no regularization):</span>
-            $$r_a = \|a\|$$
+        <div id="RegularizationModifier" class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-sm space-y-4">
+            <div>
+                <span class="text-xs font-mono text-slate-500 block mb-1">Regularization Modifier $S(t)$ (Our Formulation):</span>
+                $$S(t) = \begin{cases} 
+                    \frac{4}{3\sqrt{\pi}} t^3 & \text{for } t < 0.1 \quad \text{(Taylor Approximation)} \\ 
+                    \text{erf}(t) - \frac{2t}{\sqrt{\pi}} e^{-t^2} & \text{for } 0.1 \le t < 2.0 \\ 
+                    1.0 & \text{for } t \ge 2.0 \quad \text{(Standard Poisson)} 
+                \end{cases}$$
+            </div>
         </div>
-        <hr class="border-slate-200" />
-        <div>
-            <span class="text-xs font-mono text-slate-500 block mb-1">Plummer (soft kernel, infinite support):</span>
-            $$r_a = \sqrt{\|a\|^2 + \epsilon^2}$$
-        </div>
-        <hr class="border-slate-200" />
-        <div>
-            <span class="text-xs font-mono text-slate-500 block mb-1">Compact (default, compact-support polynomial):</span>
-            $$r_a = \epsilon \, g\!\left(\frac{\|a\|}{\epsilon}\right)$$
-        </div>
-    </div>
+      <h3 class="text-md font-bold uppercase tracking-wider text-slate-400 mt-8 mb-2">Singularity &amp; Boundary Regularization for Triangle Soups</h3>
+      <p>
+      The Van Oosterom–Strackee formula above is well-defined for any query $x$ that is not <b>on</b> the triangle, but its analytic
+          derivatives degenerate whenever $x$ approaches a vertex or an edge of the triangle. Writing the contribution of a single
+          triangle $T = (v_0, v_1, v_2)$ in terms of the vertex vectors
+          $a = v_0 - x$, $b = v_1 - x$, $c = v_2 - x$ and the two abbreviations
+      </p>
+      <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
+          $$N = a \cdot (b \times c), \qquad
+            D = \|a\|\|b\|\|c\| + (a\cdot b)\|c\| + (b\cdot c)\|a\| + (c\cdot a)\|b\|,$$
+      </div>
+      <p>
+          the winding number contribution is $w_T(x) = \frac{1}{2\pi}\arctan(N/D)$ and the vertex gradient follows from the quotient rule:
+      </p>
+      <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
+          $$\frac{\partial w_T}{\partial v_k}
+            = \frac{1}{2\pi \cdot \left(N^2+D^2\right)} \cdot \left(
+              D \, \dfrac{\partial N}{\partial v_k} - N \, \dfrac{\partial D}{\partial v_k}\right).$$
+      </div>
 
-    <p class="mb-4">
-        The Plummer variant is the classical softening kernel from N-body simulation. It removes the
-        singularity at $\|a\| = 0$ and is trivially cheap, but it never <em>exactly</em> matches the sharp
-        kernel at any finite distance: $\sqrt{\|a\|^2 + \epsilon^2} \to \|a\| + \mathcal{O}(\epsilon^2 / \|a\|)$
-        as $\|a\| \to \infty$. This is a subtle but critical issue for the fast multipole approximation,
-        which we return to below.
-    </p>
+      <p>
+      The denominator $N^2 + D^2$ vanishes — and the gradient diverges — whenever $N$ and $D$ are <b>simultaneously</b> zero. This
+          occurs in exactly two geometric configurations:
+      </p>
 
-    <p class="mb-4">
-        The compact variant instead uses a piecewise polynomial that is exactly the sharp distance once
-        the offset exceeds a modest multiple of $\epsilon$. The scaling function $g(t)$ with
-        $t = \|a\| / \epsilon$ is defined as:
-    </p>
+      <ul class="list-disc list-inside space-y-3 text-sm text-slate-600 pl-2 my-4">
+          <li>
+              <strong>Vertex singularity.</strong> As the query $x$ approaches a triangle vertex, the corresponding vertex vector
+              shrinks to zero: say $\|a\| \to 0$. Every term of $N$ contains at least one power of $\|a\|$ (either via the
+              triple product or via one of the normalized cross products), and every term of $D$ likewise carries at least one
+              factor of $\|a\|$. Both quantities therefore vanish together, $N \sim \|a\|$ and $D \sim \|a\|$, and
+              the ratio $(D\,\partial N - N\,\partial D)/(N^2 + D^2)$ diverges as $\|a\|^{-1}$.
+          </li>
+          <li>
+              <strong>Edge singularity.</strong> If $x$ lies anywhere on the edge $\overline{v_0 v_1}$, the vectors $a$ and $b$
+              become anti-parallel, $a = -\lambda\,b$ for some $\lambda > 0$. The triple product
+              $N = a \cdot (b \times c)$ then vanishes identically, and substituting $a = -\lambda b$ into $D$ makes its four
+              summands pair up into two equal-and-opposite contributions:
+              $$\begin{aligned}
+              D &= \lambda \|b\|^2 \|c\| - \lambda \|b\|^2 \|c\|
+                 + \lambda \|b\| (b\cdot c) - \lambda \|b\| (b\cdot c) = 0.
+              \end{aligned}$$
+              Once again the derivative blows up.
+          </li>
+      </ul>
 
-    <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-sm space-y-4">
-        <div>
-            <span class="text-xs font-mono text-slate-500 block mb-1">Compact scaling function $g(t)$:</span>
-            $$g(t) = \begin{cases}
-                1 + A_2 \, t^2 + A_4 \, t^4 & \text{for } t \in [0,\, 1] \quad \text{(quartic branch)} \\[4pt]
-                V + S \, u + C \, u^2 + D \, u^3 & \text{for } t \in [1,\, 2], \;\; u = t - 1 \quad \text{(cubic bridge)} \\[4pt]
-                t & \text{for } t \ge 2 \quad \text{(identity, recovers sharp kernel)}
-            \end{cases}$$
-        </div>
-        <hr class="border-slate-200" />
-        <div>
-            <span class="text-xs font-mono text-slate-500 block mb-1">Numerical constants:</span>
-            $$\begin{aligned}
-            A_2 &= \tfrac{7\sqrt{2}}{4} - 2 \approx 0.4748737342 \\
-            A_4 &= 1 - \tfrac{3\sqrt{2}}{4} \approx -0.0606601718
-            \end{aligned}$$
-            $$\begin{aligned}
-            V &= \sqrt{2}, \quad S = \tfrac{1}{\sqrt{2}} \\
-            C &= 5 - 4\sqrt{2} \approx -0.6568542495 \\
-            D &= -3 + \tfrac{5}{\sqrt{2}} \approx 0.5355339059
-            \end{aligned}$$
-        </div>
-    </div>
+      <p>
+      The winding <b>value</b> $w_T$ itself stays finite in both configurations (it has a well-defined limit depending on the
+          direction of approach), but the gradient does not. On top of this, $w_T$ has a genuine finite jump of $+1$ across the
+          <b>interior</b> of the triangle — the discontinuity that encodes the “inside / outside” property of the field — so a
+          regularization must inevitably modify the winding value in a narrow band around the triangle boundary. The design goal is
+          therefore not to preserve the raw formula everywhere, but to replace it with a forward function that
+          <strong>(a)</strong> equals the raw formula away from the singularity,
+          <strong>(b)</strong> is bounded everywhere, and
+          <strong>(c)</strong> has a finite, continuous gradient across all of $\mathbb{R}^3$.
+      </p>
 
-    <p class="mb-4">
-        Every constant is uniquely determined by the following six boundary conditions, which together
-        force the regularized length to be $C^1$-continuous across both transitions and to match the
-        sharp kernel exactly in the free-space limit:
-    </p>
+      <p>
+          Winder resolves this by modifying the <em>forward function only</em>. The gradient pass documented in Section 5.2 then
+          differentiates the regularized forward expression and introduces no additional mechanism. The modification runs in two
+          stages.
+      </p>
 
-    <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-sm">
-        <table class="w-full text-left text-xs">
-            <thead class="text-slate-500 font-mono">
-                <tr>
-                    <th class="pb-2">Condition</th>
-                    <th class="pb-2">Location</th>
-                    <th class="pb-2">Constraint</th>
-                </tr>
-            </thead>
-            <tbody class="text-slate-700 divide-y divide-slate-200">
-                <tr><td class="py-1.5">Smooth at origin</td><td>$t = 0$</td><td>$g(0) = 1$, $g'(0) = 0$</td></tr>
-                <tr><td class="py-1.5">Value match</td><td>$t = 1$</td><td>$g(1) = \sqrt{2}$</td></tr>
-                <tr><td class="py-1.5">Slope match</td><td>$t = 1$</td><td>$g'(1) = 1/\sqrt{2}$</td></tr>
-                <tr><td class="py-1.5">Value match</td><td>$t = 2$</td><td>$g(2) = 2$</td></tr>
-                <tr><td class="py-1.5">Slope match</td><td>$t = 2$</td><td>$g'(2) = 1$</td></tr>
-                <tr><td class="py-1.5">Sharp limit</td><td>$t \to \infty$</td><td>$g(t) = t$</td></tr>
-            </tbody>
-        </table>
-    </div>
+      <h4 class="text-sm font-bold text-slate-700 tracking-wide uppercase mt-4">Stage 1 — Edge Length Regularization</h4>
+      <p>
+          Each raw edge length $\|a\|, \|b\|, \|c\|$ is replaced by a scalar $r(s)$ selected by the runtime <code>reg_mode</code>
+          flag:
+      </p>
 
-    <p class="mb-4">
-        The condition $g'(0) = 0$ is what removes the singularity: without it, the derivative
-        $\mathrm{d}r_a / \mathrm{d}\|a\|$ would be nonzero at the origin, and the gradient of the field
-        would inherit the singular $\|a\|^{-1}$ structure. With $g'(0) = 0$, the regularized length
-        behaves like $\epsilon \cdot (1 + \mathcal{O}(\|a\|^4))$ near the source, and every derivative
-        remains bounded.
-    </p>
+      <div class="overflow-x-auto my-4 border border-slate-200 rounded-md">
+          <table class="min-w-full divide-y divide-slate-200 text-left text-xs">
+              <thead class="bg-slate-100 font-mono text-slate-600">
+                  <tr>
+                      <th class="px-3 py-2">Mode</th>
+                      <th class="px-3 py-2">$r(s)$</th>
+                      <th class="px-3 py-2">Behaviour near $s = 0$</th>
+                  </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-200 font-mono text-slate-700 bg-white">
+                  <tr>
+                      <td class="px-3 py-2 font-sans font-bold text-slate-900">sharp</td>
+                      <td class="px-3 py-2">$s$</td>
+                      <td class="px-3 py-2 font-sans">exact, gradient singular</td>
+                  </tr>
+                  <tr>
+                      <td class="px-3 py-2 font-sans font-bold text-slate-900">plummer</td>
+                      <td class="px-3 py-2">$\sqrt{s^2 + \epsilon^2}$</td>
+                      <td class="px-3 py-2 font-sans">smooth everywhere, linear at $s = 0$</td>
+                  </tr>
+                  <tr>
+                      <td class="px-3 py-2 font-sans font-bold text-slate-900">compact</td>
+                      <td class="px-3 py-2">$\epsilon \, g(s/\epsilon)$</td>
+                      <td class="px-3 py-2 font-sans">identity for $s \ge 2\epsilon$, polynomial below</td>
+                  </tr>
+              </tbody>
+          </table>
+      </div>
 
-    <!-- ================================================================= -->
-    <!-- IMPLICATIONS FOR THE FAST MULTIPOLE                               -->
-    <!-- ================================================================= -->
-    <h5 class="text-sm font-semibold text-slate-700 mt-8 mb-2">Why Compact Support Matters for the Fast Multipole Approximation</h5>
+      <p>
+          The compact profile $g$ is a $C^2$ piecewise polynomial in $t = s/\epsilon$:
+      </p>
+      <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
+          $$g(t) = \begin{cases}
+              1 + A_2 t^2 + A_4 t^4 & t \le 1 \\[2pt]
+              V + S u + C u^2 + D u^3, \quad u = t - 1 & 1 < t \le 2 \\[2pt]
+              t & t > 2
+          \end{cases}$$
+      </div>
+      <p>
+          with the constants $A_2, A_4, V, S, C, D$ fixed so that $g$ and its first two derivatives agree at $t = 1$ and $t = 2$
+          (see <code>geometry.h</code> for the exact values). At $t > 2$ the compact profile reduces to the raw length $s = |a|$
+          exactly, so the modification is invisible for well-separated geometry. At $\epsilon = 0$ both Plummer and Compact fall
+          back to the Sharp variant.
+      </p>
 
-    <p class="mb-4">
-        The choice of <em>compact</em> over Plummer regularization is not cosmetic. The Taylor-series
-        far-field approximation used in the Barnes-Hut traversal (Section 02) is derived from the
-        <strong>unregularized</strong> Green's function. Its convergence rate, its leading-order tensor
-        coefficients, and its error bounds all assume the exact $1/r^3$ kernel structure that the sharp
-        formulation provides. When we replace the sharp kernel with a regularized one, we silently change
-        the function being approximated, and the Taylor expansion is no longer valid wherever the two
-        kernels disagree.
-    </p>
+      <h4 class="text-sm font-bold text-slate-700 tracking-wide uppercase mt-6">Stage 2 — Angular Bump</h4>
+      <p>
+          After edge-length regularization, define the normalized numerator and denominator
+      </p>
+      <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
+          $$P = \frac{a \cdot (b \times c)}{r_a r_b r_c}, \qquad
+            Q = 1 + \frac{a \cdot b}{r_a r_b} + \frac{a \cdot c}{r_a r_c} + \frac{b \cdot c}{r_b r_c}.$$
+      </div>
+      <p>
+          Far from the triangle these are simply the raw $N/(|a||b||c|)$ and $D/(|a||b||c|)$, and $w_T = \frac{1}{2\pi}\mathrm{atan2}(P, Q)$.
+          But on the triangle <b>interior</b>, $P \to 0$ and $Q \to 0$ simultaneously and the arctangent becomes $0/0$.
+          Winder circumvents this by shifting both $P$ and $Q$ by a common scalar $c$ before evaluating the arctangent:
+      </p>
+      <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
+          $$\begin{aligned}
+              u &= \frac{P^2 + Q^2}{\epsilon^2} \\[2pt]
+              \mathsf{bump}(u) &= 1 - t^2 (3 - 2t), \qquad t = \mathrm{clamp}\!\left(\tfrac{4}{3}\bigl(u - \tfrac{1}{4}\bigr),\, 0,\, 1\right) \\[2pt]
+              c &= \frac{\epsilon}{\sqrt{2}} \, \mathsf{bump}(u) \\[2pt]
+              w_T(x) &= \frac{1}{2\pi} \, \mathrm{atan2}\!\bigl(P + c, \; Q + c\bigr).
+          \end{aligned}$$
+      </div>
+      <p>
+          The bump profile satisfies $\mathsf{bump}(u) = 1$ for $u \le 1/4$, falls to zero over $u \in [1/4, 1]$, and is exactly zero
+          for $u \ge 1$. The behaviour of the shift is therefore:
+      </p>
+      <ul class="list-disc list-inside space-y-2 text-sm text-slate-600 pl-2 my-4">
+          <li>
+              <strong>Far from the singularity</strong> ($P^2 + Q^2 > \epsilon^2$): $c = 0$ and $w_T$ recovers the raw
+              Van Oosterom–Strackee value exactly.
+          </li>
+          <li>
+              <strong>Very close to the singularity</strong> ($P^2 + Q^2 < \epsilon^2/4$): $c = \epsilon/\sqrt{2}$ and the pair
+              $(P, Q)$ is displaced off the origin. In particular,
+              $(P+c)^2 + (Q+c)^2 \ge \epsilon^2/2$, so the denominator of the gradient is bounded below by a positive constant.
+          </li>
+          <li>
+              <strong>In the transition band</strong>: $c$ varies smoothly, so its derivative with respect to $P$ and $Q$ and
+              therefore with respect to the vertex positions is well-defined and finite.
+          </li>
+      </ul>
+      <p>
+          Shifting <em>both</em> $P$ and $Q$ by the same $c$ is essential. If only the numerator were shifted, the argument
+          $(P+c)/Q$ would still diverge as $Q \to 0$; shifting both preserves a bounded ratio along the entire approach to the
+          singularity, and the resulting $w_T$ is continuous (and in fact $C^1$) in the vertex positions.
+      </p>
 
-    <p class="mb-4">
-        With the compact regularizer, this disagreement is contained inside a ball of radius $2\epsilon$
-        around the source: for every offset with $\|a\| \ge 2\epsilon$, the regularized length
-        $r_a = \epsilon \cdot g(\|a\|/\epsilon)$ equals $\|a\|$ exactly, and the regularized kernel
-        is <em>identically</em> the sharp kernel. The far-field Taylor expansion is therefore exactly
-        correct everywhere outside the regularization band.
-    </p>
-
-    <p class="mb-4">
-        With the Plummer regularizer, by contrast, $r_a$ never reaches $\|a\|$: the discrepancy decays only
-        as $\epsilon^2 / \|a\|$, and the Taylor expansion of the regularized kernel is systematically
-        biased relative to the sharp one at every scale. The bias is small for well-separated nodes but
-        cannot be removed by any finite-order expansion, and it compounds as more far-field nodes are
-        accepted during traversal.
-    </p>
-
-    <p class="mb-4">
-        This is why the compact regularizer is the library default, and why the backward-pass opening
-        criterion takes the specific form:
-    </p>
-
-    <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
-        $$\text{approximate} \iff \|q - \tilde{p}\| > \max\!\left(R + 2\epsilon, \; (1+\beta)R\right)$$
-    </div>
-
-    <p class="mb-4">
-        The $R + 2\epsilon$ term has a direct geometric reading: the Taylor expansion is only valid when
-        the entire node — including its $R$-radius ball of queries — lies strictly outside the
-        regularization band of width $2\epsilon$ surrounding the source. Inside that band the compact
-        kernel and the sharp kernel are <em>different functions</em>, and no finite-order Taylor expansion
-        can reconcile them.
-    </p>
-
-    <p class="mb-4">
-        For the sharp kernel ($\epsilon = 0$), the band vanishes and the criterion collapses to the
-        classical Barnes-Hut opening angle $(1+\beta)R$. This is why the sharp mode remains useful for
-        forward-pass work and for well-separated queries, but is not recommended for gradient-based
-        optimization: on the sharp kernel, the backward pass has no way to reject the singular boundary
-        region, and any query that happens to land near a triangle edge or vertex will produce an
-        unbounded adjoint. The regularized kernels are the mechanism that makes the differentiable
-        winding field numerically stable in practice.
-    </p>
+      <p class="mt-4 p-3 bg-cyan-50/60 rounded-lg border border-cyan-200/80 text-sm text-slate-700">
+          <strong>Summary of the forward pass for one triangle.</strong>
+          Given the query $x$, the vertices $v_0, v_1, v_2$ and the regularization parameters $(\epsilon, \texttt{reg_mode})$,
+          the forward function is evaluated as: (1) form $a, b, c$; (2) regularize each edge length via $r(\cdot)$;
+          (3) compute $P$ and $Q$ from the regularized lengths; (4) shift both by $c$; (5) return
+          $\frac{1}{2\pi}\mathrm{atan2}(P+c,\, Q+c)$. This composition is $C^1$ in $v_0, v_1, v_2$ and in $\epsilon$ across
+          all of $\mathbb{R}^3$, and it is the object that Section 5.2 differentiates.
+      </p>
     </div>
 </section>
 
@@ -779,8 +691,8 @@
                             primitives, <strong>every single geometry element contributes to the continuous field.</strong>
                         </p>
                         <p>
-                            Unlike Signed Distance Fields (SDFs) or discrete voxel grids-which suffer from localized clipping, sharp gradient discontinuities, or zero-gradient dead
-                            zones-the winding number landscape provides an uninterrupted, infinitely smooth gradient flow. This is a direct
+                            Unlike Signed Distance Fields (SDFs) or discrete voxel grids—which suffer from localized clipping, sharp gradient discontinuities, or zero-gradient dead
+                            zones—the winding number landscape provides an uninterrupted, infinitely smooth gradient flow. This is a direct
                             consequence of its <strong>harmonic nature</strong> away from boundaries: Because the field satisfies $\nabla^2
                             \mathcal{W} = 0$, it is structurally barred from forming localized coordinate traps, local maxima, or local minima in
                             empty space.
@@ -837,7 +749,7 @@
                             any arbitrary optimization routine involving winding number fields at real-world scale.
                         </p>
                         <p>
-                            By supporting full, simultaneous analytical gradients for point positions, area-scaled normals, and triangle vertices, <code>Winder</code> fully exposes the continuous landscape of the winding field to modern gradient-based solvers.
+                            By supporting full, simultaneous analytical gradients for point positions, area-scaled normals, and triangle vertices, <code>Winder</code> fully exposes the continuous landscape of the winding field to modern gradient-based solvers. 
                         </p>
                         <p>
                             Instead of relying on slow CPU trees or crushing dense matrix solvers, <code>Winder</code> computes these complex
@@ -948,7 +860,7 @@
 
                     <li><strong>float16 Far-Field Math:</strong> All calculations in the far-field are done in the
                       <code>float16</code> loating-point format or <code>bfloat16</code> for the second order Taylor contributions, leading to
-                      high computational throughput thanks to
+                      high computational throughput thanks to 
                       <a href="https://docs.nvidia.com/cuda/cuda-math-api/cuda_math_api/group__CUDA__MATH____HALF2__ARITHMETIC.html"
                         target="_blank" class="text-cyan-600 font-medium hover:underline"><code>Half2 Arithmetic Functions</code></a> and
                       <a href="https://docs.nvidia.com/cuda/cuda-math-api/cuda_math_api/group__CUDA__MATH____BFLOAT162__ARITHMETIC.html"
@@ -1019,8 +931,8 @@
                   See <a href="#RegularizationModifier" class="text-cyan-600 font-medium hover:underline"> here</a> for a reminder
                   on the regularization modifier $S(t)$.
               </p>
-
-
+              
+              
               <div class="my-4 bg-slate-50 p-4 rounded-lg border border-slate-200 text-sm space-y-4">
                   <div>
                       <span class="text-xs font-mono text-slate-500 block">Regularized Green's Function Gradient ($\nabla G_\epsilon \in \mathbb{R}^3$):</span>
@@ -1331,374 +1243,437 @@
         </div>
     </div>
 </div>
-<!-- ================================================================= -->
-<!-- SUBSECTION 5.2 (REVISED): REGULARIZED TRIANGLE GRADIENTS           -->
-<!-- ================================================================= -->
-<div class="mb-10">
+<div class="mb-10">
     <h3 class="text-xl font-bold text-slate-900 mb-4 pb-2 border-b border-slate-100 flex items-center gap-2">
-        <span class="text-slate-400">5.2</span> Triangle Mesh Primitives &mdash; Regularized Analytical Gradients
+        <span class="text-slate-400">5.2</span> Triangle Mesh Primitives (Analytic Vertex &amp; ε Gradient)
     </h3>
 
-    <p class="text-slate-700 leading-relaxed mb-6">
-        The exact (unregularized) vertex gradient of the Van&nbsp;Oosterom–Strackee solid angle is discontinuous
-        wherever the query crosses the triangle's interior, edges, or vertices: the denominator
-        $N^2 + D^2$ vanishes quadratically while the numerator vanishes only linearly, producing a
-        $1/\delta$ divergence in the adjoint as the perpendicular distance $\delta$ to the surface
-        goes to zero. A gradient-based optimizer that samples any query on or near a primitive will
-        therefore see an unbounded gradient. The library resolves this by <em>regularizing both the
-        edge lengths and the solid-angle kernel itself</em>, and the backward pass shown below is the
-        exact analytical gradient of that regularized forward pass.
-    </p>
+      <p class="text-slate-700 leading-relaxed mb-6">
+          The forward pass from Section 1 defines a fully regularized winding contribution $w_T(x)$ that is $C^1$ in the vertex
+          positions $v_0, v_1, v_2$ and in the regularization length $\epsilon$. The gradient derived in this section is
+          obtained by applying the chain rule to <em>that</em> composition. In particular, no additional regularization is
+          introduced here: the edge-length profile $r(\cdot)$ and the angular bump $\mathsf{bump}(\cdot)$ have already been
+          folded into the forward pass, and this section simply tracks how they propagate into the derivative.
+      </p>
 
-    <!-- ------------------------------------------------------------ -->
-    <!-- 5.2.1 SETUP AND REGULARIZED FORWARD PASS                     -->
-    <!-- ------------------------------------------------------------ -->
-    <h4 class="text-lg font-semibold text-slate-900 mt-6 mb-2">5.2.1 Setup and Regularized Forward Pass</h4>
-    <p class="text-slate-700 leading-relaxed mb-3">
-        For a triangle with vertices $\mathbf{v}_k \in \mathbb{R}^3$ and a query point $\mathbf{q}$, define the
-        offset vectors $\mathbf{a} = \mathbf{v}_0 - \mathbf{q}$, $\mathbf{b} = \mathbf{v}_1 - \mathbf{q}$,
-        $\mathbf{c} = \mathbf{v}_2 - \mathbf{q}$. Two regularizations are applied to the classical
-        formulation:
-    </p>
+      <!-- 5.2.1 -->
+      <div class="mb-8 bg-slate-50 p-5 rounded-lg border border-slate-200/80">
+          <h4 class="text-lg font-semibold text-slate-900 mb-2">5.2.1 Forward Pass Recap</h4>
+          <p class="text-slate-700 text-sm leading-relaxed mb-3">
+              With $a = v_0 - x$, $b = v_1 - x$, $c = v_2 - x$ and the regularized edge lengths
+              $r_a = r(\|a\|)$, $r_b = r(\|b\|)$, $r_c = r(\|c\|)$ the forward function is
+          </p>
+          <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+              $$\begin{aligned}
+                  P &= \frac{a \cdot (b \times c)}{r_a r_b r_c}, &
+                  Q &= 1 + \frac{a \cdot b}{r_a r_b} + \frac{a \cdot c}{r_a r_c} + \frac{b \cdot c}{r_b r_c} \\[4pt]
+                  u &= \frac{P^2 + Q^2}{\epsilon^2}, &
+                  c_\star &= \frac{\epsilon}{\sqrt{2}} \, \mathsf{bump}(u) \\[4pt]
+                  P' &= P + c_\star, &
+                  Q' &= Q + c_\star \\[4pt]
+                  w_T(x) &= \frac{1}{2\pi} \, \mathrm{atan2}\!\bigl(P', \; Q'\bigr). &&
+              \end{aligned}$$
+          </div>
+          <p class="text-slate-700 text-sm leading-relaxed">
+              The regularized edge length $r(\cdot)$ also carries its own derivative with respect to the vertex positions. In the
+              implementation, each evaluator returns a scalar <code>hat_scale</code> such that
+              $\partial r_a / \partial v_0 = a \cdot \texttt{hat_scale}_a$, and the corresponding quantity
+              $\partial r_a / \partial \epsilon = \texttt{dr_deps}_a$. Both are already in the forward context (see
+              <code>RegularizedEdge</code> in <code>geometry.h</code>) and enter the chain below as known quantities.
+          </p>
+      </div>
 
-    <div class="my-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div class="bg-slate-50 p-4 rounded-lg border border-slate-200/80">
-            <span class="text-xs font-bold text-cyan-700 block uppercase tracking-wide mb-2">1. Edge-Length Regularization</span>
-            <p class="text-xs text-slate-600 mb-2">
-                Each raw Euclidean length is replaced by a smooth, bounded regularized length
-                $r_k = \rho(\|\mathbf{v}_k - \mathbf{q}\|)$ that satisfies $\rho(0) = \epsilon$,
-                $\rho'(0) = 0$, and $\rho(t) \to t$ as $t \to \infty$.
-                The regularized length gradient (a vector) is denoted
-                $\boldsymbol{\rho}_k = \partial r_k / \partial \mathbf{v}_k$ and has magnitude $O(\epsilon)$ near the
-                source, eliminating the $1/\delta$ blow-up. Both the Plummer kernel
-                $r = \sqrt{\|\mathbf{a}\|^2 + \epsilon^2}$ and the compact polynomial kernel satisfy this.
-            </p>
-        </div>
-        <div class="bg-slate-50 p-4 rounded-lg border border-slate-200/80">
-            <span class="text-xs font-bold text-cyan-700 block uppercase tracking-wide mb-2">2. Angular Bump Regularization</span>
-            <p class="text-xs text-slate-600 mb-2">
-                The solid-angle expression is a two-argument arctan. Its poles live at the origin
-                $(P, Q) = (0, 0)$ and are what make the gradient unbounded. A smooth radial bump
-                pushes the pole away from the origin by adding a scalar $c$ to both $P$ and $Q$,
-                keeping $(P_{reg}, Q_{reg})$ bounded away from the origin throughout the near-field region.
-            </p>
-        </div>
-    </div>
+      <!-- 5.2.2 -->
+      <div class="mb-8">
+          <h4 class="text-lg font-semibold text-slate-900 mb-2">5.2.2 Chain Rule Skeleton</h4>
+          <p class="text-slate-700 leading-relaxed mb-3">
+              All quantities depend on the query through $a, b, c$ and through the regularization scalars $r_a, r_b, r_c$. It is
+              convenient to collect the two independent pieces of the derivative as follows. For any variable $\xi$
+              (standing for either a vertex coordinate or $\epsilon$),
+          </p>
+          <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+              $$\begin{aligned}
+                  \frac{\partial w_T}{\partial \xi}
+                  &= \frac{1}{2\pi} \cdot
+                     \frac{Q' \, \partial_\xi P' - P' \, \partial_\xi Q'}{(P')^2 + (Q')^2} \\[4pt]
+                  \partial_\xi P' &= \partial_\xi P + \partial_\xi c_\star \\[2pt]
+                  \partial_\xi Q' &= \partial_\xi Q + \partial_\xi c_\star \\[2pt]
+                  \partial_\xi c_\star &= \frac{\sqrt{2}}{\epsilon} \, \mathsf{bump}'(u) \,
+                                          \bigl( P \, \partial_\xi P + Q \, \partial_\xi Q \bigr).
+              \end{aligned}$$
+          </div>
+          <p class="text-slate-700 text-sm leading-relaxed mb-3">
+              The first two identities are the quotient rule for $\mathrm{atan2}$ together with the definition of $P'$, $Q'$.
+              The last identity follows from
+              $\partial_\xi u = 2 (P\,\partial_\xi P + Q\,\partial_\xi Q)/\epsilon^2$ and
+              $\partial_\xi c_\star = (\epsilon/\sqrt{2}) \, \mathsf{bump}'(u) \, \partial_\xi u$.
+          </p>
+          <p class="text-slate-700 text-sm leading-relaxed">
+              Substituting the last identity into the first two collapses the whole expression onto
+              $\partial_\xi P$ and $\partial_\xi Q$ alone:
+          </p>
+          <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+              $$\begin{aligned}
+                  \partial_\xi P' &= \partial_\xi P
+                      + \frac{\sqrt{2}}{\epsilon} \, \mathsf{bump}'(u)
+                        \bigl( P \, \partial_\xi P + Q \, \partial_\xi Q \bigr) \\[4pt]
+                  \partial_\xi Q' &= \partial_\xi Q
+                      + \frac{\sqrt{2}}{\epsilon} \, \mathsf{bump}'(u)
+                        \bigl( P \, \partial_\xi P + Q \, \partial_\xi Q \bigr).
+              \end{aligned}$$
+          </div>
+          <p class="text-slate-700 text-sm leading-relaxed">
+              In the far-field region where $\mathsf{bump}'(u) = 0$ the second term drops out and the formula reverts to the
+              familiar quotient rule of the unregularized case. In the transition band it adds a coherent correction along the
+              direction $(P, Q)$ in the $(P, Q)$-plane, which is exactly what keeps the resulting gradient finite as
+              $(P, Q) \to 0$.
+          </p>
+      </div>
 
-    <p class="text-slate-700 leading-relaxed mt-4 mb-3">
-        With regularized edge lengths we form the fundamental scalars of the forward pass:
-    </p>
+      <!-- 5.2.3 -->
+      <div class="mb-8">
+          <h4 class="text-lg font-semibold text-slate-900 mb-2">5.2.3 Partial Derivatives of $P$ and $Q$</h4>
+          <p class="text-slate-700 leading-relaxed mb-3">
+              It remains to compute $\partial_\xi P$ and $\partial_\xi Q$. There are two sources of dependence on the vertex
+              positions: through the vectors $a, b, c$ themselves, and through the regularized edge lengths $r_a, r_b, r_c$
+              (which themselves depend on $\|a\|, \|b\|, \|c\|$). Using the shorthands
+              $\hat{a} = a \cdot \texttt{hat_scale}_a$, etc., and the abbreviation $\delta_a^\xi = \partial_\xi r_a$ one obtains
+              for $\xi = v_0$ (the other two vertices follow from cyclic permutation of $(a, b, c)$):
+          </p>
+          <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+              $$\begin{aligned}
+                  \partial_{v_0} P &= \frac{1}{r_a r_b r_c}\Bigl[\, b \times c \;-\; P \, r_b r_c \, \hat{a} \,\Bigr] \\[4pt]
+                  \partial_{v_0} Q &= \frac{1}{r_a}\Bigl[\, \frac{b}{r_b} + \frac{c}{r_c}
+                      \;-\; \hat{a} \Bigl( \frac{a\cdot b}{r_a r_b} + \frac{a\cdot c}{r_a r_c} \Bigr) \Bigr].
+              \end{aligned}$$
+          </div>
+          <p class="text-slate-700 text-sm leading-relaxed">
+              The bracketed terms cleanly separate the two contributions: the cross-product / barycentric-like terms are the raw
+              derivatives of $N$ and $D$ that would appear in the unregularized formula, while the $\hat{a}$ terms carry the
+              effect of the edge-length regularization. Setting $r_a = \|a\|$ (the sharp case) reduces these to the classical
+              expressions.
+          </p>
+      </div>
 
-    <div class="my-3 bg-white p-4 rounded border border-slate-200 text-center equation-container">
-        $$\begin{aligned}
-        N &= \mathbf{a} \cdot (\mathbf{b} \times \mathbf{c}) \\
-        D &= r_a r_b r_c + (\mathbf{a} \cdot \mathbf{b}) r_c + (\mathbf{b} \cdot \mathbf{c}) r_a + (\mathbf{c} \cdot \mathbf{a}) r_b \\
-        L &= r_a r_b r_c, \qquad P = \frac{N}{L}, \qquad Q = \frac{D}{L}
-        \end{aligned}$$
-    </div>
+      <!-- 5.2.4 -->
+      <div class="mb-8">
+          <h4 class="text-lg font-semibold text-slate-900 mb-2">5.2.4 Gradient with Respect to the Regularization Length $\epsilon$</h4>
+          <p class="text-slate-700 leading-relaxed mb-3">
+              The regularization length enters the forward pass at two places: through the edge lengths $r_a, r_b, r_c$ (via the
+              derivatives $\texttt{dr_deps}_a$ etc. returned by each edge evaluator), and through the angular bump shift $c_\star$.
+              Applying the chain rule,
+          </p>
+          <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+              $$\begin{aligned}
+                  \partial_\epsilon P &= -\frac{P}{r_a} \, \texttt{dr_deps}_a
+                                       -\frac{P}{r_b} \, \texttt{dr_deps}_b
+                                       -\frac{P}{r_c} \, \texttt{dr_deps}_c \\[4pt]
+                  \partial_\epsilon Q &= -\frac{a\cdot b}{r_a r_b}\Bigl(\frac{\texttt{dr_deps}_a}{r_a} + \frac{\texttt{dr_deps}_b}{r_b}\Bigr)
+                                       -\frac{a\cdot c}{r_a r_c}\Bigl(\frac{\texttt{dr_deps}_a}{r_a} + \frac{\texttt{dr_deps}_c}{r_c}\Bigr) \\
+                                      &\quad -\frac{b\cdot c}{r_b r_c}\Bigl(\frac{\texttt{dr_deps}_b}{r_b} + \frac{\texttt{dr_deps}_c}{r_c}\Bigr).
+              \end{aligned}$$
+          </div>
+          <p class="text-slate-700 text-sm leading-relaxed mb-3">
+              The shift $c_\star$ itself depends on $\epsilon$ in two ways: explicitly through the prefactor
+              $\epsilon/\sqrt{2}$, and implicitly through $u = (P^2 + Q^2)/\epsilon^2$. Combining:
+          </p>
+          <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+              $$\partial_\epsilon c_\star = \frac{1}{\sqrt{2}}\,\mathsf{bump}(u)
+                  + \frac{\epsilon}{\sqrt{2}}\,\mathsf{bump}'(u)\,\partial_\epsilon u,
+                  \quad\text{with}\quad
+                  \partial_\epsilon u = -\frac{2 u}{\epsilon}
+                  + \frac{2(P\,\partial_\epsilon P + Q\,\partial_\epsilon Q)}{\epsilon^2}.$$
+          </div>
+          <p class="text-slate-700 text-sm leading-relaxed">
+              Plugging $\partial_\epsilon P$, $\partial_\epsilon Q$ and $\partial_\epsilon c_\star$ into the chain rule of
+              Section 5.2.2 yields $\partial w_T / \partial \epsilon$. The sharp case returns $0$ trivially (no $\epsilon$
+              dependence), which is the correct behaviour for the unregularized kernel.
+          </p>
+      </div>
 
-    <p class="text-slate-700 leading-relaxed my-3">
-        The angular bump is defined via the non-dimensional radial coordinate
-        $u = (P^2 + Q^2)/\epsilon^2$ and the smoothstep activation
-        $w(u) = 1 - t^2(3 - 2t)$ with $t = \operatorname{clamp}((u - \tfrac14)\tfrac43,\, 0,\, 1)$:
-    </p>
+      <!-- 5.2.5 -->
+      <div class="bg-cyan-50/60 p-5 rounded-lg border border-cyan-200/80">
+          <h4 class="text-lg font-semibold text-cyan-950 mb-2">5.2.5 Assembly and Final Form</h4>
+          <p class="text-slate-700 text-sm leading-relaxed mb-3">
+              Combining the pieces gives the closed-form vertex gradient
+          </p>
+          <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+              $$\frac{\partial w_T}{\partial v_k}
+                  = \frac{1}{2\pi}\,\frac{Q' \, \partial_{v_k} P' - P' \, \partial_{v_k} Q'}{(P')^2 + (Q')^2},
+                  \qquad k \in \{0, 1, 2\}$$
+          </div>
+          <p class="text-slate-700 text-sm leading-relaxed mb-3">
+              with $\partial_{v_k} P'$ and $\partial_{v_k} Q'$ expanded as in Sections 5.2.2 – 5.2.3. The gradient with respect
+              to the regularization length is
+          </p>
+          <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+              $$\frac{\partial w_T}{\partial \epsilon}
+                  = \frac{1}{2\pi}\,\frac{Q' \, \partial_\epsilon P' - P' \, \partial_\epsilon Q'}{(P')^2 + (Q')^2},$$
+          </div>
+          <p class="text-slate-700 text-sm leading-relaxed">
+              assembled from Section 5.2.4. Both expressions are finite everywhere. In the far field they reduce to the raw
+              Van Oosterom–Strackee derivatives; near the triangle they are smoothed by the edge-length profile $r(\cdot)$
+              (which keeps the $a, b, c$ prefactors bounded) and by the angular bump (which keeps the denominator
+              $(P')^2 + (Q')^2$ bounded below by $\epsilon^2/2$). No additional regularization is required on the backward pass:
+              every singular configuration was already removed by the forward modification documented in Section 1.
+          </p>
+      </div>
+  </div>
+      <!-- ================================================================= -->
+      <!-- SUBSECTION 5.3: QUERY GRADIENTS                                   -->
+      <!-- ================================================================= -->
+      <div class="mb-10">
+          <h3 class="text-xl font-bold text-slate-900 mb-4 pb-2 border-b border-slate-100 flex items-center gap-2">
+              <span class="text-slate-400">5.3</span> Query Gradients (Spatial Derivatives of the Winding Field)
+          </h3>
 
-    <div class="my-3 bg-white p-4 rounded border border-slate-200 text-center equation-container">
-        $$c = \frac{\epsilon}{\sqrt{2}} \, w(u), \qquad
-        P_{\text{reg}} = P + c, \qquad
-        Q_{\text{reg}} = Q + c$$
-    </div>
+          <div class="prose prose-slate max-w-none text-slate-700 leading-relaxed space-y-4 mb-6">
+              <p>
+                  Sections 5.1 and 5.2 covered the derivatives of the loss with respect to the <em>source geometry</em>
+                  (point positions, scaled normals, and triangle vertices). The third and final set of derivatives that the
+                  backward pass exposes is the derivative with respect to the <strong>query positions</strong> $x_j$
+                  themselves — i.e. the Jacobian of the winding field
+              </p>
+              <div class="my-3 bg-slate-50 p-3 rounded border border-slate-200 text-center equation-container">
+                  $$\mathbf{J}_{\mathcal{W}}(x) = \nabla_x \mathcal{W}(x) \in \mathbb{R}^3, \qquad
+                    \frac{\partial \mathcal{L}}{\partial x_j} = g_j \, \sum_i \nabla_x w_i(x_j),$$
+              </div>
+              <p>
+                  where $g_j = \partial \mathcal{L} / \partial \mathcal{W}(x_j)$ is the incoming scalar adjoint at query $j$,
+                  and the sum runs over all source primitives $i$. Because $\mathcal{W}$ is harmonic away from the source
+                  geometry, $\mathbf{J}_{\mathcal{W}}$ is a smooth vector field everywhere except exactly on the primitives:
+                  it points roughly along the local surface normal near the boundary, and decays like $\mathcal{O}(1/R^3)$
+                  far from the geometry.
+              </p>
 
-    <p class="text-slate-700 leading-relaxed my-3">
-        The regularized winding number is then
-        $w_T = \frac{1}{2\pi} \operatorname{atan2}(P_{\text{reg}}, Q_{\text{reg}})$.
-        Because $c$ is comparable in magnitude to $P$ and $Q$ whenever they are small, the pair
-        $(P_{\text{reg}}, Q_{\text{reg}})$ never approaches the atan2 pole for any finite query
-        position, and every derivative of $w_T$ remains bounded.
-    </p>
+              <h4 class="text-sm font-bold uppercase tracking-wider text-slate-700 mt-4 mb-2">Why Differentiate with Respect to the Queries?</h4>
+              <p>
+                  Differentiating through the query positions is useful in any pipeline where the queries are
+                  <strong>free variables that need to be moved</strong> rather than fixed sample locations. Important
+                  examples are:
+              </p>
+              <ul class="list-disc list-inside space-y-2 text-sm text-slate-600 pl-2">
+                  <li>
+                      <strong>Trainable query points.</strong> In neural pipelines where a network predicts query positions
+                      (e.g. predicted surface points inside an implicit network, or learned particles in a point-cloud
+                      network), the loss has to flow through the queries back into the network.
+                  </li>
+                  <li>
+                      <strong>Camera / sensor pose optimization.</strong> In inverse rendering with a winding field as an
+                      implicit shape, differentiable queries correspond to differentiable sample rays or differentiable
+                      cameras. Optimizing the sensor pose is exactly moving the query points.
+                  </li>
+                  <li>
+                      <strong>Surface extraction &amp; reparameterization.</strong> For queries close to the iso-surface,
+                      $\nabla_x \mathcal{W}$ is approximately normal to the surface, giving a cheap estimate of the surface
+                      normal at any point in space. This is useful for ray marching, Newton-type surface projection, and
+                      normal-consistent mesh extraction from a winding field.
+                  </li>
+                  <li>
+                      <strong>Point cloud registration.</strong> Aligning an observed point set to a winding-field implicit
+                      surface is optimization over the query points, which again requires
+                      $\partial \mathcal{L} / \partial x_j$.
+                  </li>
+                  <li>
+                      <strong>Physical simulation &amp; collision.</strong> Enforcing non-penetration for simulation particles
+                      against a winding-field surface is a constraint on the particle positions — enforcing it with a Newton
+                      step requires the field Jacobian evaluated at those positions.
+                  </li>
+              </ul>
+          </div>
 
-    <!-- ------------------------------------------------------------ -->
-    <!-- 5.2.2 BACKWARD DERIVATION                                    -->
-    <!-- ------------------------------------------------------------ -->
-    <h4 class="text-lg font-semibold text-slate-900 mt-6 mb-2">5.2.2 Backward Derivation: Chain Rule Through the Regularized Composition</h4>
+          <!-- 5.3.1 -->
+          <div class="mb-8 bg-slate-50 p-5 rounded-lg border border-slate-200/80">
+              <h4 class="text-lg font-semibold text-slate-900 mb-2">5.3.1 Structural Relationship to Primitive Gradients</h4>
+              <p class="text-slate-700 text-sm leading-relaxed mb-3">
+                  Unlike the primitive gradients of Sections 5.1 and 5.2, the query gradient is <em>not a new kernel</em>:
+                  at the per-primitive level it is the negative of the corresponding primitive gradient. This follows from the
+                  fact that the winding field of primitive $i$ depends on $x$ and on the primitive parameters only through
+                  relative displacements.
+              </p>
+              <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                  $$\begin{aligned}
+                      \text{Point-normal:} \quad & \nabla_x w_i(x) = -\,\nabla_{p_i} w_i(x) \\[4pt]
+                      \text{Triangle:} \quad & \nabla_x w_T(x) = -\,\partial_{v_0} w_T - \partial_{v_1} w_T - \partial_{v_2} w_T
+                  \end{aligned}$$
+              </div>
+              <p class="text-slate-700 text-sm leading-relaxed">
+                  The triangle identity is a direct consequence of translation invariance: $w_T$ depends only on the
+                  differences $v_0 - x$, $v_1 - x$, $v_2 - x$, so its four gradients with respect to
+                  $x, v_0, v_1, v_2$ sum to zero.
+                  <strong>Importantly</strong>, the loss-level gradients $\partial \mathcal{L} / \partial p_i$ and
+                  $\partial \mathcal{L} / \partial x_j$ are <em>not</em> simple negatives of each other, because the loss sums
+                  over $j$ in the first case and over $i$ in the second. Both gradients have to be evaluated independently.
+                  That is why Winder exposes both a primitive-side pass
+                  (<code>brute_force_gradients_*</code>, <code>GradientEngine</code>) and a query-side pass
+                  (<code>brute_force_query_gradients_*</code>, <code>WindingNumberEngine.compute_query_gradients</code>).
+              </p>
+          </div>
 
-    <p class="text-slate-700 leading-relaxed mb-3">
-        Fix a vertex index $k \in \{0, 1, 2\}$ and denote by $g$ the incoming scalar adjoint at the query.
-        The gradient of the loss contribution w.r.t. $\mathbf{v}_k$ is $g$ times the derivative of $w_T$.
-        Three nested chain-rule steps produce the final form.
-    </p>
+          <!-- 5.3.2 -->
+          <div class="mb-8">
+              <h4 class="text-lg font-semibold text-slate-900 mb-2">5.3.2 Point-Normal Primitives</h4>
+              <p class="text-slate-700 leading-relaxed mb-3">
+                  For a single point-normal primitive with position $p$, scaled normal $m$, and query $x$, write
+                  $r = p - x$, $R = \|r\|$, $\hat{r} = r/R$, and $t = R/\epsilon$. The regularized field is
+              </p>
+              <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                  $$w_i(x) = \frac{m \cdot \hat{r}}{4\pi R^2} \, S(t).$$
+              </div>
+              <p class="text-slate-700 leading-relaxed mb-2">
+                  <em>Unregularized term.</em> Differentiating the free-space kernel
+                  $w_i^0 = (m \cdot \hat{r})/(4\pi R^2)$ yields
+              </p>
+              <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                  $$\nabla_x w_i^0 = \frac{3 (m \cdot \hat{r}) \hat{r} - m}{4\pi R^3}.$$
+              </div>
+              <p class="text-slate-700 leading-relaxed mb-2">
+                  <em>Regularization term.</em> Because $t = R/\epsilon$ and $\nabla_x R = -\hat{r}$, we have
+                  $\nabla_x S(t) = -S'(t)\,\hat{r}/\epsilon$, so
+              </p>
+              <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                  $$w_i^0 \, \nabla_x S(t) = -\,\frac{(m \cdot \hat{r})\,S'(t)}{4\pi R^2 \epsilon} \, \hat{r}.$$
+              </div>
+              <p class="text-slate-700 leading-relaxed mb-2">
+                  Combining both contributions via the product rule
+                  $\nabla_x w_i = S(t)\,\nabla_x w_i^0 + w_i^0\,\nabla_x S(t)$ gives the regularized query gradient
+              </p>
+              <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                  $$\nabla_x w_i
+                    = S(t) \, \frac{3 (m \cdot \hat{r}) \hat{r} - m}{4\pi R^3}
+                    \;-\; \frac{(m \cdot \hat{r})\,S'(t)}{4\pi R^2 \epsilon} \, \hat{r}.$$
+              </div>
+              <p class="text-slate-700 text-sm leading-relaxed">
+                  In the far field ($t \ge 2$), $S'(t) = 0$ and $S(t) = 1$, so only the first term survives and the kernel
+                  reduces to the exact free-space dipole gradient. In the near field, the second term cancels the leading
+                  radial singularity of the first term and keeps $\nabla_x w_i$ bounded as $R \to 0$. This is the exact kernel
+                  evaluated by <code>compute_brute_force_query_gradients_point_normals</code>.
+              </p>
+          </div>
 
-    <p class="text-slate-700 leading-relaxed mt-4 mb-2">
-        <strong>Step 1 &mdash; Differentiate atan2.</strong>
-    </p>
-    <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-        $$\frac{\partial w_T}{\partial \mathbf{v}_k} = \frac{1}{2\pi D_{\text{reg}}}
-        \left( Q_{\text{reg}} \frac{\partial P_{\text{reg}}}{\partial \mathbf{v}_k}
-             - P_{\text{reg}} \frac{\partial Q_{\text{reg}}}{\partial \mathbf{v}_k} \right),
-        \qquad D_{\text{reg}} = P_{\text{reg}}^2 + Q_{\text{reg}}^2$$
-    </div>
+          <!-- 5.3.3 -->
+          <div class="mb-8">
+              <h4 class="text-lg font-semibold text-slate-900 mb-2">5.3.3 Triangle Primitives</h4>
+              <p class="text-slate-700 leading-relaxed mb-3">
+                  For triangle soups, the query gradient follows directly from the translation identity above:
+              </p>
+              <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                  $$\nabla_x w_T(x)
+                    = -\,\partial_{v_0} w_T - \partial_{v_1} w_T - \partial_{v_2} w_T,$$
+              </div>
+              <p class="text-slate-700 leading-relaxed mb-3">
+                  with the three vertex gradients taken directly from Section 5.2.5. This is exactly what
+                  <code>compute_brute_force_query_gradients_triangles</code> computes: it evaluates the three regularized
+                  vertex gradients, sums them, negates the sum, and applies the scalar adjoint $g_j$ once at the end.
+                  Because it uses the <em>regularized</em> vertex gradients (edge-length profile $r(\cdot)$ and angular bump
+                  $c_\star$), the resulting $\nabla_x w_T$ inherits the same smoothness properties as the primitive gradient
+                  and stays finite even for queries on the triangle interior, edge, or vertex.
+              </p>
+              <p class="text-slate-700 text-sm leading-relaxed">
+                  The sum $\partial_{v_0} + \partial_{v_1} + \partial_{v_2}$ has a physical interpretation: it is the net
+                  force that the triangle exerts on a particle located at $x$ if the winding number is interpreted as a
+                  potential energy. For a closed, watertight surface this net force vanishes identically; for open or broken
+                  surfaces it measures the local imbalance of the enclosing geometry — which is precisely what makes Winder
+                  differentiable through non-manifold geometry without divergence.
+              </p>
+          </div>
 
-    <p class="text-slate-700 leading-relaxed mt-4 mb-2">
-        <strong>Step 2 &mdash; Differentiate through the angular bump.</strong>
-        Because $c$ depends on both $P$ and $Q$ via $u$, its directional derivative is
-        $\partial c/\partial \mathbf{v}_k = \alpha (P \, \partial P/\partial \mathbf{v}_k + Q \, \partial Q/\partial \mathbf{v}_k)$,
-        where the scalar
-    </p>
-    <div class="my-2 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-        $$\alpha = \frac{\sqrt{2}}{\epsilon} \, w'(u)$$
-    </div>
-    <p class="text-slate-700 leading-relaxed my-2">
-        collects the chain-rule derivative of the smoothstep. Substituting
-        $\partial P_{\text{reg}}/\partial \mathbf{v}_k = (1 + \alpha P) \partial P/\partial \mathbf{v}_k + \alpha Q \partial Q/\partial \mathbf{v}_k$ (and the analogous expression for $Q_{\text{reg}}$) into Step&nbsp;1 and collecting coefficients produces two scalar prefactors:
-    </p>
-    <div class="my-3 bg-white p-4 rounded border border-slate-200 text-center equation-container">
-        $$A = Q_{\text{reg}} + \alpha \, P \, (Q - P), \qquad
-        B = -P_{\text{reg}} + \alpha \, Q \, (Q - P)$$
-    </div>
-    <p class="text-xs text-slate-500 italic mb-3">
-        where we used the identity $Q_{\text{reg}} - P_{\text{reg}} = Q - P$. This is the point at which
-        the bump regularization leaves its footprint: the classical formula has $A = Q$ and $B = -P$; the
-        bump adds the $\alpha$-weighted corrections.
-    </p>
+          <!-- 5.3.4 -->
+          <div class="mb-8">
+              <h4 class="text-lg font-semibold text-slate-900 mb-2">5.3.4 Query Gradients of the Taylor Approximation</h4>
+              <p class="text-slate-700 leading-relaxed mb-3">
+                  Just as in the primitive gradient pass, the query gradient pass exploits the BVH8 hierarchy to replace
+                  whole subtrees by Taylor expansions. The forward approximation of a node at center of mass $\tilde{p}$
+                  with stored coefficients $\mathbf{c}_0, \mathbf{c}_1, \mathbf{c}_2$ is
+              </p>
+              <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                  $$\tilde{w}_{\text{node}}(x) = \mathbf{c}_0 \cdot \nabla G(x, \tilde{p})
+                    + \mathbf{c}_1 : \nabla^2 G(x, \tilde{p})
+                    + \frac{1}{2} \, \mathbf{c}_2 ::: \nabla^3 G(x, \tilde{p}),$$
+              </div>
+              <p class="text-slate-700 leading-relaxed mb-3">
+                  with the fundamental solution $G(x, \tilde{p}) = 1/(4\pi \|r\|)$ and $r = \tilde{p} - x$, $R = \|r\|$,
+                  $\hat{r} = r/R$. The query gradient is the gradient of this expression with respect to $x$. Because
+                  every $\nabla^k G$ is itself a function of $r$ (and therefore of $x$), each order shifts by one derivative:
+              </p>
+              <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                  $$\nabla_x \tilde{w}_{\text{node}}(x)
+                    = \mathbf{c}_0 \cdot \nabla^2 G(x, \tilde{p})
+                    + \mathbf{c}_1 : \nabla^3 G(x, \tilde{p})
+                    + \frac{1}{2} \, \mathbf{c}_2 ::: \nabla^4 G(x, \tilde{p}).$$
+              </div>
+              <p class="text-slate-700 leading-relaxed mb-3">
+                  Concretely, the three orders evaluate as follows — these are the expressions implemented in
+                  <code>compute_node_query_grad_approximation</code> on the GPU.
+              </p>
 
-    <p class="text-slate-700 leading-relaxed mt-4 mb-2">
-        <strong>Step 3 &mdash; Differentiate through the edge-length regularization.</strong>
-        Write $P = N/L$ and $Q = D/L$, and observe that both $L$ and $D$ depend on $\mathbf{v}_k$ through
-        the regularized length $r_k$. Using $\partial L/\partial \mathbf{v}_k = (L / r_k) \boldsymbol{\rho}_k$:
-    </p>
-    <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-        $$\begin{aligned}
-        \frac{\partial P}{\partial \mathbf{v}_k} &= \frac{1}{L} \frac{\partial N}{\partial \mathbf{v}_k} - \frac{P}{r_k} \boldsymbol{\rho}_k \\[4pt]
-        \frac{\partial Q}{\partial \mathbf{v}_k} &= \frac{1}{L} \frac{\partial D}{\partial \mathbf{v}_k} - \frac{Q}{r_k} \boldsymbol{\rho}_k
-        \end{aligned}$$
-    </div>
-    <p class="text-slate-700 leading-relaxed my-3">
-        Substituting into $A \, \partial P/\partial \mathbf{v}_k + B \, \partial Q/\partial \mathbf{v}_k$ and
-        collecting the $\boldsymbol{\rho}_k$-proportional terms gives a third scalar coefficient
-    </p>
-    <div class="my-3 bg-white p-4 rounded border border-slate-200 text-center equation-container">
-        $$C = (Q - P) \left[ c - \alpha (P^2 + Q^2) \right]$$
-    </div>
-    <p class="text-slate-700 leading-relaxed my-3">
-        which is exactly the term that is nonzero only when the regularization is active. In the sharp
-        kernel, $c = 0$ and $\alpha = 0$, so $C = 0$; the classical unregularized gradient is recovered.
-    </p>
+              <p class="text-slate-700 leading-relaxed mb-2"><em>Zero-order term.</em> With $\tilde{w}_0 = \mathbf{c}_0 \cdot \hat{r}/(4\pi R^2)$,</p>
+              <div class="my-2 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                  $$\nabla_x \tilde{w}_0 = \frac{3 (\mathbf{c}_0 \cdot \hat{r}) \hat{r} - \mathbf{c}_0}{4\pi R^3}.$$
+              </div>
 
-    <!-- ------------------------------------------------------------ -->
-    <!-- 5.2.3 RAW SPATIAL DERIVATIVES                                -->
-    <!-- ------------------------------------------------------------ -->
-    <h4 class="text-lg font-semibold text-slate-900 mt-6 mb-2">5.2.3 Raw Spatial Derivatives and Regularization Gradients</h4>
+              <p class="text-slate-700 leading-relaxed mb-2 mt-4">
+                  <em>First-order term.</em> Writing $\tilde{w}_1 = [\operatorname{tr}(\mathbf{c}_1) - 3 q_{rr}]/(4\pi R^3)$
+                  with $q_{rr} = \hat{r}^\top \mathbf{c}_1 \hat{r}$ and using
+                  $\nabla_x \hat{r} = (-I + \hat{r}\hat{r}^\top)/R$, one obtains
+              </p>
+              <div class="my-2 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                  $$\nabla_x \tilde{w}_1 = \frac{3}{4\pi R^4} \left[ \left( \operatorname{tr}(\mathbf{c}_1) - 5 q_{rr} \right) \hat{r} + 2 \mathbf{c}_1^{\text{sym}} \hat{r} \right],$$
+              </div>
+              <p class="text-slate-700 text-sm leading-relaxed mb-2">
+                  where $\mathbf{c}_1^{\text{sym}} = (\mathbf{c}_1 + \mathbf{c}_1^\top)/2$. The symmetrization is automatic
+                  from the fact that the forward contraction $\mathbf{c}_1 : (I - 3\hat{r}\hat{r}^\top)$ only picks out the
+                  symmetric part; this is why the kernel in <code>compute_node_query_grad_approximation</code> symmetrizes
+                  $\mathbf{M}_1$ before applying it to $\hat{r}$.
+              </p>
 
-    <p class="text-slate-700 leading-relaxed mb-3">
-        The raw derivatives of $N$ and $D$ w.r.t. each vertex are independent of the regularization and take
-        the classical cyclically-permuted form (using $k \to j \to m$ with $j = (k+1)\bmod 3$,
-        $m = (k+2)\bmod 3$, and letting $(\mathbf{u}, \mathbf{w})$ range over
-        $(\mathbf{b}, \mathbf{c}), (\mathbf{c}, \mathbf{a}), (\mathbf{a}, \mathbf{b})$ for
-        $k = 0, 1, 2$):
-    </p>
+              <p class="text-slate-700 leading-relaxed mb-2 mt-4">
+                  <em>Second-order term.</em> Let $s$ be the scalar field evaluated by the forward contraction,
+              </p>
+              <div class="my-2 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                  $$s = 15 \, (\mathbf{c}_2 ::: \hat{r}^{\otimes 3}) - 6 \, \mathbf{V}_1 \cdot \hat{r} - 3 \, \mathbf{V}_2 \cdot \hat{r},$$
+              </div>
+              <p class="text-slate-700 text-sm leading-relaxed mb-2">
+                  with the two vector traces $\mathbf{V}_1^{(l)} = \sum_j c_{2,ljj}$ and
+                  $\mathbf{V}_2^{(k)} = \sum_i c_{2,iik}$, so that $\tilde{w}_2 = s/(4\pi R^4)$. The gradient of the cubic
+                  polynomial with respect to the <em>direction</em> $\hat{r}$ is a vector with components
+              </p>
+              <div class="my-2 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                  $$u_l = 15 \bigl(2 A_l + C_l\bigr) - 6 \, \mathbf{V}_1^{(l)} - 3 \, \mathbf{V}_2^{(l)},
+                    \qquad
+                    A_l = \sum_{jk} c_{2,ljk} \hat{r}_j \hat{r}_k,
+                    \qquad
+                    C_l = \sum_{ij} c_{2,ijl} \hat{r}_i \hat{r}_j.$$
+              </div>
+              <p class="text-slate-700 text-sm leading-relaxed mb-2">
+                  The two quadratic forms $A_l$ and $C_l$ appear because $\mathbf{c}_2$ is only symmetric in its first two
+                  indices, so the three partial contributions of the cubic do not collapse into a single symmetric
+                  contraction. Combining $\mathbf{u}$ with the $R^{-4}$ scaling factor yields
+              </p>
+              <div class="my-2 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                  $$\nabla_x \tilde{w}_2
+                    = \frac{- \mathbf{u} + \bigl(\mathbf{u} \cdot \hat{r} + 4 s\bigr) \hat{r}}{4\pi R^5}.$$
+              </div>
 
-    <div class="overflow-x-auto my-3 border border-slate-200 rounded-md">
-        <table class="min-w-full divide-y divide-slate-200 text-left text-xs">
-            <thead class="bg-slate-100 font-mono text-slate-600">
-                <tr>
-                    <th class="px-3 py-2 w-24">Vertex</th>
-                    <th class="px-3 py-2">$\partial N / \partial \mathbf{v}_k$</th>
-                    <th class="px-3 py-2">$\partial D / \partial \mathbf{v}_k$</th>
-                    <th class="px-3 py-2">$\boldsymbol{\rho}_k = \partial r_k / \partial \mathbf{v}_k$</th>
-                </tr>
-            </thead>
-            <tbody class="divide-y divide-slate-200 font-mono text-slate-700 bg-white">
-                <tr>
-                    <td class="px-3 py-2 font-bold font-sans text-slate-900">$\mathbf{v}_0$</td>
-                    <td class="px-3 py-2">$\mathbf{b} \times \mathbf{c}$</td>
-                    <td class="px-3 py-2">$\boldsymbol{\rho}_a (r_b r_c + \mathbf{b} \cdot \mathbf{c}) + r_c \mathbf{b} + r_b \mathbf{c}$</td>
-                    <td class="px-3 py-2">$\mathbf{a} \cdot \rho'(|\mathbf{a}|)/|\mathbf{a}|$</td>
-                </tr>
-                <tr>
-                    <td class="px-3 py-2 font-bold font-sans text-slate-900">$\mathbf{v}_1$</td>
-                    <td class="px-3 py-2">$\mathbf{c} \times \mathbf{a}$</td>
-                    <td class="px-3 py-2">$\boldsymbol{\rho}_b (r_c r_a + \mathbf{c} \cdot \mathbf{a}) + r_a \mathbf{c} + r_c \mathbf{a}$</td>
-                    <td class="px-3 py-2">$\mathbf{b} \cdot \rho'(|\mathbf{b}|)/|\mathbf{b}|$</td>
-                </tr>
-                <tr>
-                    <td class="px-3 py-2 font-bold font-sans text-slate-900">$\mathbf{v}_2$</td>
-                    <td class="px-3 py-2">$\mathbf{a} \times \mathbf{b}$</td>
-                    <td class="px-3 py-2">$\boldsymbol{\rho}_c (r_a r_b + \mathbf{a} \cdot \mathbf{b}) + r_b \mathbf{a} + r_a \mathbf{b}$</td>
-                    <td class="px-3 py-2">$\mathbf{c} \cdot \rho'(|\mathbf{c}|)/|\mathbf{c}|$</td>
-                </tr>
-            </tbody>
-        </table>
-    </div>
-
-    <p class="text-slate-700 leading-relaxed my-2">
-        For the compact kernel, the radial derivative $\rho'(t)$ is the closed-form slope of the piecewise
-        polynomial:
-    </p>
-    <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-        $$\rho'(t) = \begin{cases}
-            2 A_2 \, t + 4 A_4 \, t^3 & t \in [0, 1] \\
-            \dfrac{S + 2C u + 3D u^2}{t} & t \in [1, 2], \quad u = t - 1 \\
-            1 & t \ge 2
-        \end{cases}$$
-    </div>
-    <p class="text-xs text-slate-500 italic mb-3">
-        The $1/t$ factor in the cubic bridge comes from differentiating $g(t)$ w.r.t. $\mathbf{v}_k$ rather
-        than $t$; the extra $t$ in the denominator cancels the $t$ from $u = t - 1$ and keeps
-        $\boldsymbol{\rho}_k$ finite and $O(1)$ in the free-space limit.
-    </p>
-
-    <!-- ------------------------------------------------------------ -->
-    <!-- 5.2.4 FINAL FORMULA                                          -->
-    <!-- ------------------------------------------------------------ -->
-    <h4 class="text-lg font-semibold text-slate-900 mt-6 mb-2">5.2.4 Complete Regularized Gradient Formula</h4>
-
-    <p class="text-slate-700 leading-relaxed mb-3">
-        Assembling Steps 1–3, the exact analytical gradient of the loss $\mathcal{L}$ w.r.t. triangle vertex
-        $\mathbf{v}_k$ is:
-    </p>
-
-    <div class="my-4 bg-cyan-50/60 p-5 rounded-lg border border-cyan-200/80 text-center equation-container">
-        $$\boxed{
-        \frac{\partial \mathcal{L}}{\partial \mathbf{v}_k}
-        = \frac{g}{2\pi D_{\text{reg}}} \left[
-            A \, L^{-1} \frac{\partial N}{\partial \mathbf{v}_k}
-          + B \, L^{-1} \frac{\partial D}{\partial \mathbf{v}_k}
-          + C \, r_k^{-1} \boldsymbol{\rho}_k
-        \right]}$$
-    </div>
-
-    <p class="text-slate-700 leading-relaxed my-4">
-        with the three scalar coefficients, the regularized denominator, and the angular bump scalar:
-    </p>
-
-    <div class="my-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-        <div class="bg-slate-50 p-3 rounded-lg border border-slate-200">
-            <span class="block text-xs font-mono text-slate-500 mb-1">Bump-weighted coefficients:</span>
-            $$A = Q_{\text{reg}} + \alpha P (Q - P)$$
-            $$B = -P_{\text{reg}} + \alpha Q (Q - P)$$
-        </div>
-        <div class="bg-slate-50 p-3 rounded-lg border border-slate-200">
-            <span class="block text-xs font-mono text-slate-500 mb-1">Regularization correction:</span>
-            $$C = (Q - P)\left[ c - \alpha(P^2 + Q^2) \right]$$
-            $$\alpha = \frac{\sqrt{2}}{\epsilon} w'(u), \qquad u = \frac{P^2 + Q^2}{\epsilon^2}$$
-        </div>
-    </div>
-
-    <p class="text-slate-700 leading-relaxed mt-4">
-        The three summands have distinct geometric roles. The $A$ term carries the raw $\partial N$ dependence;
-        the $B$ term carries the raw $\partial D$ dependence; and the $C$ term collects the entire contribution
-        of the edge-length regularization $\boldsymbol{\rho}_k$ that would not appear in the sharp formulation.
-        The overall $1/(2\pi)$ and $g$ prefactors match the forward-pass normalization.
-    </p>
-
-    <!-- ------------------------------------------------------------ -->
-    <!-- 5.2.5 REDUCTION TO SHARP                                     -->
-    <!-- ------------------------------------------------------------ -->
-    <h4 class="text-lg font-semibold text-slate-900 mt-6 mb-2">5.2.5 Reduction to the Sharp Kernel</h4>
-
-    <p class="text-slate-700 leading-relaxed mb-3">
-        Setting $\epsilon \to 0$ (or choosing <code>RegSharp</code> at compile time) collapses the regularized
-        formula to the classical unregularized case. The bump vanishes ($c = 0$, $\alpha = 0$), so
-        $C = 0$ and $P_{\text{reg}} = P$, $Q_{\text{reg}} = Q$. With the sharp edge evaluators
-        $r_a = \|\mathbf{a}\|$, $\boldsymbol{\rho}_a = \hat{\mathbf{a}}$, and $L = \|\mathbf{a}\|\|\mathbf{b}\|\|\mathbf{c}\|$, the coefficients simplify to
-        $A = Q$ and $B = -P$, and the formula reduces to:
-    </p>
-    <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-        $$\frac{\partial \mathcal{L}}{\partial \mathbf{v}_k}\bigg|_{\text{sharp}}
-        = \frac{g}{2\pi (P^2 + Q^2)} \cdot \frac{1}{L}
-        \left( Q \frac{\partial N}{\partial \mathbf{v}_k} - P \frac{\partial D}{\partial \mathbf{v}_k} \right)$$
-    </div>
-    <p class="text-slate-700 leading-relaxed my-2">
-        which is the classical Van&nbsp;Oosterom–Strackee derivative. In the sharp case, the code additionally
-        guards against the pole at $P^2 + Q^2 = 0$ by returning a zero gradient when
-        $P^2 + Q^2 < 10^{-12}$; this guard is unnecessary in the regularized case because the bump keeps
-        $P_{\text{reg}}^2 + Q_{\text{reg}}^2$ bounded away from zero for every finite query position.
-    </p>
-
-    <!-- ------------------------------------------------------------ -->
-    <!-- 5.2.6 CONNECTION TO OPENING CRITERION                        -->
-    <!-- ------------------------------------------------------------ -->
-    <h4 class="text-lg font-semibold text-slate-900 mt-6 mb-2">5.2.6 Connection to the Far-Field Opening Criterion</h4>
-
-    <p class="text-slate-700 leading-relaxed mb-2">
-        The regularization enters the Barnes–Hut opening criterion through the same geometric band of width
-        $2\epsilon$ around the triangle. Because the compact kernel is identically the sharp kernel for
-        every offset with $r_k \ge 2\epsilon$, the Taylor-series far-field expansion is exact outside that
-        band and only inexact inside it. This is why the criterion takes the piecewise form
-    </p>
-    <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
-        $$\text{approximate} \iff \|\mathbf{q} - \tilde{p}\| > \max\!\left(R + 2\epsilon,\; (1+\beta)R\right)$$
-    </div>
-    <p class="text-slate-700 leading-relaxed my-2">
-        where $R$ is the target node radius and $\tilde{p}$ its center of mass. The $R + 2\epsilon$ branch
-        ensures that the entire node—including the outermost query at distance $R$ from the center—lies
-        strictly outside the regularization band of the source triangle. This term is what makes the
-        far-field Taylor approximation valid as a truncated expansion of the <em>sharp</em> kernel, which
-        is what the cached multipole coefficients encode.
-    </p>
-</div>
-
-<!-- </section> -->
-
-         <section class="bg-slate-900 text-white p-8 rounded-2xl shadow-xl space-y-8">
-            <div>
-                <span class="bg-cyan-500 text-slate-900 text-xs font-bold uppercase tracking-widest px-2.5 py-1 rounded">Architecture Layout</span>
-                <h2 class="text-3xl font-extrabold mt-3 tracking-tight">Engine Pipeline &amp; Features</h2>
-                <p class="text-slate-400 mt-1">High-performance hardware design choices engineered for massive geometric datasets.</p>
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              <a target="_blank" href="https://github.com/keyraphi/winder/blob/1838361a153b0657e03cfdd469c44a9ae8b7d21a/src/cpp/winder_cuda.cu#L224-L263">
-                <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
-                    <div class="text-cyan-400 text-lg mb-2 font-mono">⚡ Morton-Encoded LBVH</div>
-                    <p class="text-sm text-slate-300 leading-relaxed">
-                    Constructs linear bounding hierarchies via 64-bit Morton codes using an ultra-fast radix tree structure mapped entirely
-                    on GPU blocks in <strong>linear time</strong>, bypassing traditional CPU-side tree generation bottlenecks.
-                    </p>
-                </div>
-              </a>
-              <a target="_blank" href="https://github.com/keyraphi/winder/blob/1838361a153b0657e03cfdd469c44a9ae8b7d21a/src/cpp/kernels/binary2bvh8.cu#L26-L231">
-                <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
-                    <div class="text-cyan-400 text-lg mb-2 font-mono">🌿 Wide BVH8 Generation</div>
-                    <p class="text-sm text-slate-300 leading-relaxed">
-                        Collapses binary trees into shallow 8-way Bounding Volume Hierary (BVH8). This flat structure increases coherency and compresses traversal depth during traversal.
-                    </p>
-                </div>
-              </a>
-              <a target="_blank" href="https://github.com/keyraphi/winder/blob/1838361a153b0657e03cfdd469c44a9ae8b7d21a/src/cpp/kernels/bvh8_m2m.cu#L22-L185">
-                <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
-                    <div class="text-cyan-400 text-lg mb-2 font-mono">🌲 Bottom-Up M2M Layers</div>
-                    <p class="text-sm text-slate-300 leading-relaxed">
-                        Extremely efficient propagation of Taylor series coefficients from leaf elements up to the root node via Multipole-to-Multipole translation.
-                    </p>
-                </div>
-              </a>
-              <a target="_blank" href="https://github.com/keyraphi/winder/blob/1838361a153b0657e03cfdd469c44a9ae8b7d21a/src/cpp/tailor_coefficients.h">
-                <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
-                    <div class="text-cyan-400 text-lg mb-2 font-mono">📦 Barnes-Hut scheme for Gradients</div>
-                    <p class="text-sm text-slate-300 leading-relaxed">
-                        Lightning fast BVH8 construction on querys for gradient computation of geometry.
-                    </p>
-                </div>
-              </a>
-              <a target="_blank" href="https://github.com/keyraphi/winder/blob/1838361a153b0657e03cfdd469c44a9ae8b7d21a/src/cpp/kernels/node_approx.cuh">
-                <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
-                    <div class="text-cyan-400 text-lg mb-2 font-mono">🔢 Dual-Precision Tracks</div>
-                    <p class="text-sm text-slate-300 leading-relaxed">
-                    Alternates dynamically between high-speed <code>float16</code> and <code>bfloat16</code> math operations for distant far-field approximations and
-                        detailed <code>float32</code> compute tracks for high-precision in the near-field.
-                    </p>
-                </div>
-              </a>
-              <a target="_blank" href="https://github.com/keyraphi/winder/blob/1838361a153b0657e03cfdd469c44a9ae8b7d21a/src/cpp/kernels/traversal.cu#L62-L288">
-                <div class="bg-slate-800 p-5 rounded-xl border border-slate-700/60 shadow-xs">
-                    <div class="text-cyan-400 text-lg mb-2 font-mono">🤝 Cooperative Kernels</div>
-                    <p class="text-sm text-slate-300 leading-relaxed">
-                        Distributes work evenly across active threads using synchronized shared-memory tracking queues, minimizing warp divergence during hierarchical tree steps.
-                    </p>
-                </div>
-              </a>
-            </div>
+              <p class="text-slate-700 leading-relaxed mt-4">
+                  The full query gradient of a node is the sum of these three terms:
+                  $\nabla_x \tilde{w}_{\text{node}} = \nabla_x \tilde{w}_0 + \nabla_x \tilde{w}_1 + \nabla_x \tilde{w}_2$.
+                  The far-field criterion (the same Barnes–Hut opening criterion used in the forward pass) decides per node
+                  whether this approximation is used or whether the node is descended into. Because the query gradient is a
+                  smoother quantity than the forward field (it has one additional power of $1/R$ decay), the same opening
+                  criterion gives conservative bounds for the query gradient as well.
+              </p>
+              <p class="text-slate-700 text-sm leading-relaxed">
+                  A full query gradient pass therefore has the same shape as the forward pass: each query traverses the
+                  BVH8 hierarchy once, evaluating far-field expansions on every node it meets. The total complexity is again
+                  $\mathcal{O}(M \log N)$ for $M$ queries over $N$ primitives. In contrast to the primitive gradient pass
+                  (which requires the query tree to be built once and re-used across many primitive traversals), the query
+                  gradient pass uses the geometry BVH8 built at engine construction time — which is exactly why
+                  <code>WindingNumberEngine.compute_query_gradients</code> can be called repeatedly with different adjoints
+                  without paying any tree-construction cost.
+              </p>
+          </div>
+      </div>
         </section>
 
 
