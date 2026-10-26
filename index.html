@@ -535,7 +535,7 @@
           singularity, and the resulting $w_T$ is continuous (and in fact $C^1$) in the vertex positions.
       </p>
 
-      <p class="mt-4 p-3 bg-cyan-50/60 rounded-lg border border-cyan-200/80 text-sm text-slate-700">
+      <p class="mt-4 p-3 bg-cyan-50/60 rounded-lg border bfieldorder-cyan-200/80 text-sm text-slate-700">
           <strong>Summary of the forward pass for one triangle.</strong>
           Given the query $x$, the vertices $v_0, v_1, v_2$ and the regularization parameters $(\epsilon, \texttt{reg_mode})$,
           the forward function is evaluated as: (1) form $a, b, c$; (2) regularize each edge length via $r(\cdot)$;
@@ -544,6 +544,30 @@
           all of $\mathbb{R}^3$, and it is the object that Section 5.2 differentiates.
       </p>
     </div>
+
+    <h3 class="text-md font-bold uppercase tracking-wider text-slate-400 mt-8 mb-2">Payload Fields: Vector-Valued Winding</h3>
+    <p>
+        The scalar winding field answers the question <em>"how enclosed is this point?"</em> — it does not say <em>what</em> encloses
+        it. Many downstream applications want to carry per-surface data — material properties, colors, trained neural features,
+        physical quantities — and interpolate that data smoothly through space using the same geometric robustness that makes the
+        winding field attractive in the first place.
+    </p>
+    <p>
+        <strong>Payload fields</strong> attach an arbitrary $D$-dimensional feature vector $v_i \in \mathbb{R}^D$ to each primitive
+        $g_i$ and evaluate the vector-valued field
+    </p>
+    <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
+        $$w_V(x) = \sum_{i=1}^N v_i \, w(x \mid g_i, \epsilon) \;\in\; \mathbb{R}^D$$
+    </div>
+    <p>
+        The scalar field is the special case $D = 1$ with $v_i \equiv 1$. Because the map $v \mapsto w_V$ is linear, every structural
+        property of the winding field carries over without modification: harmonicity away from the geometry, robustness to broken
+        surfaces, the far-field $1/R^2$ decay of the dipole kernel, and the entire hierarchical acceleration machinery described in
+        Section 02. Setting a per-primitive payload to zero removes that primitive's vote from one or more coordinates, which makes
+        payload fields a natural fit for masking, segmentation, and multi-material geometry. The Taylor expansion (§02) and gradient
+        derivations (§05) generalize verbatim to the vector-valued case; we return to them there.
+    </p>
+
 </section>
 
 <section class="bg-white p-8 rounded-xl shadow-xs border border-slate-200/80">
@@ -633,6 +657,35 @@
                     Crucially, all three of these continuous spatial integrals possess exact, numerically stable closed-form expressions for
                     triangles which are also given in the appendix of <a href="https://dl.acm.org/doi/10.1145/3197517.3201337" target="_blank"
                       class="text-cyan-600 font-medium hover:underline">Barill et al. (2018)</a>.
+                </p>
+
+                <h4 class="text-sm font-bold text-slate-700 tracking-wide uppercase mt-6">Payload Expansion Formulation</h4>
+                <p>
+                    The Taylor framework generalizes to <strong>payload fields</strong> (Section 01) by allowing each far-field coefficient to
+                    carry an extra leading index of length $D$. Writing the payload of primitive $i$ as $v_i \in \mathbb{R}^D$, the node
+                    coefficients become
+                </p>
+                <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
+                  $$\begin{align*}
+                  \mathbf{C}_0 &= \sum_{i=1}^{K} v_i \otimes (a_i \, \hat{n}_i) \;\in\; \mathbb{R}^{D \times 3} \\
+                  \mathbf{C}_1 &= \sum_{i=1}^{K} v_i \otimes \bigl( a_i \, (p_i - \tilde{p}) \otimes \hat{n}_i \bigr) \;\in\; \mathbb{R}^{D \times 3 \times 3} \\
+                  \mathbf{C}_2 &= \sum_{i=1}^{K} v_i \otimes \bigl( a_i \, (p_i - \tilde{p}) \otimes (p_i - \tilde{p}) \otimes \hat{n}_i \bigr) \;\in\; \mathbb{R}^{D \times 3 \times 3 \times 3}
+                  \end{align*}$$
+                </div>
+                <p>
+                    and the node approximation contracts the $D$-index-invariant Green's function tensors against the trailing one, two, and
+                    three indices respectively:
+                </p>
+                <div class="my-6 bg-slate-50 p-4 rounded-lg border border-slate-200 text-center equation-container">
+                  $$\tilde{w}_V(q) = \mathbf{C}_0 \, \nabla G(q, \tilde{p}) + \mathbf{C}_1 : \nabla^2 G(q, \tilde{p}) + \tfrac{1}{2} \, \mathbf{C}_2 ::: \nabla^3 G(q, \tilde{p}) \;\in\; \mathbb{R}^D$$
+                </div>
+                <p>
+                    Each of the three contractions yields a $D$-vector; the whole evaluation is exactly $D$ independent copies of the scalar
+                    approximation in the leading dimension. The far-field opening criterion, the tree topology, and the leaf size of 32
+                    primitives are unchanged. Only the arithmetic grows with $D$: per-node coefficient storage scales linearly with $D$, and
+                    per-leaf FMA count scales linearly with $D$. For the triangle-soup case the discrete primitives $p_i, a_i, \hat{n}_i$ are
+                    replaced by their continuous integrals over each triangle's area, exactly as in the scalar triangle-soup expansion. At
+                    $D = 1$ with $v_i \equiv 1$, the equations reduce to the scalar Taylor series shown above.
                 </p>
 
                 <h4 class="text-sm font-bold text-slate-700 tracking-wide uppercase mt-6">"Far Field" definition</h4>
@@ -1674,12 +1727,175 @@
               </p>
           </div>
       </div>
+
+      <!-- ================================================================= -->
+      <!-- SUBSECTION 5.4: PAYLOAD GRADIENTS                                 -->
+      <!-- ================================================================= -->
+      <div class="mb-10">
+          <h3 class="text-xl font-bold text-slate-900 mb-4 pb-2 border-b border-slate-100 flex items-center gap-2">
+              <span class="text-slate-400">5.4</span> Payload Gradients
+          </h3>
+
+          <p class="text-slate-700 leading-relaxed mb-6">
+              Sections 5.1–5.3 derived the gradients of the loss with respect to the primitive geometry, the regularization
+              length, and the query positions for the scalar winding field. We now generalize to the payload field
+              $w_V(x) = \sum_i v_i \, w_i(x)$ of Section 01, where $v_i \in \mathbb{R}^D$ and $w_i(x) := w(x \mid g_i, \epsilon)$
+              is the scalar contribution of primitive $i$. The incoming adjoint is now a $D$-vector
+              $g_j = \partial \mathcal{L} / \partial w_V(x_j) \in \mathbb{R}^D$, and the loss $L$ depends on the geometry and
+              queries through the sum of primitive contributions.
+          </p>
+
+          <!-- 5.4.1 -->
+          <div class="mb-8 bg-slate-50 p-5 rounded-lg border border-slate-200/80">
+              <h4 class="text-lg font-semibold text-slate-900 mb-2">5.4.1 Gradient with Respect to the Payload</h4>
+              <p class="text-slate-700 text-sm leading-relaxed mb-3">
+                  The payload gradient is the only fundamentally new formula in this section. Because $w_V(x_j)$ is linear in
+                  $v_i$ with coefficient $w_i(x_j)$, we have $\partial w_V(x_j) / \partial v_i = w_i(x_j) \, I_{D \times D}$, and
+                  the chain rule gives
+              </p>
+              <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                  $$\frac{\partial \mathcal{L}}{\partial v_i}
+                    = \sum_{j=1}^{M} w_i(x_j) \, g_j \;\in\; \mathbb{R}^D.$$
+              </div>
+              <p class="text-slate-700 text-sm leading-relaxed">
+                  The gradient of primitive $i$ is therefore a scalar-weighted sum of the $D$-vector adjoints $g_j$, weighted by
+                  the scalar winding contributions $w_i(x_j)$ of that primitive at each query. Note that the adjoint $g_j$ is
+                  shared across all primitives; only the scalar weights $w_i(x_j)$ are primitive-specific.
+              </p>
+          </div>
+
+          <!-- 5.4.2 -->
+          <div class="mb-8">
+              <h4 class="text-lg font-semibold text-slate-900 mb-2">5.4.2 The Weighted-Adjoint Identity</h4>
+              <p class="text-slate-700 leading-relaxed mb-3">
+                  For every other gradient — geometry, queries, and $\epsilon$ — the payload case collapses back onto the scalar
+                  formulas of Sections 5.1–5.3 through a single scalar per (query, primitive) pair:
+              </p>
+              <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                  $$\boxed{\;\hat{g}_{ij} := \langle g_j, v_i \rangle_{\mathbb{R}^D}
+                    = \sum_{d=1}^{D} g_{j,d} \, v_{i,d} \;\in\; \mathbb{R}\;}$$
+              </div>
+              <p class="text-slate-700 leading-relaxed mb-3">
+                  This <strong>payload-weighted adjoint</strong> is the inner product between the $D$-vector adjoint at query $j$
+                  and the $D$-vector payload at primitive $i$. Its defining property is that the loss gradient with respect to
+                  the scalar contribution $w_i(x_j)$ (which determines all the geometry- and query-side gradients) equals
+                  $\hat{g}_{ij}$:
+              </p>
+              <div class="my-3 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                  $$\frac{\partial \mathcal{L}}{\partial w_i(x_j)}
+                    = \left\langle \frac{\partial \mathcal{L}}{\partial w_V(x_j)}, \frac{\partial w_V(x_j)}{\partial w_i(x_j)} \right\rangle
+                    = \langle g_j, v_i \rangle
+                    = \hat{g}_{ij}.$$
+              </div>
+              <p class="text-slate-700 leading-relaxed">
+                  Consequently, every downstream derivative that was expressed in Sections 5.1–5.3 in terms of
+                  $\partial \mathcal{L} / \partial w(x_j)$ continues to hold verbatim, with that scalar adjoint replaced by
+                  $\hat{g}_{ij}$. The formulas themselves do not change; only the numeric value of the coefficient multiplying
+                  $\partial w_i(x_j) / \partial \xi$ differs from the scalar case, and it now varies per (query, primitive) pair
+                  instead of per query.
+              </p>
+          </div>
+
+          <!-- 5.4.3 -->
+          <div class="mb-8">
+              <h4 class="text-lg font-semibold text-slate-900 mb-2">5.4.3 Explicit Forms for the Geometry, Query, and $\epsilon$ Gradients</h4>
+              <p class="text-slate-700 leading-relaxed mb-3">
+                  Applying the weighted-adjoint identity to the four non-payload gradients yields:
+              </p>
+
+              <p class="text-slate-700 leading-relaxed mb-2"><em>Geometry (point-normal positions and scaled normals):</em></p>
+              <div class="my-2 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                  $$\frac{\partial \mathcal{L}}{\partial p_i}
+                    = \sum_{j=1}^{M} \hat{g}_{ij} \, \frac{\partial w_i(x_j)}{\partial p_i}
+                    = -\sum_{j=1}^{M} \hat{g}_{ij} \, \mathbf{H}_{G,\epsilon}(x_j - p_i) \, m_i,$$
+              </div>
+              <div class="my-2 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                  $$\frac{\partial \mathcal{L}}{\partial m_i}
+                    = \sum_{j=1}^{M} \hat{g}_{ij} \, \nabla G_\epsilon(x_j - p_i).$$
+              </div>
+
+              <p class="text-slate-700 leading-relaxed mb-2 mt-4"><em>Geometry (triangle vertices, $k \in \{0, 1, 2\}$):</em></p>
+              <div class="my-2 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                  $$\frac{\partial \mathcal{L}}{\partial v_k}
+                    = \sum_{j=1}^{M} \hat{g}_{ij} \, \frac{\partial w_T(x_j)}{\partial v_k},$$
+              </div>
+              <p class="text-slate-700 text-sm leading-relaxed mb-2">
+                  with the per-vertex derivative $\partial w_T / \partial v_k$ taken from the table in Section 4, and $\hat{g}_{ij}$
+                  the weighted adjoint of the triangle $T_i$ at query $j$.
+              </p>
+
+              <p class="text-slate-700 leading-relaxed mb-2 mt-4"><em>Queries:</em></p>
+              <div class="my-2 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                  $$\frac{\partial \mathcal{L}}{\partial x_j}
+                    = \sum_{i=1}^{N} \hat{g}_{ij} \, \nabla_x w_i(x_j),$$
+              </div>
+              <p class="text-slate-700 text-sm leading-relaxed mb-2">
+                  which, via the structural identity of Section 5.3.1, is also
+                  $\sum_i \hat{g}_{ij} \, (-\nabla_{p_i} w_i(x_j))$ for point-normal primitives and
+                  $-\sum_i \hat{g}_{ij} (\partial_{v_0} + \partial_{v_1} + \partial_{v_2}) w_T(x_j)$ for triangles.
+              </p>
+
+              <p class="text-slate-700 leading-relaxed mb-2 mt-4"><em>Regularization length:</em></p>
+              <div class="my-2 bg-white p-3 rounded border border-slate-200 text-center equation-container">
+                  $$\frac{\partial \mathcal{L}}{\partial \epsilon}
+                    = \sum_{i=1}^{N} \sum_{j=1}^{M} \hat{g}_{ij} \, \frac{\partial w_i(x_j)}{\partial \epsilon}.$$
+              </div>
+              <p class="text-slate-700 leading-relaxed">
+                  The $\partial w_i(x_j) / \partial \xi$ terms are the per-primitive derivatives already derived in Sections 5.1
+                  and 5.2 (for point-normal and triangles respectively). Their formulas do not change in the payload case; only
+                  their per-(query, primitive) coefficient $\hat{g}_{ij}$ does. For $D = 1$ with $v_i \equiv 1$, we recover
+                  $\hat{g}_{ij} = g_j$ and the entire system reduces to the scalar gradients of Sections 5.1–5.3.
+              </p>
+          </div>
+
+          <!-- 5.4.4 -->
+          <div class="bg-cyan-50/60 p-5 rounded-lg border border-cyan-200/80">
+              <h4 class="text-lg font-semibold text-cyan-950 mb-2">5.4.4 Implementation: Reusing the Scalar Gradient Kernels</h4>
+              <p class="text-slate-700 text-sm leading-relaxed mb-3">
+                  The weighted-adjoint identity is not just a mathematical curiosity — it lets the payload gradients reuse the
+                  exact same GPU kernels as their scalar counterparts. The only change at the kernel level is that the per-query
+                  scalar $g_j$ is replaced by the per-(query, primitive) scalar $\hat{g}_{ij} = \langle g_j, v_i \rangle$:
+              </p>
+              <ul class="list-disc list-inside space-y-2 text-sm text-slate-600 pl-2 my-3">
+                  <li>
+                      <strong>Primitive gradients.</strong> The kernels of Sections 5.1 and 5.2 iterate over queries in tiles,
+                      loading the scalar adjoint $g_j$ for each query. The payload version loads the $D$-vector $g_j$ and the
+                      $D$-vector payload $v_i$ for the current primitive, computes their inner product once per (primitive, query)
+                      pair, and multiplies the existing per-primitive derivative contribution by it. The winding contribution
+                      $w_i(x_j)$ itself (for the primitive-side gradients) is unchanged.
+                  </li>
+                  <li>
+                      <strong>Query gradients.</strong> The kernels of Section 5.3 accumulate $\nabla_x w_i(x_j)$ weighted by
+                      $\hat{g}_{ij}$. Because $\hat{g}_{ij}$ depends on the primitive index $i$, the query BVH8 moments from
+                      Section 4 become $D$-vector-valued: $G_0 \in \mathbb{R}^D$, $G_1 \in \mathbb{R}^{D \times 3}$,
+                      $G_2 \in \mathbb{R}^{D \times 3 \times 3}$, with the query-cluster sums taken component-wise over $D$. On
+                      the primitive side, the traversal contracts the $D$-index with the payload $v_i$ to recover
+                      $\hat{G}_k^{(i)} = \langle G_k, v_i \rangle$, which are exactly the scalar moments used in the scalar
+                      traversal. The BVH topology, the opening criterion, and the leaf structure are unchanged; only the node
+                      storage grows linearly with $D$, and the traversal picks up one $D$-vector inner product per visited node.
+                  </li>
+                  <li>
+                      <strong>$\epsilon$ gradient.</strong> Identical to the primitive-gradient case: accumulate
+                      $\hat{g}_{ij} \, \partial w_i / \partial \epsilon$ over all (query, primitive) pairs, then reduce over
+                      primitive. The existing reduction kernel is reused verbatim.
+                  </li>
+              </ul>
+              <p class="text-slate-700 text-sm leading-relaxed">
+                  Concretely, the implementation stores one additional $D$-vector per primitive (the payload), replaces the
+                  per-query adjoint array with a per-query $D$-vector array, and adds a single `dot(g_j, v_i)` at the entry of
+                  each per-(primitive, query) contribution. The existing scalar-gradient kernels — the tiled shared-memory
+                  primitives loop, the primitive-side query moments, and the Kahan-compensated accumulation — all remain valid,
+                  with register pressure scaling with $D$ in the same way the forward payload kernel already does.
+              </p>
+          </div>
+      </div>
+
         </section>
 
 
         <section id="interactive-suite" class="bg-white p-8 rounded-xl shadow-xs border border-slate-200/80 space-y-8">
             <div>
-                <h2 class="text-2xl font-bold text-slate-900 tracking-tight">05. Interactive Performance Benchmarks - Forward Pass</h2>
+                <h2 class="text-2xl font-bold text-slate-900 tracking-tight">06. Interactive Performance Benchmarks - Forward Pass</h2>
                 <p class="text-slate-500 text-sm mt-1">
                     Compare performance metrics between different data modalities and execution backends using the interactive charts and options below.
                 </p>
