@@ -14,7 +14,7 @@ struct SceneNormalization {
     float max_dim = fmaxf(extent.x, fmaxf(extent.y, extent.z));
     // Guard against degenerate (zero-extent) AABBs. In that case, fall back
     // to identity so downstream math doesn't divide by zero.
-    return (max_dim < 1e-20F || !isfinite(max_dim)) ? 1.F : max_dim;
+    return (max_dim < 1e-20F || !std::isfinite(max_dim)) ? 1.F : max_dim;
   }
 
   static auto effective_extent(const SceneBounds& b) -> float {
@@ -22,7 +22,7 @@ struct SceneNormalization {
     float max_dim = fmaxf(extent.x, fmaxf(extent.y, extent.z));
     // Guard against degenerate (zero-extent) SceneBounds. In that case, fall back
     // to identity so downstream math doesn't divide by zero.
-    return (max_dim < 1e-20F || !isfinite(max_dim)) ? 1.F : max_dim;
+    return (max_dim < 1e-20F || !std::isfinite(max_dim)) ? 1.F : max_dim;
   }
 
   static auto from_scene_bounds(const SceneBounds &b) -> SceneNormalization {
@@ -33,7 +33,7 @@ struct SceneNormalization {
   }
 
   static auto identity() -> SceneNormalization {
-    return {.min_p = Vec3{0.f, 0.f, 0.f}, .scale = 1.f, .scale2 = 1.f};
+    return {.min_p = Vec3{0.F, 0.F, 0.F}, .scale = 1.F, .scale2 = 1.F};
   }
 
   __host__ __device__ auto to_normalized(const Vec3 &p) const -> Vec3 {

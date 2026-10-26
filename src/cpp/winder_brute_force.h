@@ -8,24 +8,24 @@ auto brute_force_point_normal_impl(const float *points,
                                    const float *queries, size_t geometry_count,
                                    size_t query_count,
                                    float *out_winding_numbers, float epsilon,
-                                   int device_id, uint64_t stream = 0) -> void;
+                                   int device_id, uint64_t stream = 0, bool use_kahan = true) -> void;
 
 auto brute_force_mesh_impl(const float *vertices,
                            const uint32_t *triangle_indices,
                            const float *queries, size_t geometry_count,
                            size_t vertex_count, size_t query_count,
                            float *out_winding_numbers, float epsilon,
-                           int device_id, uint64_t stream = 0) -> void;
+                           int device_id, uint64_t stream = 0, bool use_kahan = true) -> void;
 
 auto brute_force_triangle_impl(const float *triangles, const float *queries,
                                size_t geometry_count, size_t query_count,
                                float *out_winding_numbers, float epsilon,
-                               int device_id, uint64_t stream = 0) -> void;
+                               int device_id, uint64_t stream = 0, bool use_kahan = true) -> void;
 
 auto brute_force_point_normal_payload_impl(
     const float *points, const float *scaled_normals, const float *payload,
     const float *queries, size_t geometry_count, size_t query_count, size_t payload_size,
-    float *out_payload, float epsilon, int device_id, uint64_t stream = 0)
+    float *out_payload, float epsilon, int device_id, uint64_t stream = 0, bool use_kahan = false)
     -> void;
 
 auto brute_force_mesh_payload_impl(const float *vertices,
@@ -34,23 +34,23 @@ auto brute_force_mesh_payload_impl(const float *vertices,
                                    size_t geometry_count, size_t vertex_count,
                                    size_t query_count, size_t payload_size, float *out_payload,
                                    float epsilon, int device_id,
-                                   uint64_t stream = 0) -> void;
+                                   uint64_t stream = 0, bool use_kahan = false) -> void;
 
 auto brute_force_triangle_payload_impl(
     const float *triangles, const float *payload, const float *queries,
     size_t geometry_count, size_t query_count, size_t payload_size, float *out_payload,
-    float epsilon, int device_id, uint64_t stream = 0) -> void;
+    float epsilon, int device_id, uint64_t stream = 0, bool use_kahan = false) -> void;
 
 auto brute_force_point_normal_gradient_impl(
     const float *grad_output, const float *points, const float *scaled_normals,
     const float *queries, size_t geometry_count, size_t query_count,
     float *output_gradients, float *epsilon_gradient, float epsilon,
-    int device_id, uint64_t stream = 0) -> void;
+    int device_id, uint64_t stream = 0, bool use_kahan = false) -> void;
 
 auto brute_force_point_normal_query_gradient_impl(
     const float *grad_output, const float *points, const float *scaled_normals,
     const float *queries, size_t geometry_count, size_t query_count,
-    float *query_gradients, float epsilon, int device_id, uint64_t stream)
+    float *query_gradients, float epsilon, int device_id, uint64_t stream, bool use_kahan = true)
     -> void;
 
 auto brute_force_mesh_gradient_impl(const float *grad_output,
@@ -60,22 +60,22 @@ auto brute_force_mesh_gradient_impl(const float *grad_output,
                                     size_t query_count, size_t vertex_count,
                                     float *output_gradients,
                                     float *epsilon_gradient, float epsilon,
-                                    int device_id, uint64_t stream = 0) -> void;
+                                    int device_id, uint64_t stream = 0, bool use_kahan = false) -> void;
 auto brute_force_mesh_query_gradient_impl(
     const float *grad_output, const float *vertices,
     const uint32_t *triangle_indices, const float *queries,
     size_t geometry_count, size_t query_count, size_t vertex_count,
-    float *query_gradients, float epsilon, int device_id, uint64_t stream)
+    float *query_gradients, float epsilon, int device_id, uint64_t stream, bool use_kahan = true)
     -> void;
 
 auto brute_force_triangle_gradient_impl(
     const float *grad_output, const float *triangles, const float *queries,
     size_t geometry_count, size_t query_count, float *output_gradients,
-    float *epsilon_gradient, float epsilon, int device_id, uint64_t stream = 0)
+    float *epsilon_gradient, float epsilon, int device_id, uint64_t stream = 0, bool use_kahan = false)
     -> void;
 
 auto brute_force_triangle_query_gradient_impl(
     const float *grad_output, const float *triangles_float,
     const float *queries, size_t geometry_count, size_t query_count,
-    float *query_gradients, float epsilon, int device_id, uint64_t stream)
+    float *query_gradients, float epsilon, int device_id, uint64_t stream, bool use_kahan = true)
     -> void;

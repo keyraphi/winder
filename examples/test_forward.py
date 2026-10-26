@@ -320,10 +320,9 @@ def run_brute_force_triangle(triangles, queries, epsilon=DEFAULT_EPSILON, out=No
     q = _to_cuda(queries)
     if out is None:
         out = torch.empty([queries.shape[0]], device="cuda:0", dtype=torch.float32)
-    winder.brute_force_winding_numbers_triangle_soup(
-        t, q, out,
-        epsilon,
-        torch.cuda.current_stream().cuda_stream,
+    winder.brute_force_winding_numbers(
+        t, q, out, epsilon=epsilon,
+        stream=torch.cuda.current_stream().cuda_stream,
     )
     torch.cuda.synchronize()
     return out
@@ -338,10 +337,11 @@ def run_fast_triangle(triangles, queries, beta, epsilon=DEFAULT_EPSILON, out=Non
         t, stream=torch.cuda.current_stream().cuda_stream
     )
     engine.compute(
-        q, out,
-        -1.0 if beta is None else beta,
-        epsilon,
-        torch.cuda.current_stream().cuda_stream,
+        q,
+        out,
+        beta=-1.0 if beta is None else beta,
+        epsilon=epsilon,
+        stream=torch.cuda.current_stream().cuda_stream,
     )
     torch.cuda.synchronize()
     return out
@@ -353,10 +353,11 @@ def run_brute_force_mesh(vertices, indices, queries, epsilon=DEFAULT_EPSILON, ou
     q = _to_cuda(queries)
     if out is None:
         out = torch.empty([queries.shape[0]], device="cuda:0", dtype=torch.float32)
-    winder.brute_force_winding_numbers_mesh(
-        v, idx, q, out,
-        epsilon,
-        torch.cuda.current_stream().cuda_stream,
+    print("DEBUG: shapes:", v.shape, idx.shape, q.shape, out.shape, epsilon)
+    print("DEBUG: types:", v.dtype, idx.dtype, q.dtype, out.dtype)
+    winder.brute_force_winding_numbers(
+        v, idx, q, out, epsilon=epsilon,
+        stream=torch.cuda.current_stream().cuda_stream,
     )
     torch.cuda.synchronize()
     return out
@@ -372,10 +373,11 @@ def run_fast_mesh(vertices, indices, queries, beta, epsilon=DEFAULT_EPSILON, out
         v, idx, stream=torch.cuda.current_stream().cuda_stream
     )
     engine.compute(
-        q, out,
-        -1.0 if beta is None else beta,
-        epsilon,
-        torch.cuda.current_stream().cuda_stream,
+        q,
+        out,
+        beta=-1.0 if beta is None else beta,
+        epsilon=epsilon,
+        stream=torch.cuda.current_stream().cuda_stream,
     )
     torch.cuda.synchronize()
     return out
@@ -387,10 +389,9 @@ def run_brute_force_point_normal(points, scaled_normals, queries, epsilon, out=N
     q = _to_cuda(queries)
     if out is None:
         out = torch.empty([queries.shape[0]], device="cuda:0", dtype=torch.float32)
-    winder.brute_force_winding_numbers_point_normal(
-        p, n, q, out,
-        epsilon,
-        torch.cuda.current_stream().cuda_stream,
+    winder.brute_force_winding_numbers(
+        p, n, q, out, epsilon=epsilon,
+        stream=torch.cuda.current_stream().cuda_stream,
     )
     torch.cuda.synchronize()
     return out
@@ -406,10 +407,11 @@ def run_fast_point_normal(points, scaled_normals, queries, beta, epsilon, out=No
         p, n, stream=torch.cuda.current_stream().cuda_stream
     )
     engine.compute(
-        q, out,
-        -1.0 if beta is None else beta,
-        epsilon,
-        torch.cuda.current_stream().cuda_stream,
+        q,
+        out,
+        beta=-1.0 if beta is None else beta,
+        epsilon=epsilon,
+        stream=torch.cuda.current_stream().cuda_stream,
     )
     torch.cuda.synchronize()
     return out
@@ -449,6 +451,13 @@ def test_igl_agreement(
     vertices, indices, query_mode, query_count, beta,
     num_trials, base_seed, epsilon=DEFAULT_EPSILON, verbose=True,
 ):
+    """Compare against libigl.
+
+    igl implements the *sharp* FWN — no epsilon. This comparison only
+    makes sense at epsilon = 0 or very small epsilon. For epsilon > 0.01
+    the two are computing different fields and the RMS difference will
+    reflect the regularization rather than the approximation quality.
+    """
     if epsilon > 0.01:
         if verbose:
             print(
@@ -754,6 +763,13 @@ def run_epsilon_sweep(
           ground truth, matching what the fast engine approximates)
         - we report the approximation error, the median voxel misclassification,
           and the fast/brute timings
+
+    Comparing across epsilon values tells you:
+        - how much the regularized field's *approximation* error shrinks as
+          the kernel becomes smoother
+        - how the misclassification count changes with the smoothing
+        - how much speed is lost as epsilon grows (little, since the traversal
+          criterion uses the same beta for all eps)
     """
     print("\n" + "=" * 100)
     print(f"  EPSILON SWEEP — regularization strength vs accuracy  (beta = {beta})")
