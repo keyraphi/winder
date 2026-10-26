@@ -32,6 +32,8 @@ using Scalar_t = nb::ndarray<nb::array_api, float, nb::shape<-1>, nb::c_contig,
                              nb::device::cuda>;
 using SingleScalar_t = nb::ndarray<nb::array_api, float, nb::shape<1>,
                                    nb::c_contig, nb::device::cuda>;
+using Payload_t = nb::ndarray<nb::array_api, float, nb::shape<-1, -1>,
+                              nb::c_contig, nb::device::cuda>;
 using GradResult_t = nb::ndarray<nb::array_api, float, nb::shape<-1, -1, 3>,
                                  nb::c_contig, nb::device::cuda>;
 using VertexGradResult_t = nb::ndarray<nb::array_api, float, nb::shape<-1, 3>,
@@ -101,6 +103,116 @@ auto brute_force_winding_numbers(const Triangle_t &triangles,
   brute_force_triangle_impl(
       triangles.data(), queries.data(), triangles.shape(0), queries.shape(0),
       out_winding_numbers.data(), epsilon, triangles.device_id(), stream);
+}
+
+auto brute_force_winding_payloads(const Vec3_t &points,
+                                 const Vec3_t &scaled_normals,
+                                 const Payload_t &payload,
+                                 const Vec3_t &queries, Payload_t &out_payload,
+                                 float epsilon = 0.004,
+                                 const uint64_t stream = 0) -> void {
+  if (points.device_id() != scaled_normals.device_id()) {
+    throw std::runtime_error(
+        "Points and Normals must be on the same CUDA device.");
+  }
+  if (points.device_id() != payload.device_id()) {
+    throw std::runtime_error(
+        "Points and payload must be on the same CUDA device.");
+  }
+  if (points.device_id() != queries.device_id()) {
+    throw std::runtime_error(
+        "Points and queries must be on the same CUDA device.");
+  }
+  if (points.device_id() != out_payload.device_id()) {
+    throw std::runtime_error(
+        "Points and out_winding_numbers must be on the same CUDA device.");
+  }
+  if (points.shape(0) != scaled_normals.shape(0)) {
+    throw std::runtime_error(
+        "Shape of points must be equal to shape of normals.");
+  }
+  if (points.shape(0) != payload.shape(0)) {
+    throw std::runtime_error(
+        "Number of points must be equal to number of payload.");
+  }
+  if (payload.shape(1) != out_payload.shape(1)) {
+    throw std::runtime_error(
+        "Dimensionality of payload must be equal to dimensionality of out_payload.");
+  }
+  if (queries.shape(0) != out_payload.shape(0)) {
+    throw std::runtime_error(
+        "Query count must be equal to out_payload count (shape[0]).");
+  }
+  brute_force_point_normal_payload_impl(
+      points.data(), scaled_normals.data(), payload.data(), queries.data(),
+      points.shape(0), queries.shape(0), payload.shape(1), out_payload.data(), epsilon,
+      points.device_id(), stream);
+}
+
+auto brute_force_winding_payloads(const Vec3_t &vertices,
+                                 const TriangleIdx_t &triangle_indices,
+                                 const Payload_t &payload,
+                                 const Vec3_t &queries,
+                                 Payload_t &out_payload,
+                                 float epsilon = 0.004F,
+                                 const uint64_t stream = 0) -> void {
+  if (vertices.device_id() != triangle_indices.device_id()) {
+    throw std::runtime_error(
+        "Vertices and triangle_indices must be on the same CUDA device.");
+  }
+  if (vertices.device_id() != payload.device_id()) {
+    throw std::runtime_error(
+        "Vertices and payload must be on the same CUDA device.");
+  }
+  if (vertices.device_id() != queries.device_id()) {
+    throw std::runtime_error(
+        "Vertices and queries must be on the same CUDA device.");
+  }
+  if (vertices.device_id() != out_payload.device_id()) {
+    throw std::runtime_error(
+        "Vertices and out_payload must be on the same CUDA device.");
+  }
+  if (payload.shape(1) != out_payload.shape(1)) {
+    throw std::runtime_error(
+        "Dimensionality of payload must be equal to dimensionality of out_payload.");
+  }
+  if (queries.shape(0) != out_payload.shape(0)) {
+    throw std::runtime_error(
+        "Query count must be equal to out_payload count (shape[0]).");
+  }
+  brute_force_mesh_payload_impl(
+      vertices.data(), triangle_indices.data(), payload.data(), queries.data(),
+      triangle_indices.shape(0), vertices.shape(0), queries.shape(0),
+      payload.shape(1),
+      out_payload.data(), epsilon, vertices.device_id(), stream);
+}
+
+auto brute_force_winding_payloads(const Triangle_t &triangles,
+    const Payload_t &payload,
+                                 const Vec3_t &queries,
+                                 Scalar_t &out_payload,
+                                 float epsilon = 0.004F,
+                                 const uint64_t stream = 0) -> void {
+  if (triangles.device_id() != payload.device_id()) {
+    throw std::runtime_error(
+        "Triangles and payload must be on the same CUDA device.");
+  }
+  if (triangles.device_id() != queries.device_id()) {
+    throw std::runtime_error(
+        "Triangles and queries must be on the same CUDA device.");
+  }
+  if (payload.shape(1) != out_payload.shape(1)) {
+    throw std::runtime_error(
+        "Dimensionality of payload must be equal to dimensionality of out_payload.");
+  }
+  if (queries.shape(0) != out_payload.shape(0)) {
+    throw std::runtime_error(
+        "Query count must be equal to out_payload count (shape[0]).");
+  }
+  brute_force_triangle_payload_impl(
+      triangles.data(), payload.data(), queries.data(), triangles.shape(0), queries.shape(0),
+      payload.shape(1),
+      out_payload.data(), epsilon, triangles.device_id(), stream);
 }
 
 auto brute_force_gradients(const Scalar_t &grad_output, const Vec3_t &points,

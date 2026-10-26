@@ -166,6 +166,249 @@ void compute_brute_force_triangle(const Vec3 *queries_vec3,
   CUDA_CHECK(cudaGetLastError());
 }
 
+// ---------------------------------------------------------------------------
+// Payload brute-force: point-normal
+// ---------------------------------------------------------------------------
+template <uint32_t BlockSize = 256, uint32_t MaxAcc = 32>
+__global__ void
+compute_winding_numbers_brute_force_point_normal_with_payload_kernel(
+    const Vec3 *__restrict__ queries, const Vec3 *__restrict__ points,
+    const Vec3 *__restrict__ normals, const float *__restrict__ payload,
+    const uint32_t query_count, const uint32_t geometry_count,
+    const uint32_t payload_size, float *__restrict__ out_payload,
+    const PointNormalContext ctx) {
+
+  const uint32_t q_idx = blockIdx.x * BlockSize + threadIdx.x;
+  const bool valid_query = q_idx < query_count;
+  const Vec3 my_q = valid_query ? queries[q_idx] : Vec3::zero();
+
+  extern __shared__ char shared_mem[];
+  Vec3 *point_tile = reinterpret_cast<Vec3 *>(shared_mem);
+  Vec3 *normal_tile = point_tile + BlockSize;
+
+  // handle payload in chunks
+  const uint32_t num_chunks = (payload_size + MaxAcc - 1) / MaxAcc;
+
+  for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+    const uint32_t base_d = chunk * MaxAcc;
+    const uint32_t d_count = min(MaxAcc, payload_size - base_d);
+
+    // Register accumulators — laid out so unused tail (d_count<MaxAcc) is free.
+    float acc[MaxAcc];
+#pragma unroll
+    for (uint32_t k = 0; k < MaxAcc; ++k) {
+      acc[k] = 0.F;
+    }
+
+    for (uint32_t i = 0; i < geometry_count; i += BlockSize) {
+      const uint32_t load_idx = i + threadIdx.x;
+
+      if (load_idx < geometry_count) {
+        point_tile[threadIdx.x] = points[load_idx];
+        normal_tile[threadIdx.x] = normals[load_idx];
+      }
+      __syncthreads();
+
+      if (valid_query) {
+        const uint32_t num_elements = min(BlockSize, geometry_count - i);
+
+        if (num_elements == BlockSize && d_count == MaxAcc) {
+          // Hot path: full tile, full accumulator chunk.
+#pragma unroll 2
+          for (uint32_t j = 0; j < BlockSize; ++j) {
+            const PointNormal pn{.p = point_tile[j], .n = normal_tile[j]};
+            const float w_j = pn.contributionToQuery(my_q, ctx);
+
+            const float *payload_row =
+                payload + static_cast<size_t>(i + j) * payload_size + base_d;
+
+#pragma unroll
+            for (uint32_t k = 0; k < MaxAcc; ++k) {
+              acc[k] = fmaf(w_j, __ldg(payload_row + k), acc[k]);
+            }
+          }
+        } else if (d_count == MaxAcc) {
+          // Full accumulator chunk, ragged tile.
+          for (uint32_t j = 0; j < num_elements; ++j) {
+            const PointNormal pn{.p = point_tile[j], .n = normal_tile[j]};
+            const float w_j = pn.contributionToQuery(my_q, ctx);
+
+            const float *payload_row =
+                payload + static_cast<size_t>(i + j) * payload_size + base_d;
+
+#pragma unroll
+            for (uint32_t k = 0; k < MaxAcc; ++k) {
+              acc[k] = fmaf(w_j, __ldg(payload_row + k), acc[k]);
+            }
+          }
+        } else {
+          // Tail chunk (only the very last chunk of the last D-segment).
+          for (uint32_t j = 0; j < num_elements; ++j) {
+            const PointNormal pn{.p = point_tile[j], .n = normal_tile[j]};
+            const float w_j = pn.contributionToQuery(my_q, ctx);
+
+            const float *payload_row =
+                payload + static_cast<size_t>(i + j) * payload_size + base_d;
+
+            for (uint32_t k = 0; k < d_count; ++k) {
+              acc[k] = fmaf(w_j, __ldg(payload_row + k), acc[k]);
+            }
+          }
+        }
+      }
+      __syncthreads();
+    }
+
+    if (valid_query) {
+      float *out_row =
+          out_payload + static_cast<size_t>(q_idx) * payload_size + base_d;
+      for (uint32_t k = 0; k < d_count; ++k) {
+        out_row[k] = acc[k];
+      }
+    }
+    __syncthreads();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Payload brute-force: triangle soup
+// ---------------------------------------------------------------------------
+template <uint32_t BlockSize = 256, uint32_t MaxAcc = 32>
+__global__ void
+compute_winding_numbers_brute_force_triangle_with_payload_kernel(
+    const Vec3 *__restrict__ queries, const Triangle *__restrict__ triangles,
+    const float *__restrict__ payload, const uint32_t query_count,
+    const uint32_t geometry_count, const uint32_t payload_size,
+    float *__restrict__ out_payload, const typename Triangle::Context reg_ctx) {
+
+  const uint32_t q_idx = blockIdx.x * BlockSize + threadIdx.x;
+  const bool valid_query = q_idx < query_count;
+  const Vec3 my_q = valid_query ? queries[q_idx] : Vec3::zero();
+
+  extern __shared__ char shared_mem[];
+  auto *tile = reinterpret_cast<Triangle *>(shared_mem);
+
+  const uint32_t num_chunks = (payload_size + MaxAcc - 1) / MaxAcc;
+
+  for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+    const uint32_t base_d = chunk * MaxAcc;
+    const uint32_t d_count = min(MaxAcc, payload_size - base_d);
+
+    float acc[MaxAcc];
+#pragma unroll
+    for (uint32_t k = 0; k < MaxAcc; ++k)
+      acc[k] = 0.F;
+
+    for (uint32_t i = 0; i < geometry_count; i += BlockSize) {
+      const uint32_t load_idx = i + threadIdx.x;
+
+      if (load_idx < geometry_count) {
+        tile[threadIdx.x] = triangles[load_idx];
+      }
+      __syncthreads();
+
+      if (valid_query) {
+        const uint32_t num_elements = min(BlockSize, geometry_count - i);
+
+        if (num_elements == BlockSize && d_count == MaxAcc) {
+#pragma unroll 2
+          for (uint32_t j = 0; j < BlockSize; ++j) {
+            const float w_j = tile[j].contributionToQuery(my_q, reg_ctx);
+
+            const float *payload_row =
+                payload + static_cast<size_t>(i + j) * payload_size + base_d;
+
+#pragma unroll
+            for (uint32_t k = 0; k < MaxAcc; ++k) {
+              acc[k] = fmaf(w_j, __ldg(payload_row + k), acc[k]);
+            }
+          }
+        } else if (d_count == MaxAcc) {
+          for (uint32_t j = 0; j < num_elements; ++j) {
+            const float w_j = tile[j].contributionToQuery(my_q, reg_ctx);
+
+            const float *payload_row =
+                payload + static_cast<size_t>(i + j) * payload_size + base_d;
+
+#pragma unroll
+            for (uint32_t k = 0; k < MaxAcc; ++k) {
+              acc[k] = fmaf(w_j, __ldg(payload_row + k), acc[k]);
+            }
+          }
+        } else {
+          for (uint32_t j = 0; j < num_elements; ++j) {
+            const float w_j = tile[j].contributionToQuery(my_q, reg_ctx);
+
+            const float *payload_row =
+                payload + static_cast<size_t>(i + j) * payload_size + base_d;
+
+            for (uint32_t k = 0; k < d_count; ++k) {
+              acc[k] = fmaf(w_j, __ldg(payload_row + k), acc[k]);
+            }
+          }
+        }
+      }
+      __syncthreads();
+    }
+
+    if (valid_query) {
+      float *out_row =
+          out_payload + static_cast<size_t>(q_idx) * payload_size + base_d;
+      for (uint32_t k = 0; k < d_count; ++k) {
+        out_row[k] = acc[k];
+      }
+    }
+    __syncthreads();
+  }
+}
+
+void compute_brute_force_point_normal_with_payload(
+    const Vec3 *queries_vec3, const Vec3 *points_vec3, const Vec3 *normals_vec3,
+    const float *payload, uint32_t query_count, uint32_t geometry_count,
+    uint32_t payload_size, float *out_payload, float epsilon, float scene_scale,
+    cudaStream_t compute_stream) {
+
+  if (query_count == 0) {
+    return;
+  }
+
+  const auto ctx = PointNormalContext::make(epsilon, scene_scale);
+
+  constexpr uint32_t threads = 256;
+  uint32_t blocks = (query_count + threads - 1) / threads;
+  size_t smem_size = threads * 2 * sizeof(Vec3); // for points and normals
+
+  compute_winding_numbers_brute_force_point_normal_with_payload_kernel<threads>
+      <<<blocks, threads, smem_size, compute_stream>>>(
+          queries_vec3, points_vec3, normals_vec3, payload, query_count,
+          geometry_count, payload_size, out_payload, ctx);
+
+  CUDA_CHECK(cudaGetLastError());
+}
+
+void compute_brute_force_triangle_with_payload(
+    const Vec3 *queries_vec3, const Triangle *triangles, const float *payload,
+    uint32_t query_count, uint32_t geometry_count, uint32_t payload_size,
+    float *out_payload, float epsilon, float scene_scale,
+    cudaStream_t compute_stream) {
+  if (query_count == 0) {
+    return;
+  }
+
+  constexpr uint32_t threads = 256;
+  uint32_t blocks = (query_count + threads - 1) / threads;
+  size_t smem_size = threads * sizeof(Triangle);
+
+  const auto ctx = Triangle::Context::make(epsilon, scene_scale);
+
+  compute_winding_numbers_brute_force_triangle_with_payload_kernel<threads>
+      <<<blocks, threads, smem_size, compute_stream>>>(
+          queries_vec3, triangles, payload, query_count, geometry_count,
+          payload_size, out_payload, ctx);
+
+  CUDA_CHECK(cudaGetLastError());
+}
+
 template <uint32_t BlockSize = 256>
 __global__ void gradients_brute_force_point_normals_kernel(
     const float *__restrict__ in_gradients, const Vec3 *__restrict__ points,
@@ -286,31 +529,28 @@ void compute_brute_force_gradients_point_normals(
 
 template <uint32_t BlockSize = 256>
 __global__ void gradients_wrt_query_brute_force_point_normals_kernel(
-    const float *__restrict__ in_gradients,
-    const Vec3  *__restrict__ points,
-    const Vec3  *__restrict__ normals,
-    const Vec3  *__restrict__ queries,
-    const uint32_t geometry_count,
-    const uint32_t query_count,
-    const PointNormalContext ctx,
-    float *__restrict__ out_query_gradients) {
+    const float *__restrict__ in_gradients, const Vec3 *__restrict__ points,
+    const Vec3 *__restrict__ normals, const Vec3 *__restrict__ queries,
+    const uint32_t geometry_count, const uint32_t query_count,
+    const PointNormalContext ctx, float *__restrict__ out_query_gradients) {
 
   const uint32_t q_idx = blockIdx.x * BlockSize + threadIdx.x;
 
   const bool active = (q_idx < query_count);
-  const Vec3  my_query = active ? queries[q_idx] : Vec3::zero();
+  const Vec3 my_query = active ? queries[q_idx] : Vec3::zero();
   const float my_g = active ? in_gradients[q_idx] : 0.F;
 
   Vec3 q_grad = Vec3::zero();
   Vec3 compensator = Vec3::zero();
 
   extern __shared__ char shared_mem[];
-  auto *tile_p   = reinterpret_cast<Vec3 *>(shared_mem);
-  auto *tile_n   = reinterpret_cast<Vec3 *>(shared_mem + BlockSize * sizeof(Vec3));
+  auto *tile_p = reinterpret_cast<Vec3 *>(shared_mem);
+  auto *tile_n =
+      reinterpret_cast<Vec3 *>(shared_mem + BlockSize * sizeof(Vec3));
   auto *tile_p_f = reinterpret_cast<float *>(tile_p);
   auto *tile_n_f = reinterpret_cast<float *>(tile_n);
 
-  const auto *points_f  = reinterpret_cast<const float *>(points);
+  const auto *points_f = reinterpret_cast<const float *>(points);
   const auto *normals_f = reinterpret_cast<const float *>(normals);
 
   for (uint32_t i = 0; i < geometry_count; i += BlockSize) {
@@ -492,10 +732,8 @@ void compute_brute_force_gradients_triangles(
 template <uint32_t BlockSize = 256>
 __global__ void gradients_wrt_query_brute_force_triangles_kernel(
     const float *__restrict__ in_gradients,
-    const Triangle *__restrict__ triangles,
-    const Vec3 *__restrict__ queries,
-    const uint32_t geometry_count,
-    const uint32_t query_count,
+    const Triangle *__restrict__ triangles, const Vec3 *__restrict__ queries,
+    const uint32_t geometry_count, const uint32_t query_count,
     const typename Triangle::Context reg_ctx,
     float *__restrict__ out_query_gradients) {
 
@@ -525,12 +763,14 @@ __global__ void gradients_wrt_query_brute_force_triangles_kernel(
       if (num == BlockSize) {
 #pragma unroll 4
         for (uint32_t j = 0; j < BlockSize; ++j) {
-          const Vec3 contrib = tile[j].queryGradContribution(my_query, my_g, reg_ctx);
+          const Vec3 contrib =
+              tile[j].queryGradContribution(my_query, my_g, reg_ctx);
           kahan_add(q_grad, contrib, compensator);
         }
       } else {
         for (uint32_t j = 0; j < num; ++j) {
-          const Vec3 contrib = tile[j].queryGradContribution(my_query, my_g, reg_ctx);
+          const Vec3 contrib =
+              tile[j].queryGradContribution(my_query, my_g, reg_ctx);
           kahan_add(q_grad, contrib, compensator);
         }
       }
@@ -549,9 +789,8 @@ __global__ void gradients_wrt_query_brute_force_triangles_kernel(
 void compute_brute_force_query_gradients_triangles(
     const float *grad_output, const Triangle *triangles,
     const Vec3 *queries_vec3, const uint32_t geometry_count,
-    const uint32_t query_count, float *query_gradients,
-    const float epsilon, const float scene_scale,
-    cudaStream_t compute_stream) {
+    const uint32_t query_count, float *query_gradients, const float epsilon,
+    const float scene_scale, cudaStream_t compute_stream) {
 
   constexpr uint32_t threads = 256;
   const uint32_t query_blocks = (query_count + threads - 1) / threads;

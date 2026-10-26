@@ -17,6 +17,20 @@ void compute_brute_force_triangle(const Vec3 *queries_vec3,
                                   float scene_scale,
                                   cudaStream_t compute_stream);
 
+void compute_brute_force_point_normal_with_payload(
+    const Vec3 *queries_vec3, const Vec3 *points_vec3, const Vec3 *normals_vec3,
+    const float *payload, uint32_t query_count, uint32_t geometry_count,
+    uint32_t payload_size, float *out_payload, float epsilon, float scene_scale,
+    cudaStream_t compute_stream);
+
+void compute_brute_force_triangle_with_payload(const Vec3 *queries_vec3,
+                                  const Triangle *triangles,
+                                  const float *payload, uint32_t query_count,
+                                  uint32_t geometry_count,
+                                  uint32_t payload_size, float *out_payload,
+                                  float epsilon, float scene_scale,
+                                  cudaStream_t compute_stream);
+
 void compute_brute_force_gradients_point_normals(
     const float *grad_output, const Vec3 *points, const Vec3 *scaled_normals,
     const Vec3 *queries_vec3, uint32_t geometry_count, uint32_t query_count,

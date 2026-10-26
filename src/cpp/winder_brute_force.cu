@@ -52,10 +52,10 @@ auto brute_force_point_normal_impl(
     epsilon = 0.F;
   }
 
-  compute_brute_force_point_normal(queries_vec3, points_vec3, normals_vec3,
-                                   (uint32_t)query_count,
-                                   (uint32_t)geometry_count, winding_numbers,
-                                   epsilon, max_dim, compute_stream);
+  compute_brute_force_point_normal(
+      queries_vec3, points_vec3, normals_vec3,
+      static_cast<uint32_t>(query_count), static_cast<uint32_t>(geometry_count),
+      winding_numbers, epsilon, max_dim, compute_stream);
 
   CUDA_CHECK(cudaEventRecord(finish, compute_stream));
   // free events
@@ -129,9 +129,130 @@ auto brute_force_triangle_impl(const float *triangles_float,
     epsilon = 0.F;
   }
 
-  compute_brute_force_triangle(queries_vec3, triangles, (uint32_t)query_count,
-                               (uint32_t)geometry_count, winding_numbers,
-                               epsilon, max_dim, compute_stream);
+  compute_brute_force_triangle(
+      queries_vec3, triangles, static_cast<uint32_t>(query_count),
+      static_cast<uint32_t>(geometry_count), winding_numbers, epsilon, max_dim,
+      compute_stream);
+
+  CUDA_CHECK(cudaEventRecord(finish, compute_stream));
+  // free events
+  CUDA_CHECK(cudaEventDestroy(start));
+  CUDA_CHECK(cudaEventDestroy(finish));
+}
+
+////////////////////////////////// FORWARD WITH PAYLOAD //////////////
+auto brute_force_point_normal_payload_impl(
+    const float *points, const float *scaled_normals, const float *payload,
+    const float *queries, size_t geometry_count, size_t query_count,
+    size_t payload_size, float *out_payload, float epsilon, int device_id,
+    uint64_t stream) -> void {
+  ScopedCudaDevice device_scope{device_id};
+  const auto *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
+  const auto *points_vec3 = reinterpret_cast<const Vec3 *>(points);
+  const auto *normals_vec3 = reinterpret_cast<const Vec3 *>(scaled_normals);
+
+  cudaEvent_t start, finish;
+  CUDA_CHECK(cudaEventCreate(&start));
+  CUDA_CHECK(cudaEventCreate(&finish));
+
+  // convert stream to cuda stream
+  cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
+
+  CUDA_CHECK(cudaEventRecord(start, compute_stream));
+
+  float max_dim = 0.F;
+  if (epsilon > 0.F) {
+    SceneBounds scene_bounds =
+        computeSceneBounds(points_vec3, geometry_count, compute_stream);
+    max_dim = SceneNormalization::effective_extent(scene_bounds);
+  } else {
+    epsilon = 0.F;
+  }
+
+  compute_brute_force_point_normal_with_payload(
+      queries_vec3, points_vec3, normals_vec3, payload,
+      static_cast<uint32_t>(query_count), static_cast<uint32_t>(geometry_count),
+      static_cast<uint32_t>(payload_size), out_payload, epsilon, max_dim,
+      compute_stream);
+
+  CUDA_CHECK(cudaEventRecord(finish, compute_stream));
+  // free events
+  CUDA_CHECK(cudaEventDestroy(start));
+  CUDA_CHECK(cudaEventDestroy(finish));
+}
+
+auto brute_force_mesh_payload_impl(const float *vertices,
+                                   const uint32_t *triangle_indices,
+                                   const float *payload, const float *queries,
+                                   size_t geometry_count, size_t vertex_count,
+                                   size_t query_count, size_t payload_size,
+                                   float *out_payload, float epsilon,
+                                   int device_id, uint64_t stream) -> void {
+  if (geometry_count == 0) {
+    return;
+  }
+  ScopedCudaDevice device_scope{device_id};
+
+  cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
+  auto compute_stream_policy = thrust::cuda::par.on(compute_stream);
+
+  // Verify that index range does not exceed vertex size
+  uint32_t max_index = thrust::reduce(compute_stream_policy, triangle_indices,
+                                      triangle_indices + 3 * geometry_count, 0,
+                                      cuda::maximum<uint32_t>());
+  if (max_index >= vertex_count) {
+    throw std::runtime_error(
+        std::format("The triangle indices are not allowed to exceed the number "
+                    "of vertices. Vertex count is {}, max index is {}.",
+                    vertex_count, max_index));
+  }
+  // Create temporary triangles from indices
+  float *triangles;
+  CUDA_CHECK(cudaMallocAsync(&triangles, geometry_count * sizeof(Triangle),
+                             compute_stream));
+
+  gather_triangles(vertices, triangle_indices,
+                   static_cast<uint32_t>(geometry_count), triangles,
+                   compute_stream);
+
+  // use regular triangle computation
+  brute_force_triangle_payload_impl(
+      triangles, payload, queries, geometry_count,
+      query_count, payload_size, out_payload, epsilon,
+      device_id, stream);
+  // release temporary triangle array
+  CUDA_CHECK(cudaFreeAsync(triangles, compute_stream));
+}
+
+auto brute_force_triangle_payload_impl(
+    const float *triangles_float, const float *payload, const float *queries,
+    size_t geometry_count, size_t query_count, size_t payload_size,
+    float *out_payload, float epsilon, int device_id, uint64_t stream) -> void {
+  ScopedCudaDevice device_scope{device_id};
+  const auto *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
+  const auto *triangles = reinterpret_cast<const Triangle *>(triangles_float);
+
+  cudaEvent_t start, finish;
+  CUDA_CHECK(cudaEventCreate(&start));
+  CUDA_CHECK(cudaEventCreate(&finish));
+
+  // convert stream to cuda stream
+  cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
+
+  CUDA_CHECK(cudaEventRecord(start, compute_stream));
+  float max_dim = 0.F;
+  if (epsilon > 0.F) {
+    SceneBounds scene_bounds =
+        computeSceneBounds(triangles, geometry_count, compute_stream);
+    max_dim = SceneNormalization::effective_extent(scene_bounds);
+  } else {
+    epsilon = 0.F;
+  }
+
+  compute_brute_force_triangle_with_payload(
+      queries_vec3, triangles, payload, static_cast<uint32_t>(query_count),
+      static_cast<uint32_t>(geometry_count), static_cast<uint32_t>(payload_size), out_payload, epsilon, max_dim,
+      compute_stream);
 
   CUDA_CHECK(cudaEventRecord(finish, compute_stream));
   // free events
