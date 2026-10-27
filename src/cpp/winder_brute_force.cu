@@ -25,10 +25,13 @@
 #include <thrust/execution_policy.h>
 #include <thrust/reduce.h>
 
-auto brute_force_point_normal_impl(
-    const float *points, const float *scaled_normals, const float *queries,
-    size_t geometry_count, const size_t query_count, float *winding_numbers,
-    float epsilon, const int device_id, const uint64_t stream, const bool use_kahan) -> void {
+auto brute_force_point_normal_impl(const float *points,
+                                   const float *scaled_normals,
+                                   const float *queries, size_t geometry_count,
+                                   const size_t query_count,
+                                   float *winding_numbers, float epsilon,
+                                   const int device_id, const uint64_t stream,
+                                   const bool use_kahan) -> void {
   ScopedCudaDevice device_scope{device_id};
   const auto *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
   const auto *points_vec3 = reinterpret_cast<const Vec3 *>(points);
@@ -68,7 +71,8 @@ auto brute_force_mesh_impl(const float *vertices,
                            const float *queries, const size_t geometry_count,
                            const size_t vertex_count, const size_t query_count,
                            float *winding_numbers, float epsilon,
-                           const int device_id, const uint64_t stream, const bool use_kahan) -> void {
+                           const int device_id, const uint64_t stream,
+                           const bool use_kahan) -> void {
   if (geometry_count == 0) {
     return;
   }
@@ -98,7 +102,8 @@ auto brute_force_mesh_impl(const float *vertices,
 
   // use regular triangle computation
   brute_force_triangle_impl(triangles, queries, geometry_count, query_count,
-                            winding_numbers, epsilon, device_id, stream, use_kahan);
+                            winding_numbers, epsilon, device_id, stream,
+                            use_kahan);
   // release temporary triangle array
   CUDA_CHECK(cudaFreeAsync(triangles, compute_stream));
 }
@@ -106,8 +111,8 @@ auto brute_force_mesh_impl(const float *vertices,
 auto brute_force_triangle_impl(const float *triangles_float,
                                const float *queries, size_t geometry_count,
                                size_t query_count, float *winding_numbers,
-                               float epsilon, int device_id, uint64_t stream, const bool use_kahan)
-    -> void {
+                               float epsilon, int device_id, uint64_t stream,
+                               const bool use_kahan) -> void {
   ScopedCudaDevice device_scope{device_id};
   const auto *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
   const auto *triangles = reinterpret_cast<const Triangle *>(triangles_float);
@@ -173,7 +178,7 @@ auto brute_force_point_normal_payload_impl(
       queries_vec3, points_vec3, normals_vec3, payload,
       static_cast<uint32_t>(query_count), static_cast<uint32_t>(geometry_count),
       static_cast<uint32_t>(payload_size), out_payload, epsilon, max_dim,
-      compute_stream, use_kahan);
+      compute_stream, use_kahan, /*use_vectorized_loads=*/false);
 
   CUDA_CHECK(cudaEventRecord(finish, compute_stream));
   // free events
@@ -187,7 +192,8 @@ auto brute_force_mesh_payload_impl(const float *vertices,
                                    size_t geometry_count, size_t vertex_count,
                                    size_t query_count, size_t payload_size,
                                    float *out_payload, float epsilon,
-                                   int device_id, uint64_t stream, const bool use_kahan) -> void {
+                                   int device_id, uint64_t stream,
+                                   const bool use_kahan) -> void {
   if (geometry_count == 0) {
     return;
   }
@@ -216,10 +222,9 @@ auto brute_force_mesh_payload_impl(const float *vertices,
                    compute_stream);
 
   // use regular triangle computation
-  brute_force_triangle_payload_impl(
-      triangles, payload, queries, geometry_count,
-      query_count, payload_size, out_payload, epsilon,
-      device_id, stream, use_kahan);
+  brute_force_triangle_payload_impl(triangles, payload, queries, geometry_count,
+                                    query_count, payload_size, out_payload,
+                                    epsilon, device_id, stream, use_kahan);
   // release temporary triangle array
   CUDA_CHECK(cudaFreeAsync(triangles, compute_stream));
 }
@@ -227,7 +232,8 @@ auto brute_force_mesh_payload_impl(const float *vertices,
 auto brute_force_triangle_payload_impl(
     const float *triangles_float, const float *payload, const float *queries,
     size_t geometry_count, size_t query_count, size_t payload_size,
-    float *out_payload, float epsilon, int device_id, uint64_t stream, const bool use_kahan) -> void {
+    float *out_payload, float epsilon, int device_id, uint64_t stream,
+    const bool use_kahan) -> void {
   ScopedCudaDevice device_scope{device_id};
   const auto *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
   const auto *triangles = reinterpret_cast<const Triangle *>(triangles_float);
@@ -251,8 +257,9 @@ auto brute_force_triangle_payload_impl(
 
   compute_brute_force_triangle_with_payload(
       queries_vec3, triangles, payload, static_cast<uint32_t>(query_count),
-      static_cast<uint32_t>(geometry_count), static_cast<uint32_t>(payload_size), out_payload, epsilon, max_dim,
-      compute_stream, use_kahan);
+      static_cast<uint32_t>(geometry_count),
+      static_cast<uint32_t>(payload_size), out_payload, epsilon, max_dim,
+      compute_stream, use_kahan, /*use_vectorized_loads=*/false);
 
   CUDA_CHECK(cudaEventRecord(finish, compute_stream));
   // free events
@@ -408,8 +415,9 @@ auto brute_force_triangle_query_gradient_impl(
   }
 
   compute_brute_force_query_gradients_triangles(
-      grad_output, triangles, queries_vec3, static_cast<uint32_t>(geometry_count),
-      static_cast<uint32_t>(query_count), query_gradients, epsilon, max_dim, compute_stream, use_kahan);
+      grad_output, triangles, queries_vec3,
+      static_cast<uint32_t>(geometry_count), static_cast<uint32_t>(query_count),
+      query_gradients, epsilon, max_dim, compute_stream, use_kahan);
 }
 
 auto brute_force_mesh_gradient_impl(
@@ -417,7 +425,8 @@ auto brute_force_mesh_gradient_impl(
     const uint32_t *triangle_indices, const float *queries,
     const size_t geometry_count, const size_t query_count,
     const size_t vertex_count, float *vertice_grads, float *epsilon_gradient,
-    float epsilon, const int device_id, const uint64_t stream, const bool use_kahan) -> void {
+    float epsilon, const int device_id, const uint64_t stream,
+    const bool use_kahan) -> void {
 
   if (geometry_count == 0) {
     return;
@@ -450,9 +459,10 @@ auto brute_force_mesh_gradient_impl(
       &triangle_gradients, geometry_count * sizeof(Triangle), compute_stream));
 
   // use regular triangle computation
-  brute_force_triangle_gradient_impl(
-      grad_output, triangles, queries, geometry_count, query_count,
-      triangle_gradients, epsilon_gradient, epsilon, device_id, stream, use_kahan);
+  brute_force_triangle_gradient_impl(grad_output, triangles, queries,
+                                     geometry_count, query_count,
+                                     triangle_gradients, epsilon_gradient,
+                                     epsilon, device_id, stream, use_kahan);
   // release temporary triangle array
   CUDA_CHECK(cudaFreeAsync(triangles, compute_stream));
 
@@ -503,4 +513,330 @@ auto brute_force_mesh_query_gradient_impl(
       query_gradients, epsilon, device_id, stream, use_kahan);
 
   CUDA_CHECK(cudaFreeAsync(triangles, compute_stream));
+}
+
+////////////////////////////////// PAYLOAD GRADIENT //////////////
+
+auto brute_force_point_normal_payload_gradient_impl(
+    const float *grad_output, const float *points, const float *scaled_normals,
+    const float *queries, const size_t geometry_count, const size_t query_count,
+    const size_t payload_size, float *out_grad, float epsilon,
+    const int device_id, const uint64_t stream, const bool use_kahan) -> void {
+  ScopedCudaDevice device_scope{device_id};
+  const auto *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
+  const auto *points_vec3 = reinterpret_cast<const Vec3 *>(points);
+  const auto *normals_vec3 = reinterpret_cast<const Vec3 *>(scaled_normals);
+
+  cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
+
+  float max_dim = 0.F;
+  if (epsilon > 0.F) {
+    SceneBounds scene_bounds =
+        computeSceneBounds(points_vec3, geometry_count, compute_stream);
+    max_dim = SceneNormalization::effective_extent(scene_bounds);
+  } else {
+    epsilon = 0.F;
+  }
+
+  compute_brute_force_payload_gradients_point_normal(
+      queries_vec3, points_vec3, normals_vec3, grad_output,
+      static_cast<uint32_t>(query_count), static_cast<uint32_t>(geometry_count),
+      static_cast<uint32_t>(payload_size), out_grad, epsilon, max_dim,
+      compute_stream, use_kahan,
+      /*use_vectorized_loads=*/false);
+}
+
+auto brute_force_mesh_payload_gradient_impl(
+    const float *grad_output, const float *vertices,
+    const uint32_t *triangle_indices, const float *queries,
+    const size_t geometry_count, const size_t vertex_count,
+    const size_t query_count, const size_t payload_size, float *out_grad,
+    float epsilon, const int device_id, const uint64_t stream,
+    const bool use_kahan) -> void {
+  if (geometry_count == 0) {
+    return;
+  }
+  ScopedCudaDevice device_scope{device_id};
+
+  cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
+  auto compute_stream_policy = thrust::cuda::par.on(compute_stream);
+
+  uint32_t max_index = thrust::reduce(compute_stream_policy, triangle_indices,
+                                      triangle_indices + 3 * geometry_count, 0,
+                                      cuda::maximum<uint32_t>());
+  if (max_index >= vertex_count) {
+    throw std::runtime_error(
+        std::format("The triangle indices are not allowed to exceed the number "
+                    "of vertices. Vertex count is {}, max index is {}.",
+                    vertex_count, max_index));
+  }
+
+  float *triangles;
+  CUDA_CHECK(cudaMallocAsync(&triangles, geometry_count * sizeof(Triangle),
+                             compute_stream));
+  gather_triangles(vertices, triangle_indices,
+                   static_cast<uint32_t>(geometry_count), triangles,
+                   compute_stream);
+
+  brute_force_triangle_payload_gradient_impl(
+      grad_output, triangles, queries, geometry_count, query_count,
+      payload_size, out_grad, epsilon, device_id, stream, use_kahan);
+
+  CUDA_CHECK(cudaFreeAsync(triangles, compute_stream));
+}
+
+auto brute_force_triangle_payload_gradient_impl(
+    const float *grad_output, const float *triangles_float,
+    const float *queries, const size_t geometry_count, const size_t query_count,
+    const size_t payload_size, float *out_grad, float epsilon,
+    const int device_id, const uint64_t stream, const bool use_kahan) -> void {
+  ScopedCudaDevice device_scope{device_id};
+  const auto *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
+  const auto *triangles = reinterpret_cast<const Triangle *>(triangles_float);
+
+  cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
+
+  float max_dim = 0.F;
+  if (epsilon > 0.F) {
+    SceneBounds scene_bounds =
+        computeSceneBounds(triangles, geometry_count, compute_stream);
+    max_dim = SceneNormalization::effective_extent(scene_bounds);
+  } else {
+    epsilon = 0.F;
+  }
+
+  compute_brute_force_payload_gradients_triangle(
+      queries_vec3, triangles, grad_output, static_cast<uint32_t>(query_count),
+      static_cast<uint32_t>(geometry_count),
+      static_cast<uint32_t>(payload_size), out_grad, epsilon, max_dim,
+      compute_stream, use_kahan,
+      /*use_vectorized_loads=*/false);
+}
+
+
+////////////////////////////////// GEOMETRY GRADIENT WITH PAYLOAD //////////
+
+auto brute_force_point_normal_geometry_gradient_with_payload_impl(
+    const float *grad_output, const float *points, const float *scaled_normals,
+    const float *payload, const float *queries, const size_t geometry_count,
+    const size_t query_count, const size_t payload_size, float *gradients,
+    float *epsilon_gradient, float epsilon, const int device_id,
+    const uint64_t stream, const bool use_kahan) -> void {
+  ScopedCudaDevice device_scope{device_id};
+
+  const Vec3 *points_vec3 = reinterpret_cast<const Vec3 *>(points);
+  const Vec3 *normals_vec3 = reinterpret_cast<const Vec3 *>(scaled_normals);
+  const Vec3 *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
+
+  cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
+
+  float max_dim = 0.F;
+  if (epsilon > 0.F) {
+    SceneBounds scene_bounds =
+        computeSceneBounds(points_vec3, geometry_count, compute_stream);
+    max_dim = SceneNormalization::effective_extent(scene_bounds);
+  } else {
+    epsilon = 0.F;
+  }
+
+  float *epsilon_gradients;
+  CUDA_CHECK(cudaMallocAsync(&epsilon_gradients, geometry_count * sizeof(float),
+                             compute_stream));
+
+  compute_brute_force_geometry_gradients_with_payload_point_normal(
+      grad_output, points_vec3, normals_vec3, payload, queries_vec3,
+      static_cast<uint32_t>(geometry_count), static_cast<uint32_t>(query_count),
+      static_cast<uint32_t>(payload_size), gradients, epsilon_gradients,
+      epsilon, max_dim, compute_stream, use_kahan);
+
+  reduce_async(epsilon_gradients, epsilon_gradient, geometry_count,
+               compute_stream);
+  CUDA_CHECK(cudaFreeAsync(epsilon_gradients, compute_stream));
+}
+
+auto brute_force_mesh_geometry_gradient_with_payload_impl(
+    const float *grad_output, const float *vertices,
+    const uint32_t *triangle_indices, const float *payload,
+    const float *queries, const size_t geometry_count, const size_t query_count,
+    const size_t vertex_count, const size_t payload_size, float *vertice_grads,
+    float *epsilon_gradient, float epsilon, const int device_id,
+    const uint64_t stream, const bool use_kahan) -> void {
+  if (geometry_count == 0) {
+    return;
+  }
+  ScopedCudaDevice device_scope{device_id};
+
+  cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
+  auto compute_stream_policy = thrust::cuda::par.on(compute_stream);
+
+  uint32_t max_index = thrust::reduce(compute_stream_policy, triangle_indices,
+                                      triangle_indices + 3 * geometry_count, 0,
+                                      cuda::maximum<uint32_t>());
+  if (max_index >= vertex_count) {
+    throw std::runtime_error(
+        std::format("The triangle indices are not allowed to exceed the number "
+                    "of vertices. Vertex count is {}, max index is {}.",
+                    vertex_count, max_index));
+  }
+
+  float *triangles;
+  CUDA_CHECK(cudaMallocAsync(&triangles, geometry_count * sizeof(Triangle),
+                             compute_stream));
+  gather_triangles(vertices, triangle_indices,
+                   static_cast<uint32_t>(geometry_count), triangles,
+                   compute_stream);
+
+  float *triangle_gradients;
+  CUDA_CHECK(cudaMallocAsync(
+      &triangle_gradients, geometry_count * sizeof(Triangle), compute_stream));
+
+  brute_force_triangle_geometry_gradient_with_payload_impl(
+      grad_output, triangles, payload, queries, geometry_count, query_count,
+      payload_size, triangle_gradients, epsilon_gradient, epsilon, device_id,
+      stream, use_kahan);
+
+  CUDA_CHECK(cudaFreeAsync(triangles, compute_stream));
+
+  CUDA_CHECK(cudaMemsetAsync(vertice_grads, 0, vertex_count * 3 * sizeof(float),
+                             compute_stream));
+  accumulate_vertice_gradients(triangle_gradients, triangle_indices,
+                               static_cast<uint32_t>(geometry_count),
+                               vertice_grads, compute_stream);
+  CUDA_CHECK(cudaFreeAsync(triangle_gradients, compute_stream));
+}
+
+auto brute_force_triangle_geometry_gradient_with_payload_impl(
+    const float *grad_output, const float *triangles_float,
+    const float *payload, const float *queries, const size_t geometry_count,
+    const size_t query_count, const size_t payload_size, float *gradients,
+    float *epsilon_gradient, float epsilon, const int device_id,
+    const uint64_t stream, const bool use_kahan) -> void {
+  ScopedCudaDevice device_scope{device_id};
+
+  const Vec3 *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
+  const auto *triangles = reinterpret_cast<const Triangle *>(triangles_float);
+
+  cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
+
+  float max_dim = 0.F;
+  if (epsilon > 0.F) {
+    SceneBounds scene_bounds =
+        computeSceneBounds(triangles, geometry_count, compute_stream);
+    max_dim = SceneNormalization::effective_extent(scene_bounds);
+  } else {
+    epsilon = 0.F;
+  }
+
+  float *epsilon_gradients;
+  CUDA_CHECK(cudaMallocAsync(&epsilon_gradients, geometry_count * sizeof(float),
+                             compute_stream));
+
+  compute_brute_force_geometry_gradients_with_payload_triangle(
+      grad_output, triangles, payload, queries_vec3,
+      static_cast<uint32_t>(geometry_count), static_cast<uint32_t>(query_count),
+      static_cast<uint32_t>(payload_size), gradients, epsilon_gradients,
+      epsilon, max_dim, compute_stream, use_kahan);
+
+  reduce_async(epsilon_gradients, epsilon_gradient, geometry_count,
+               compute_stream);
+  CUDA_CHECK(cudaFreeAsync(epsilon_gradients, compute_stream));
+}
+
+////////////////////////////////// QUERY GRADIENT WITH PAYLOAD //////////////
+
+auto brute_force_point_normal_query_gradient_with_payload_impl(
+    const float *grad_output, const float *points, const float *scaled_normals,
+    const float *payload, const float *queries, const size_t geometry_count,
+    const size_t query_count, const size_t payload_size, float *query_gradients,
+    float epsilon, const int device_id, const uint64_t stream,
+    const bool use_kahan) -> void {
+  ScopedCudaDevice device_scope{device_id};
+
+  const Vec3 *points_vec3 = reinterpret_cast<const Vec3 *>(points);
+  const Vec3 *normals_vec3 = reinterpret_cast<const Vec3 *>(scaled_normals);
+  const Vec3 *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
+
+  cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
+
+  float max_dim = 0.F;
+  if (epsilon > 0.F) {
+    SceneBounds scene_bounds =
+        computeSceneBounds(points_vec3, geometry_count, compute_stream);
+    max_dim = SceneNormalization::effective_extent(scene_bounds);
+  } else {
+    epsilon = 0.F;
+  }
+
+  compute_brute_force_query_gradients_with_payload_point_normal(
+      grad_output, points_vec3, normals_vec3, payload, queries_vec3,
+      static_cast<uint32_t>(geometry_count), static_cast<uint32_t>(query_count),
+      static_cast<uint32_t>(payload_size), query_gradients, epsilon, max_dim,
+      compute_stream, use_kahan);
+}
+
+auto brute_force_mesh_query_gradient_with_payload_impl(
+    const float *grad_output, const float *vertices,
+    const uint32_t *triangle_indices, const float *payload,
+    const float *queries, const size_t geometry_count, const size_t query_count,
+    const size_t vertex_count, const size_t payload_size,
+    float *query_gradients, float epsilon, const int device_id,
+    const uint64_t stream, const bool use_kahan) -> void {
+  if (geometry_count == 0) {
+    return;
+  }
+  ScopedCudaDevice device_scope{device_id};
+  cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
+
+  auto compute_stream_policy = thrust::cuda::par.on(compute_stream);
+  uint32_t max_index = thrust::reduce(compute_stream_policy, triangle_indices,
+                                      triangle_indices + 3 * geometry_count, 0,
+                                      cuda::maximum<uint32_t>());
+  if (max_index >= vertex_count) {
+    throw std::runtime_error(std::format(
+        "The triangle indices are not allowed to exceed the number of "
+        "vertices. Vertex count is {}, max index is {}.",
+        vertex_count, max_index));
+  }
+
+  float *triangles;
+  CUDA_CHECK(cudaMallocAsync(&triangles, geometry_count * sizeof(Triangle),
+                             compute_stream));
+  gather_triangles(vertices, triangle_indices,
+                   static_cast<uint32_t>(geometry_count), triangles,
+                   compute_stream);
+
+  brute_force_triangle_query_gradient_with_payload_impl(
+      grad_output, triangles, payload, queries, geometry_count, query_count,
+      payload_size, query_gradients, epsilon, device_id, stream, use_kahan);
+
+  CUDA_CHECK(cudaFreeAsync(triangles, compute_stream));
+}
+
+auto brute_force_triangle_query_gradient_with_payload_impl(
+    const float *grad_output, const float *triangles_float,
+    const float *payload, const float *queries, const size_t geometry_count,
+    const size_t query_count, const size_t payload_size, float *query_gradients,
+    float epsilon, const int device_id, const uint64_t stream,
+    const bool use_kahan) -> void {
+  ScopedCudaDevice device_scope{device_id};
+
+  const Vec3 *queries_vec3 = reinterpret_cast<const Vec3 *>(queries);
+  const auto *triangles = reinterpret_cast<const Triangle *>(triangles_float);
+
+  cudaStream_t compute_stream = reinterpret_cast<cudaStream_t>(stream);
+
+  float max_dim = 0.F;
+  if (epsilon > 0.F) {
+    SceneBounds scene_bounds =
+        computeSceneBounds(triangles, geometry_count, compute_stream);
+    max_dim = SceneNormalization::effective_extent(scene_bounds);
+  } else {
+    epsilon = 0.F;
+  }
+
+  compute_brute_force_query_gradients_with_payload_triangle(
+      grad_output, triangles, payload, queries_vec3,
+      static_cast<uint32_t>(geometry_count), static_cast<uint32_t>(query_count),
+      static_cast<uint32_t>(payload_size), query_gradients, epsilon, max_dim,
+      compute_stream, use_kahan);
 }

@@ -15,7 +15,16 @@ try:
         brute_force_query_gradients_mesh,
         brute_force_winding_payloads_point_normal,
         brute_force_winding_payloads_triangle_soup,
-        brute_force_winding_payloads_mesh
+        brute_force_winding_payloads_mesh,
+        brute_force_payload_gradients_point_normal,
+        brute_force_payload_gradients_triangle_soup,
+        brute_force_payload_gradients_mesh,
+        brute_force_gradients_with_payload_point_normal,
+        brute_force_gradients_with_payload_triangle_soup,
+        brute_force_gradients_with_payload_mesh,
+        brute_force_query_gradients_with_payload_point_normal,
+        brute_force_query_gradients_with_payload_triangle_soup,
+        brute_force_query_gradients_with_payload_mesh,
     )
 except ImportError as e:
     import warnings
@@ -43,5 +52,14 @@ __all__ = [
     "brute_force_winding_payloads_point_normal",
     "brute_force_winding_payloads_triangle_soup",
     "brute_force_winding_payloads_mesh",
+    "brute_force_payload_gradients_point_normal",
+    "brute_force_payload_gradients_triangle_soup",
+    "brute_force_payload_gradients_mesh",
+    "brute_force_gradients_with_payload_point_normal",
+    "brute_force_gradients_with_payload_triangle_soup",
+    "brute_force_gradients_with_payload_mesh",
+    "brute_force_query_gradients_with_payload_point_normal",
+    "brute_force_query_gradients_with_payload_triangle_soup",
+    "brute_force_query_gradients_with_payload_mesh",
     "types",
 ]

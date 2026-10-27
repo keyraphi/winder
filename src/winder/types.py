@@ -16,6 +16,7 @@ else:
 N = TypeVar("N", default=Any)
 M = TypeVar("M", default=Any)
 K = TypeVar("K", default=Any)
+D = TypeVar("D", default=Any)
 
 ShapeArgs = TypeVarTuple("ShapeArgs")
 

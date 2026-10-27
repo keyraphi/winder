@@ -79,3 +79,64 @@ auto brute_force_triangle_query_gradient_impl(
     const float *queries, size_t geometry_count, size_t query_count,
     float *query_gradients, float epsilon, int device_id, uint64_t stream, bool use_kahan = true)
     -> void;
+
+// Payload gradients ∂L/∂v_i
+auto brute_force_point_normal_payload_gradient_impl(
+    const float *grad_output, const float *points, const float *scaled_normals,
+    const float *queries, size_t geometry_count, size_t query_count,
+    size_t payload_size, float *out_grad, float epsilon, int device_id,
+    uint64_t stream, bool use_kahan) -> void;
+
+auto brute_force_mesh_payload_gradient_impl(
+    const float *grad_output, const float *vertices,
+    const uint32_t *triangle_indices, const float *queries,
+    size_t geometry_count, size_t vertex_count, size_t query_count,
+    size_t payload_size, float *out_grad, float epsilon, int device_id,
+    uint64_t stream, bool use_kahan) -> void;
+
+auto brute_force_triangle_payload_gradient_impl(
+    const float *grad_output, const float *triangles, const float *queries,
+    size_t geometry_count, size_t query_count, size_t payload_size,
+    float *out_grad, float epsilon, int device_id, uint64_t stream,
+    bool use_kahan) -> void;
+
+// Geometry gradients with payload
+auto brute_force_point_normal_geometry_gradient_with_payload_impl(
+    const float *grad_output, const float *points, const float *scaled_normals,
+    const float *payload, const float *queries, size_t geometry_count,
+    size_t query_count, size_t payload_size, float *gradients,
+    float *epsilon_gradient, float epsilon, int device_id, uint64_t stream,
+    bool use_kahan) -> void;
+
+auto brute_force_mesh_geometry_gradient_with_payload_impl(
+    const float *grad_output, const float *vertices,
+    const uint32_t *triangle_indices, const float *payload, const float *queries,
+    size_t geometry_count, size_t query_count, size_t vertex_count,
+    size_t payload_size, float *vertice_grads, float *epsilon_gradient,
+    float epsilon, int device_id, uint64_t stream, bool use_kahan) -> void;
+
+auto brute_force_triangle_geometry_gradient_with_payload_impl(
+    const float *grad_output, const float *triangles, const float *payload,
+    const float *queries, size_t geometry_count, size_t query_count,
+    size_t payload_size, float *gradients, float *epsilon_gradient,
+    float epsilon, int device_id, uint64_t stream, bool use_kahan) -> void;
+
+// Query gradients with payload
+auto brute_force_point_normal_query_gradient_with_payload_impl(
+    const float *grad_output, const float *points, const float *scaled_normals,
+    const float *payload, const float *queries, size_t geometry_count,
+    size_t query_count, size_t payload_size, float *query_gradients,
+    float epsilon, int device_id, uint64_t stream, bool use_kahan) -> void;
+
+auto brute_force_mesh_query_gradient_with_payload_impl(
+    const float *grad_output, const float *vertices,
+    const uint32_t *triangle_indices, const float *payload, const float *queries,
+    size_t geometry_count, size_t query_count, size_t vertex_count,
+    size_t payload_size, float *query_gradients, float epsilon, int device_id,
+    uint64_t stream, bool use_kahan) -> void;
+
+auto brute_force_triangle_query_gradient_with_payload_impl(
+    const float *grad_output, const float *triangles, const float *payload,
+    const float *queries, size_t geometry_count, size_t query_count,
+    size_t payload_size, float *query_gradients, float epsilon, int device_id,
+    uint64_t stream, bool use_kahan) -> void;

@@ -444,6 +444,435 @@ auto brute_force_query_gradients(const Scalar_t &grad_output,
       stream, use_kahan);
 }
 
+// PAYLOAD GRADIENTS
+auto brute_force_payload_gradients(
+    const Payload_t &grad_output, const Vec3_t &points,
+    const Vec3_t &scaled_normals, const Vec3_t &queries,
+    Payload_t &out_gradients, float epsilon = 0.004F, const uint64_t stream = 0,
+    const bool use_kahan = false) -> void {
+  if (points.device_id() != scaled_normals.device_id()) {
+    throw std::runtime_error(
+        "points and scaled_normals must be on the same CUDA device.");
+  }
+  if (points.device_id() != grad_output.device_id()) {
+    throw std::runtime_error(
+        "points and grad_output must be on the same CUDA device.");
+  }
+  if (points.device_id() != queries.device_id()) {
+    throw std::runtime_error(
+        "points and queries must be on the same CUDA device.");
+  }
+  if (points.device_id() != out_gradients.device_id()) {
+    throw std::runtime_error(
+        "points and out_gradients must be on the same CUDA device.");
+  }
+  if (points.shape(0) != scaled_normals.shape(0)) {
+    throw std::runtime_error(
+        "Shape of points must be equal to shape of normals.");
+  }
+  if (points.shape(0) != out_gradients.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of points must be equal to shape[0] of out_gradients.");
+  }
+  if (queries.shape(0) != grad_output.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of queries must be equal to shape[0] of grad_output.");
+  }
+  if (grad_output.shape(1) != out_gradients.shape(1)) {
+    throw std::runtime_error(
+        "Shape[1] of grad_output must be equal to shape[1] of out_gradients.");
+  }
+  brute_force_point_normal_payload_gradient_impl(
+      grad_output.data(), points.data(), scaled_normals.data(), queries.data(),
+      points.shape(0), queries.shape(0), grad_output.shape(1),
+      out_gradients.data(), epsilon, points.device_id(), stream, use_kahan);
+}
+
+auto brute_force_payload_gradients(
+    const Payload_t &grad_output, const Vec3_t &vertices,
+    const TriangleIdx_t &triangle_indices, const Vec3_t &queries,
+    Payload_t &out_gradients, float epsilon = 0.004F, const uint64_t stream = 0,
+    const bool use_kahan = false) -> void {
+  if (vertices.device_id() != triangle_indices.device_id()) {
+    throw std::runtime_error(
+        "vertices and triangle_indices must be on the same CUDA device.");
+  }
+  if (vertices.device_id() != grad_output.device_id()) {
+    throw std::runtime_error(
+        "vertices and grad_output must be on the same CUDA device.");
+  }
+  if (vertices.device_id() != queries.device_id()) {
+    throw std::runtime_error(
+        "vertices and queries must be on the same CUDA device.");
+  }
+  if (vertices.device_id() != out_gradients.device_id()) {
+    throw std::runtime_error(
+        "vertices and out_gradients must be on the same CUDA device.");
+  }
+  if (triangle_indices.shape(0) != out_gradients.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of triangle_indices must equal shape[0] of out_gradients.");
+  }
+  if (queries.shape(0) != grad_output.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of queries must equal shape[0] of grad_output.");
+  }
+  if (grad_output.shape(1) != out_gradients.shape(1)) {
+    throw std::runtime_error(
+        "Shape[1] of grad_output must equal shape[1] of out_gradients.");
+  }
+  brute_force_mesh_payload_gradient_impl(
+      grad_output.data(), vertices.data(), triangle_indices.data(),
+      queries.data(), triangle_indices.shape(0), vertices.shape(0),
+      queries.shape(0), grad_output.shape(1), out_gradients.data(), epsilon,
+      vertices.device_id(), stream, use_kahan);
+}
+
+auto brute_force_payload_gradients(
+    const Payload_t &grad_output, const Triangle_t &triangles,
+    const Vec3_t &queries, Payload_t &out_gradients, float epsilon = 0.004F,
+    const uint64_t stream = 0, const bool use_kahan = false) -> void {
+  if (triangles.device_id() != grad_output.device_id()) {
+    throw std::runtime_error(
+        "triangles and grad_output must be on the same CUDA device.");
+  }
+  if (triangles.device_id() != queries.device_id()) {
+    throw std::runtime_error(
+        "triangles and queries must be on the same CUDA device.");
+  }
+  if (triangles.device_id() != out_gradients.device_id()) {
+    throw std::runtime_error(
+        "triangles and out_gradients must be on the same CUDA device.");
+  }
+  if (triangles.shape(0) != out_gradients.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of triangles must equal shape[0] of out_gradients.");
+  }
+  if (queries.shape(0) != grad_output.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of queries must equal shape[0] of grad_output.");
+  }
+  if (grad_output.shape(1) != out_gradients.shape(1)) {
+    throw std::runtime_error(
+        "Shape[1] of grad_output must equal shape[1] of out_gradients.");
+  }
+  brute_force_triangle_payload_gradient_impl(
+      grad_output.data(), triangles.data(), queries.data(), triangles.shape(0),
+      queries.shape(0), grad_output.shape(1), out_gradients.data(), epsilon,
+      triangles.device_id(), stream, use_kahan);
+}
+
+// PAYLOAD GRADIENTS WRT GEOMETRY
+auto brute_force_gradients_with_payload(
+    const Payload_t &grad_output, const Vec3_t &points,
+    const Vec3_t &scaled_normals, const Payload_t &payload,
+    const Vec3_t &queries, GradResult_t &output_gradients,
+    SingleScalar_t &epsilon_gradient, float epsilon = 0.004F,
+    const uint64_t stream = 0, const bool use_kahan = false) -> void {
+  if (points.device_id() != scaled_normals.device_id()) {
+    throw std::runtime_error(
+        "points and scaled_normals must be on the same CUDA device.");
+  }
+  if (points.device_id() != payload.device_id()) {
+    throw std::runtime_error(
+        "points and payload must be on the same CUDA device.");
+  }
+  if (points.device_id() != grad_output.device_id()) {
+    throw std::runtime_error(
+        "points and grad_output must be on the same CUDA device.");
+  }
+  if (points.device_id() != queries.device_id()) {
+    throw std::runtime_error(
+        "points and queries must be on the same CUDA device.");
+  }
+  if (points.device_id() != output_gradients.device_id()) {
+    throw std::runtime_error(
+        "points and output_gradients must be on the same CUDA device.");
+  }
+  if (points.shape(0) != scaled_normals.shape(0)) {
+    throw std::runtime_error(
+        "Shape of points must equal shape of scaled_normals.");
+  }
+  if (points.shape(0) != payload.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of points must equal shape[0] of payload.");
+  }
+  if (payload.shape(1) != grad_output.shape(1)) {
+    throw std::runtime_error(
+        "Shape[1] of payload must equal shape[1] of grad_output.");
+  }
+  if (queries.shape(0) != grad_output.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of queries must equal shape[0] of grad_output.");
+  }
+  if (points.shape(0) != output_gradients.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of points must equal shape[0] of output_gradients.");
+  }
+  if (output_gradients.shape(1) != 2 || output_gradients.shape(2) != 3) {
+    throw std::runtime_error("Shape of output_gradients must be (N, 2, 3).");
+  }
+  brute_force_point_normal_geometry_gradient_with_payload_impl(
+      grad_output.data(), points.data(), scaled_normals.data(), payload.data(),
+      queries.data(), points.shape(0), queries.shape(0), payload.shape(1),
+      output_gradients.data(), epsilon_gradient.data(), epsilon,
+      points.device_id(), stream, use_kahan);
+}
+
+auto brute_force_gradients_with_payload(
+    const Payload_t &grad_output, const Vec3_t &vertices,
+    const TriangleIdx_t &triangle_indices, const Payload_t &payload,
+    const Vec3_t &queries, VertexGradResult_t &output_gradients,
+    SingleScalar_t &epsilon_gradient, float epsilon = 0.004F,
+    const uint64_t stream = 0, const bool use_kahan = false) -> void {
+  if (vertices.device_id() != triangle_indices.device_id()) {
+    throw std::runtime_error(
+        "vertices and triangle_indices must be on the same CUDA device.");
+  }
+  if (vertices.device_id() != payload.device_id()) {
+    throw std::runtime_error(
+        "vertices and payload must be on the same CUDA device.");
+  }
+  if (vertices.device_id() != grad_output.device_id()) {
+    throw std::runtime_error(
+        "vertices and grad_output must be on the same CUDA device.");
+  }
+  if (vertices.device_id() != queries.device_id()) {
+    throw std::runtime_error(
+        "vertices and queries must be on the same CUDA device.");
+  }
+  if (vertices.device_id() != output_gradients.device_id()) {
+    throw std::runtime_error(
+        "vertices and output_gradients must be on the same CUDA device.");
+  }
+  if (triangle_indices.shape(0) != payload.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of triangle_indices must equal shape[0] of payload.");
+  }
+  if (payload.shape(1) != grad_output.shape(1)) {
+    throw std::runtime_error(
+        "Shape[1] of payload must equal shape[1] of grad_output.");
+  }
+  if (queries.shape(0) != grad_output.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of queries must equal shape[0] of grad_output.");
+  }
+  if (vertices.shape(0) != output_gradients.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of vertices must equal shape[0] of output_gradients.");
+  }
+  if (output_gradients.shape(1) != 3) {
+    throw std::runtime_error("Shape[1] of output_gradients must be 3.");
+  }
+  brute_force_mesh_geometry_gradient_with_payload_impl(
+      grad_output.data(), vertices.data(), triangle_indices.data(),
+      payload.data(), queries.data(), triangle_indices.shape(0),
+      queries.shape(0), vertices.shape(0), payload.shape(1),
+      output_gradients.data(), epsilon_gradient.data(), epsilon,
+      vertices.device_id(), stream, use_kahan);
+}
+
+auto brute_force_gradients_with_payload(
+    const Payload_t &grad_output, const Triangle_t &triangles,
+    const Payload_t &payload, const Vec3_t &queries,
+    GradResult_t &output_gradients, SingleScalar_t &epsilon_gradient,
+    float epsilon = 0.004F, const uint64_t stream = 0,
+    const bool use_kahan = false) -> void {
+  if (triangles.device_id() != payload.device_id()) {
+    throw std::runtime_error(
+        "triangles and payload must be on the same CUDA device.");
+  }
+  if (triangles.device_id() != grad_output.device_id()) {
+    throw std::runtime_error(
+        "triangles and grad_output must be on the same CUDA device.");
+  }
+  if (triangles.device_id() != queries.device_id()) {
+    throw std::runtime_error(
+        "triangles and queries must be on the same CUDA device.");
+  }
+  if (triangles.device_id() != output_gradients.device_id()) {
+    throw std::runtime_error(
+        "triangles and output_gradients must be on the same CUDA device.");
+  }
+  if (triangles.shape(0) != payload.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of triangles must equal shape[0] of payload.");
+  }
+  if (payload.shape(1) != grad_output.shape(1)) {
+    throw std::runtime_error(
+        "Shape[1] of payload must equal shape[1] of grad_output.");
+  }
+  if (queries.shape(0) != grad_output.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of queries must equal shape[0] of grad_output.");
+  }
+  if (triangles.shape(0) != output_gradients.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of triangles must equal shape[0] of output_gradients.");
+  }
+  if (output_gradients.shape(1) != 3 || output_gradients.shape(2) != 3) {
+    throw std::runtime_error("Shape of output_gradients must be (N, 3, 3).");
+  }
+  brute_force_triangle_geometry_gradient_with_payload_impl(
+      grad_output.data(), triangles.data(), payload.data(), queries.data(),
+      triangles.shape(0), queries.shape(0), payload.shape(1),
+      output_gradients.data(), epsilon_gradient.data(), epsilon,
+      triangles.device_id(), stream, use_kahan);
+}
+
+// PAYLOAD GRADIENTS WRT QUERIES
+auto brute_force_query_gradients_with_payload(
+    const Payload_t &grad_output, const Vec3_t &points,
+    const Vec3_t &scaled_normals, const Payload_t &payload,
+    const Vec3_t &queries, Vec3_t &query_gradients, float epsilon = 0.004F,
+    const uint64_t stream = 0, const bool use_kahan = true) -> void {
+  if (points.device_id() != scaled_normals.device_id()) {
+    throw std::runtime_error(
+        "points and scaled_normals must be on the same CUDA device.");
+  }
+  if (points.device_id() != payload.device_id()) {
+    throw std::runtime_error(
+        "points and payload must be on the same CUDA device.");
+  }
+  if (points.device_id() != grad_output.device_id()) {
+    throw std::runtime_error(
+        "points and grad_output must be on the same CUDA device.");
+  }
+  if (points.device_id() != queries.device_id()) {
+    throw std::runtime_error(
+        "points and queries must be on the same CUDA device.");
+  }
+  if (points.device_id() != query_gradients.device_id()) {
+    throw std::runtime_error(
+        "points and query_gradients must be on the same CUDA device.");
+  }
+  if (points.shape(0) != scaled_normals.shape(0)) {
+    throw std::runtime_error(
+        "Shape of points must equal shape of scaled_normals.");
+  }
+  if (points.shape(0) != payload.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of points must equal shape[0] of payload.");
+  }
+  if (payload.shape(1) != grad_output.shape(1)) {
+    throw std::runtime_error(
+        "Shape[1] of payload must equal shape[1] of grad_output.");
+  }
+  if (queries.shape(0) != grad_output.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of queries must equal shape[0] of grad_output.");
+  }
+  if (queries.shape(0) != query_gradients.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of queries must equal shape[0] of query_gradients.");
+  }
+  if (query_gradients.shape(1) != 3) {
+    throw std::runtime_error("Shape[1] of query_gradients must be 3.");
+  }
+  brute_force_point_normal_query_gradient_with_payload_impl(
+      grad_output.data(), points.data(), scaled_normals.data(), payload.data(),
+      queries.data(), points.shape(0), queries.shape(0), payload.shape(1),
+      query_gradients.data(), epsilon, points.device_id(), stream, use_kahan);
+}
+
+auto brute_force_query_gradients_with_payload(
+    const Payload_t &grad_output, const Vec3_t &vertices,
+    const TriangleIdx_t &triangle_indices, const Payload_t &payload,
+    const Vec3_t &queries, Vec3_t &query_gradients, float epsilon = 0.004F,
+    const uint64_t stream = 0, const bool use_kahan = true) -> void {
+  if (vertices.device_id() != triangle_indices.device_id()) {
+    throw std::runtime_error(
+        "vertices and triangle_indices must be on the same CUDA device.");
+  }
+  if (vertices.device_id() != payload.device_id()) {
+    throw std::runtime_error(
+        "vertices and payload must be on the same CUDA device.");
+  }
+  if (vertices.device_id() != grad_output.device_id()) {
+    throw std::runtime_error(
+        "vertices and grad_output must be on the same CUDA device.");
+  }
+  if (vertices.device_id() != queries.device_id()) {
+    throw std::runtime_error(
+        "vertices and queries must be on the same CUDA device.");
+  }
+  if (vertices.device_id() != query_gradients.device_id()) {
+    throw std::runtime_error(
+        "vertices and query_gradients must be on the same CUDA device.");
+  }
+  if (triangle_indices.shape(0) != payload.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of triangle_indices must equal shape[0] of payload.");
+  }
+  if (payload.shape(1) != grad_output.shape(1)) {
+    throw std::runtime_error(
+        "Shape[1] of payload must equal shape[1] of grad_output.");
+  }
+  if (queries.shape(0) != grad_output.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of queries must equal shape[0] of grad_output.");
+  }
+  if (queries.shape(0) != query_gradients.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of queries must equal shape[0] of query_gradients.");
+  }
+  if (query_gradients.shape(1) != 3) {
+    throw std::runtime_error("Shape[1] of query_gradients must be 3.");
+  }
+  brute_force_mesh_query_gradient_with_payload_impl(
+      grad_output.data(), vertices.data(), triangle_indices.data(),
+      payload.data(), queries.data(), triangle_indices.shape(0),
+      queries.shape(0), vertices.shape(0), payload.shape(1),
+      query_gradients.data(), epsilon, vertices.device_id(), stream, use_kahan);
+}
+
+auto brute_force_query_gradients_with_payload(
+    const Payload_t &grad_output, const Triangle_t &triangles,
+    const Payload_t &payload, const Vec3_t &queries, Vec3_t &query_gradients,
+    float epsilon = 0.004F, const uint64_t stream = 0,
+    const bool use_kahan = true) -> void {
+  if (triangles.device_id() != payload.device_id()) {
+    throw std::runtime_error(
+        "triangles and payload must be on the same CUDA device.");
+  }
+  if (triangles.device_id() != grad_output.device_id()) {
+    throw std::runtime_error(
+        "triangles and grad_output must be on the same CUDA device.");
+  }
+  if (triangles.device_id() != queries.device_id()) {
+    throw std::runtime_error(
+        "triangles and queries must be on the same CUDA device.");
+  }
+  if (triangles.device_id() != query_gradients.device_id()) {
+    throw std::runtime_error(
+        "triangles and query_gradients must be on the same CUDA device.");
+  }
+  if (triangles.shape(0) != payload.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of triangles must equal shape[0] of payload.");
+  }
+  if (payload.shape(1) != grad_output.shape(1)) {
+    throw std::runtime_error(
+        "Shape[1] of payload must equal shape[1] of grad_output.");
+  }
+  if (queries.shape(0) != grad_output.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of queries must equal shape[0] of grad_output.");
+  }
+  if (queries.shape(0) != query_gradients.shape(0)) {
+    throw std::runtime_error(
+        "Shape[0] of queries must equal shape[0] of query_gradients.");
+  }
+  if (query_gradients.shape(1) != 3) {
+    throw std::runtime_error("Shape[1] of query_gradients must be 3.");
+  }
+  brute_force_triangle_query_gradient_with_payload_impl(
+      grad_output.data(), triangles.data(), payload.data(), queries.data(),
+      triangles.shape(0), queries.shape(0), payload.shape(1),
+      query_gradients.data(), epsilon, triangles.device_id(), stream,
+      use_kahan);
+}
+
 class GradientEngine {
 public:
   GradientEngine(const Vec3_t &queries, const Scalar_t &grad_output,
@@ -705,6 +1134,15 @@ NB_MODULE(winder_module, m) {
                The field shares the winding number's robustness to broken
                geometry, its harmonicity away from the sources, and its
                invariance under the global regularization length scale.
+  )doc";
+
+  // Reusable docstring for the D-vector `grad_output` argument.
+  constexpr const char *PAYLOAD_ADJOINT_DOC = R"doc(
+                `grad_output` : Array
+                    (M, D) float32 CUDA array representing the gradient of the
+                    loss with respect to the payload field at each query
+                    location (dL/dW). Row `j` is the D-vector adjoint for query
+                    `j`, and must be aligned index-for-index with `queries`.
   )doc";
 
   // ===========================================================================
@@ -1460,6 +1898,682 @@ NB_MODULE(winder_module, m) {
                 `out_query_gradients` : Array
                     (M, 3) float32 CUDA array pre-allocated by the caller.
                     Will be filled with dL/dq for each query.
+            )doc") +
+       EPSILON_DOC + R"doc(
+                `stream` : int, optional
+                    The raw 64-bit identifier (handle) of a CUDA stream.
+                    Allows enqueuing operations asynchronously within deep learning frameworks.
+                    For example, in PyTorch pass: `torch.cuda.current_stream().cuda_stream`.
+                    Default is 0 (the default/null stream).
+            )doc" +
+       USE_KAHAN_DOC)
+          .c_str());
+
+  // PAYLOAD
+  // Gradient wrt payload
+  m.def("brute_force_payload_gradients_point_normal",
+        nb::overload_cast<const Payload_t &, const Vec3_t &, const Vec3_t &,
+                          const Vec3_t &, Payload_t &, float, const uint64_t,
+                          const bool>(&brute_force_payload_gradients),
+        "grad_output"_a, "points"_a, "scaled_normals"_a, "queries"_a,
+        "out_gradients"_a, "epsilon"_a = 0.004F, "stream"_a = 0,
+        "use_kahan"_a = false,
+        nb::sig("def brute_force_payload_gradients_point_normal(grad_output: "
+                "winder.types.Array[winder.types.Shape[winder.types.M, "
+                "winder.types.D], winder.types.float32, winder.types.cuda], "
+                "points: "
+                "winder.types.Array[winder.types.Shape[winder.types.N, "
+                "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+                "scaled_normals: "
+                "winder.types.Array[winder.types.Shape[winder.types.N, "
+                "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+                "queries: "
+                "winder.types.Array[winder.types.Shape[winder.types.M, "
+                "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+                "out_gradients: "
+                "winder.types.Array[winder.types.Shape[winder.types.N, "
+                "winder.types.D], winder.types.float32, winder.types.cuda], "
+                "epsilon: float = 0.004, "
+                "stream: int = 0, use_kahan: bool = false) -> None"),
+        (std::string(R"doc(
+                Computes the gradient of the loss with respect to the
+                per-primitive payloads of a point cloud.
+
+                NOTE: Brute Force implementation: exact, but in `O(N*M*D)`!
+
+                For each primitive `i`, the output row `i` contains the
+                D-vector
+
+                    dL/dv_i = sum_j w_i(q_j) · g_j
+
+                where `w_i(q_j)` is the winding contribution of primitive `i`
+                at query `j` and `g_j` is the incoming D-vector adjoint at
+                query `j`.
+
+                Parameters
+                ----------
+                `grad_output` : Array
+                    (M, D) float32 CUDA array representing the gradient of the
+                    loss with respect to the payload field at each query
+                    location (dL/dW). Row `j` is the D-vector adjoint for query
+                    `j`, and must be aligned index-for-index with `queries`.
+                `points` : Array
+                    A (N, 3) float32 CUDA array of point positions.
+                `scaled_normals` : Array
+                    A (N, 3) float32 CUDA array of scaled normals.
+                    The scaled normal direction is the orientation,
+                    the scale the associated voronoi area.
+                `queries` : Array
+                    (M, 3) float32 CUDA array of query points for which the
+                    payload field was evaluated.
+                `out_gradients` : Array
+                    (N, D) float32 CUDA array pre-allocated by the caller.
+                    Will be filled with `dL/dv_i` for each primitive.
+            )doc") +
+         EPSILON_DOC + R"doc(
+                `stream` : int, optional
+                    The raw 64-bit identifier (handle) of a CUDA stream.
+                    Allows enqueuing operations asynchronously within deep learning frameworks.
+                    For example, in PyTorch pass: `torch.cuda.current_stream().cuda_stream`.
+                    Default is 0 (the default/null stream).
+            )doc" +
+         USE_KAHAN_DOC)
+            .c_str());
+
+  m.def("brute_force_payload_gradients_mesh",
+        nb::overload_cast<const Payload_t &, const Vec3_t &,
+                          const TriangleIdx_t &, const Vec3_t &, Payload_t &,
+                          float, const uint64_t, const bool>(
+            &brute_force_payload_gradients),
+        "grad_output"_a, "vertices"_a, "triangle_indices"_a, "queries"_a,
+        "out_gradients"_a, "epsilon"_a = 0.004F, "stream"_a = 0,
+        "use_kahan"_a = false,
+        nb::sig("def brute_force_payload_gradients_mesh(grad_output: "
+                "winder.types.Array[winder.types.Shape[winder.types.M, "
+                "winder.types.D], winder.types.float32, winder.types.cuda], "
+                "vertices: "
+                "winder.types.Array[winder.types.Shape[winder.types.K, "
+                "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+                "triangle_indices: "
+                "winder.types.Array[winder.types.Shape[winder.types.N, "
+                "typing.Literal[3]], winder.types.uint32, winder.types.cuda], "
+                "queries: "
+                "winder.types.Array[winder.types.Shape[winder.types.M, "
+                "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+                "out_gradients: "
+                "winder.types.Array[winder.types.Shape[winder.types.N, "
+                "winder.types.D], winder.types.float32, winder.types.cuda], "
+                "epsilon: float = 0.004, "
+                "stream: int = 0, use_kahan: bool = false) -> None"),
+        (std::string(R"doc(
+                Computes the gradient of the loss with respect to the
+                per-triangle payloads of a shared-vertex mesh.
+
+                NOTE: Brute Force implementation: exact, but in `O(N*M*D)`!
+
+                The payload is defined per-triangle, so the output is also
+                per-triangle: row `i` of `out_gradients` corresponds to the
+                i-th triangle in `triangle_indices`, not to a shared vertex.
+                Gradients are not accumulated back to the vertices.
+
+                For each triangle `i`:
+
+                    dL/dv_i = sum_j w_i(q_j) · g_j
+
+                where `w_i(q_j)` is the winding contribution of triangle `i`
+                at query `j` and `g_j` is the incoming D-vector adjoint.
+
+                Parameters
+                ----------
+                `grad_output` : Array
+                    (M, D) float32 CUDA array representing the gradient of the
+                    loss with respect to the payload field at each query
+                    location (dL/dW). Row `j` is the D-vector adjoint for query
+                    `j`, aligned with `queries`.
+                `vertices` : Array
+                    A (K, 3) float32 CUDA array holding the shared vertices.
+                `triangle_indices` : Array
+                    A (N, 3) uint32 index array, where each row defines the
+                    three vertices of a triangle.
+                    Note: Order the vertices counter-clockwise when seen from the front.
+                `queries` : Array
+                    (M, 3) float32 CUDA array of query points for which the
+                    payload field was evaluated.
+                `out_gradients` : Array
+                    (N, D) float32 CUDA array pre-allocated by the caller.
+                    Will be filled with `dL/dv_i` for each triangle.
+            )doc") +
+         EPSILON_DOC + R"doc(
+                `stream` : int, optional
+                    The raw 64-bit identifier (handle) of a CUDA stream.
+                    Allows enqueuing operations asynchronously within deep learning frameworks.
+                    For example, in PyTorch pass: `torch.cuda.current_stream().cuda_stream`.
+                    Default is 0 (the default/null stream).
+            )doc" +
+         USE_KAHAN_DOC)
+            .c_str());
+
+  m.def("brute_force_payload_gradients_triangle_soup",
+        nb::overload_cast<const Payload_t &, const Triangle_t &, const Vec3_t &,
+                          Payload_t &, float, const uint64_t, const bool>(
+            &brute_force_payload_gradients),
+        "grad_output"_a, "triangles"_a, "queries"_a, "out_gradients"_a,
+        "epsilon"_a = 0.004F, "stream"_a = 0, "use_kahan"_a = false,
+        nb::sig("def brute_force_payload_gradients_triangle_soup(grad_output: "
+                "winder.types.Array[winder.types.Shape[winder.types.M, "
+                "winder.types.D], winder.types.float32, winder.types.cuda], "
+                "triangles: "
+                "winder.types.Array[winder.types.Shape[winder.types.N, "
+                "typing.Literal[3], typing.Literal[3]], "
+                "winder.types.float32, winder.types.cuda], "
+                "queries: "
+                "winder.types.Array[winder.types.Shape[winder.types.M, "
+                "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+                "out_gradients: "
+                "winder.types.Array[winder.types.Shape[winder.types.N, "
+                "winder.types.D], winder.types.float32, winder.types.cuda], "
+                "epsilon: float = 0.004, "
+                "stream: int = 0, use_kahan: bool = false) -> None"),
+        (std::string(R"doc(
+                Computes the gradient of the loss with respect to the
+                per-triangle payloads of an explicit triangle soup.
+
+                NOTE: Brute Force implementation: exact, but in `O(N*M*D)`!
+
+                For each triangle `i`:
+
+                    dL/dv_i = sum_j w_i(q_j) · g_j
+
+                where `w_i(q_j)` is the winding contribution of triangle `i`
+                at query `j` and `g_j` is the incoming D-vector adjoint.
+
+                Parameters
+                ----------
+                `grad_output` : Array
+                    (M, D) float32 CUDA array representing the gradient of the
+                    loss with respect to the payload field at each query
+                    location (dL/dW). Row `j` is the D-vector adjoint for query
+                    `j`, aligned with `queries`.
+                `triangles` : Array
+                    A (N, 3, 3) float32 CUDA array holding N triangles.
+                    Note: Order the vertices counter-clockwise when seen from the front.
+                `queries` : Array
+                    (M, 3) float32 CUDA array of query points for which the
+                    payload field was evaluated.
+                `out_gradients` : Array
+                    (N, D) float32 CUDA array pre-allocated by the caller.
+                    Will be filled with `dL/dv_i` for each triangle.
+            )doc") +
+         EPSILON_DOC + R"doc(
+                `stream` : int, optional
+                    The raw 64-bit identifier (handle) of a CUDA stream.
+                    Allows enqueuing operations asynchronously within deep learning frameworks.
+                    For example, in PyTorch pass: `torch.cuda.current_stream().cuda_stream`.
+                    Default is 0 (the default/null stream).
+            )doc" +
+         USE_KAHAN_DOC)
+            .c_str());
+
+  // Payload field Gradient wrt geometry
+  m.def("brute_force_gradients_with_payload_point_normal",
+        nb::overload_cast<const Payload_t &, const Vec3_t &, const Vec3_t &,
+                          const Payload_t &, const Vec3_t &, GradResult_t &,
+                          SingleScalar_t &, float, const uint64_t, const bool>(
+            &brute_force_gradients_with_payload),
+        "grad_output"_a, "points"_a, "scaled_normals"_a, "payload"_a,
+        "queries"_a, "out_gradients"_a, "epsilon_gradient"_a,
+        "epsilon"_a = 0.004F, "stream"_a = 0, "use_kahan"_a = false,
+        nb::sig(
+            "def brute_force_gradients_with_payload_point_normal(grad_output: "
+            "winder.types.Array[winder.types.Shape[winder.types.M, "
+            "winder.types.D], winder.types.float32, winder.types.cuda], "
+            "points: "
+            "winder.types.Array[winder.types.Shape[winder.types.N, "
+            "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+            "scaled_normals: "
+            "winder.types.Array[winder.types.Shape[winder.types.N, "
+            "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+            "payload: "
+            "winder.types.Array[winder.types.Shape[winder.types.N, "
+            "winder.types.D], winder.types.float32, winder.types.cuda], "
+            "queries: "
+            "winder.types.Array[winder.types.Shape[winder.types.M, "
+            "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+            "out_gradients: "
+            "winder.types.Array[winder.types.Shape[winder.types.N, "
+            "typing.Literal[2], typing.Literal[3]], winder.types.float32, "
+            "winder.types.cuda], "
+            "epsilon_gradient: "
+            "winder.types.Array[winder.types.Shape[typing.Literal[1]], "
+            "winder.types.float32, winder.types.cuda], "
+            "epsilon: float = 0.004, "
+            "stream: int = 0, use_kahan: bool = false) -> None"),
+        (std::string(R"doc(
+                Computes the partial derivatives of the payload field loss
+                with respect to the source geometry (point positions and
+                scaled normals).
+
+                NOTE: Brute Force implementation: exact, but in `O(N*M*D)`!
+
+                This is the payload-field analogue of
+                `brute_force_gradients_point_normal`: it propagates the loss
+                gradient from the D-vector payload field back to the geometry,
+                using the same weighted contributions as the scalar case.
+                For each primitive `i`, the output row `i` contains:
+
+                    output[i, 0] = dL/dn_i   (gradient w.r.t. the scaled normal)
+                    output[i, 1] = dL/dp_i   (gradient w.r.t. the point position)
+
+                Parameters
+                ----------
+                `grad_output` : Array
+                    (M, D) float32 CUDA array representing the gradient of the
+                    loss with respect to the payload field at each query
+                    location (dL/dW). Row `j` is the D-vector adjoint for query
+                    `j`, aligned with `queries`.
+                `points` : Array
+                    A (N, 3) float32 CUDA array of point positions.
+                `scaled_normals` : Array
+                    A (N, 3) float32 CUDA array of scaled normals.
+                    The scaled normal direction is the orientation,
+                    the scale the associated voronoi area.
+                `payload` : Array
+                    A (N, D) float32 CUDA array of per-primitive payloads.
+                    Row `i` is the D-vector blended by the winding contribution
+                    of primitive `i`.
+                `queries` : Array
+                    (M, 3) float32 CUDA array of query points for which the
+                    payload field was evaluated.
+                `out_gradients` : Array
+                    (N, 2, 3) float32 CUDA array pre-allocated by the caller.
+                    Will be filled with dL/dn_i at index `[i, 0]` and dL/dp_i
+                    at index `[i, 1]`.
+            )doc") +
+         EPSILON_GRADIENT_DOC + EPSILON_DOC + R"doc(
+                `stream` : int, optional
+                    The raw 64-bit identifier (handle) of a CUDA stream.
+                    Allows enqueuing operations asynchronously within deep learning frameworks.
+                    For example, in PyTorch pass: `torch.cuda.current_stream().cuda_stream`.
+                    Default is 0 (the default/null stream).
+            )doc" +
+         USE_KAHAN_DOC)
+            .c_str());
+
+  m.def("brute_force_gradients_with_payload_mesh",
+        nb::overload_cast<const Payload_t &, const Vec3_t &,
+                          const TriangleIdx_t &, const Payload_t &,
+                          const Vec3_t &, VertexGradResult_t &,
+                          SingleScalar_t &, float, const uint64_t, const bool>(
+            &brute_force_gradients_with_payload),
+        "grad_output"_a, "vertices"_a, "triangle_indices"_a, "payload"_a,
+        "queries"_a, "out_gradients"_a, "epsilon_gradient"_a,
+        "epsilon"_a = 0.004F, "stream"_a = 0, "use_kahan"_a = false,
+        nb::sig("def brute_force_gradients_with_payload_mesh(grad_output: "
+                "winder.types.Array[winder.types.Shape[winder.types.M, "
+                "winder.types.D], winder.types.float32, winder.types.cuda], "
+                "vertices: "
+                "winder.types.Array[winder.types.Shape[winder.types.K, "
+                "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+                "triangle_indices: "
+                "winder.types.Array[winder.types.Shape[winder.types.N, "
+                "typing.Literal[3]], winder.types.uint32, winder.types.cuda], "
+                "payload: "
+                "winder.types.Array[winder.types.Shape[winder.types.N, "
+                "winder.types.D], winder.types.float32, winder.types.cuda], "
+                "queries: "
+                "winder.types.Array[winder.types.Shape[winder.types.M, "
+                "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+                "out_gradients: "
+                "winder.types.Array[winder.types.Shape[winder.types.K, "
+                "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+                "epsilon_gradient: "
+                "winder.types.Array[winder.types.Shape[typing.Literal[1]], "
+                "winder.types.float32, winder.types.cuda], "
+                "epsilon: float = 0.004, "
+                "stream: int = 0, use_kahan: bool = false) -> None"),
+        (std::string(R"doc(
+                Computes the partial derivatives of the payload field loss
+                with respect to the shared mesh vertices.
+
+                NOTE: Brute Force implementation: exact, but in `O(N*M*D)`!
+
+                This is the payload-field analogue of
+                `brute_force_gradients_mesh`. The payload is per-triangle,
+                so each triangle's contribution flows into the shared
+                vertices through the usual accumulation step. Output has
+                shape (K, 3), with row `i` holding dL/dv_i for vertex `i`.
+
+                Parameters
+                ----------
+                `grad_output` : Array
+                    (M, D) float32 CUDA array representing the gradient of the
+                    loss with respect to the payload field at each query
+                    location (dL/dW). Row `j` is the D-vector adjoint for query
+                    `j`, aligned with `queries`.
+                `vertices` : Array
+                    A (K, 3) float32 CUDA array holding the shared vertices.
+                `triangle_indices` : Array
+                    A (N, 3) uint32 index array, where each row defines the
+                    three vertices of a triangle.
+                    Note: Order the vertices counter-clockwise when seen from the front.
+                `payload` : Array
+                    A (N, D) float32 CUDA array of per-triangle payloads.
+                    Row `i` is the D-vector blended by the winding contribution
+                    of triangle `i`.
+                `queries` : Array
+                    (M, 3) float32 CUDA array of query points for which the
+                    payload field was evaluated.
+                `out_gradients` : Array
+                    (K, 3) float32 CUDA array pre-allocated by the caller.
+                    Will be filled with dL/dv_i for each shared vertex.
+            )doc") +
+         EPSILON_GRADIENT_DOC + EPSILON_DOC + R"doc(
+                `stream` : int, optional
+                    The raw 64-bit identifier (handle) of a CUDA stream.
+                    Allows enqueuing operations asynchronously within deep learning frameworks.
+                    For example, in PyTorch pass: `torch.cuda.current_stream().cuda_stream`.
+                    Default is 0 (the default/null stream).
+            )doc" +
+         USE_KAHAN_DOC)
+            .c_str());
+
+  m.def("brute_force_gradients_with_payload_triangle_soup",
+        nb::overload_cast<const Payload_t &, const Triangle_t &,
+                          const Payload_t &, const Vec3_t &, GradResult_t &,
+                          SingleScalar_t &, float, const uint64_t, const bool>(
+            &brute_force_gradients_with_payload),
+        "grad_output"_a, "triangles"_a, "payload"_a, "queries"_a,
+        "out_gradients"_a, "epsilon_gradient"_a, "epsilon"_a = 0.004F,
+        "stream"_a = 0, "use_kahan"_a = false,
+        nb::sig(
+            "def brute_force_gradients_with_payload_triangle_soup(grad_output: "
+            "winder.types.Array[winder.types.Shape[winder.types.M, "
+            "winder.types.D], winder.types.float32, winder.types.cuda], "
+            "triangles: "
+            "winder.types.Array[winder.types.Shape[winder.types.N, "
+            "typing.Literal[3], typing.Literal[3]], winder.types.float32, "
+            "winder.types.cuda], "
+            "payload: "
+            "winder.types.Array[winder.types.Shape[winder.types.N, "
+            "winder.types.D], winder.types.float32, winder.types.cuda], "
+            "queries: "
+            "winder.types.Array[winder.types.Shape[winder.types.M, "
+            "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+            "out_gradients: "
+            "winder.types.Array[winder.types.Shape[winder.types.N, "
+            "typing.Literal[3], typing.Literal[3]], winder.types.float32, "
+            "winder.types.cuda], "
+            "epsilon_gradient: "
+            "winder.types.Array[winder.types.Shape[typing.Literal[1]], "
+            "winder.types.float32, winder.types.cuda], "
+            "epsilon: float = 0.004, "
+            "stream: int = 0, use_kahan: bool = false) -> None"),
+        (std::string(R"doc(
+                Computes the partial derivatives of the payload field loss
+                with respect to the vertices of an explicit triangle soup.
+
+                NOTE: Brute Force implementation: exact, but in `O(N*M*D)`!
+
+                This is the payload-field analogue of
+                `brute_force_gradients_triangle_soup`. Output has shape
+                (N, 3, 3), with `output[i, j]` holding the gradient of the
+                loss with respect to vertex `j` of triangle `i`.
+
+                Parameters
+                ----------
+                `grad_output` : Array
+                    (M, D) float32 CUDA array representing the gradient of the
+                    loss with respect to the payload field at each query
+                    location (dL/dW). Row `j` is the D-vector adjoint for query
+                    `j`, aligned with `queries`.
+                `triangles` : Array
+                    A (N, 3, 3) float32 CUDA array holding N triangles.
+                    Note: Order the vertices counter-clockwise when seen from the front.
+                `payload` : Array
+                    A (N, D) float32 CUDA array of per-triangle payloads.
+                    Row `i` is the D-vector blended by the winding contribution
+                    of triangle `i`.
+                `queries` : Array
+                    (M, 3) float32 CUDA array of query points for which the
+                    payload field was evaluated.
+                `out_gradients` : Array
+                    (N, 3, 3) float32 CUDA array pre-allocated by the caller.
+                    `output[i, j]` is filled with dL/dv_j for vertex `j` of
+                    triangle `i`.
+            )doc") +
+         EPSILON_GRADIENT_DOC + EPSILON_DOC + R"doc(
+                `stream` : int, optional
+                    The raw 64-bit identifier (handle) of a CUDA stream.
+                    Allows enqueuing operations asynchronously within deep learning frameworks.
+                    For example, in PyTorch pass: `torch.cuda.current_stream().cuda_stream`.
+                    Default is 0 (the default/null stream).
+            )doc" +
+         USE_KAHAN_DOC)
+            .c_str());
+
+  // payload field gradients wrt queries
+  m.def(
+      "brute_force_query_gradients_with_payload_point_normal",
+      nb::overload_cast<const Payload_t &, const Vec3_t &, const Vec3_t &,
+                        const Payload_t &, const Vec3_t &, Vec3_t &, float,
+                        const uint64_t, const bool>(
+          &brute_force_query_gradients_with_payload),
+      "grad_output"_a, "points"_a, "scaled_normals"_a, "payload"_a, "queries"_a,
+      "out_query_gradients"_a, "epsilon"_a = 0.004F, "stream"_a = 0,
+      "use_kahan"_a = true,
+      nb::sig(
+          "def "
+          "brute_force_query_gradients_with_payload_point_normal(grad_output: "
+          "winder.types.Array[winder.types.Shape[winder.types.M, "
+          "winder.types.D], winder.types.float32, winder.types.cuda], "
+          "points: "
+          "winder.types.Array[winder.types.Shape[winder.types.N, "
+          "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+          "scaled_normals: "
+          "winder.types.Array[winder.types.Shape[winder.types.N, "
+          "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+          "payload: "
+          "winder.types.Array[winder.types.Shape[winder.types.N, "
+          "winder.types.D], winder.types.float32, winder.types.cuda], "
+          "queries: "
+          "winder.types.Array[winder.types.Shape[winder.types.M, "
+          "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+          "out_query_gradients: "
+          "winder.types.Array[winder.types.Shape[winder.types.M, "
+          "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+          "epsilon: float = 0.004, "
+          "stream: int = 0, use_kahan: bool = true) -> None"),
+      (std::string(R"doc(
+                Computes the gradient of the payload field loss with respect
+                to the query positions for a point cloud.
+
+                NOTE: Brute Force implementation: exact, but in `O(N*M*D)`!
+
+                This is the query-side counterpart of
+                `brute_force_payload_gradients_point_normal`. For each query
+                `q_j`, it produces a 3-vector
+
+                    dL/dq_j = sum_i ⟨g_j, v_i⟩ · ∂w_i(q_j)/∂q_j
+
+                where `g_j` is the D-vector adjoint at query `j` and `v_i` is
+                the payload of primitive `i`.
+
+                Parameters
+                ----------
+                `grad_output` : Array
+                    (M, D) float32 CUDA array representing the gradient of the
+                    loss with respect to the payload field at each query
+                    location (dL/dW). Row `j` is the D-vector adjoint for query
+                    `j`, aligned with `queries`.
+                `points` : Array
+                    A (N, 3) float32 CUDA array of point positions.
+                `scaled_normals` : Array
+                    A (N, 3) float32 CUDA array of scaled normals.
+                    The scaled normal direction is the orientation,
+                    the scale the associated voronoi area.
+                `payload` : Array
+                    A (N, D) float32 CUDA array of per-primitive payloads.
+                    Row `i` is the D-vector blended by the winding contribution
+                    of primitive `i`.
+                `queries` : Array
+                    (M, 3) float32 CUDA array of query points for which the
+                    payload field was evaluated.
+                `out_query_gradients` : Array
+                    (M, 3) float32 CUDA array pre-allocated by the caller.
+                    Will be filled with dL/dq_j for each query.
+            )doc") +
+       EPSILON_DOC + R"doc(
+                `stream` : int, optional
+                    The raw 64-bit identifier (handle) of a CUDA stream.
+                    Allows enqueuing operations asynchronously within deep learning frameworks.
+                    For example, in PyTorch pass: `torch.cuda.current_stream().cuda_stream`.
+                    Default is 0 (the default/null stream).
+            )doc" +
+       USE_KAHAN_DOC)
+          .c_str());
+
+  m.def(
+      "brute_force_query_gradients_with_payload_mesh",
+      nb::overload_cast<const Payload_t &, const Vec3_t &,
+                        const TriangleIdx_t &, const Payload_t &,
+                        const Vec3_t &, Vec3_t &, float, const uint64_t,
+                        const bool>(&brute_force_query_gradients_with_payload),
+      "grad_output"_a, "vertices"_a, "triangle_indices"_a, "payload"_a,
+      "queries"_a, "out_query_gradients"_a, "epsilon"_a = 0.004F,
+      "stream"_a = 0, "use_kahan"_a = true,
+      nb::sig("def brute_force_query_gradients_with_payload_mesh(grad_output: "
+              "winder.types.Array[winder.types.Shape[winder.types.M, "
+              "winder.types.D], winder.types.float32, winder.types.cuda], "
+              "vertices: "
+              "winder.types.Array[winder.types.Shape[winder.types.K, "
+              "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+              "triangle_indices: "
+              "winder.types.Array[winder.types.Shape[winder.types.N, "
+              "typing.Literal[3]], winder.types.uint32, winder.types.cuda], "
+              "payload: "
+              "winder.types.Array[winder.types.Shape[winder.types.N, "
+              "winder.types.D], winder.types.float32, winder.types.cuda], "
+              "queries: "
+              "winder.types.Array[winder.types.Shape[winder.types.M, "
+              "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+              "out_query_gradients: "
+              "winder.types.Array[winder.types.Shape[winder.types.M, "
+              "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+              "epsilon: float = 0.004, "
+              "stream: int = 0, use_kahan: bool = true) -> None"),
+      (std::string(R"doc(
+                Computes the gradient of the payload field loss with respect
+                to the query positions for a shared-vertex mesh.
+
+                NOTE: Brute Force implementation: exact, but in `O(N*M*D)`!
+
+                This is the query-side counterpart of
+                `brute_force_payload_gradients_mesh`. For each query `q_j`,
+                it produces a 3-vector
+
+                    dL/dq_j = sum_i ⟨g_j, v_i⟩ · ∂w_i(q_j)/∂q_j
+
+                where `g_j` is the D-vector adjoint at query `j` and `v_i` is
+                the payload of triangle `i`.
+
+                Parameters
+                ----------
+                `grad_output` : Array
+                    (M, D) float32 CUDA array representing the gradient of the
+                    loss with respect to the payload field at each query
+                    location (dL/dW). Row `j` is the D-vector adjoint for query
+                    `j`, aligned with `queries`.
+                `vertices` : Array
+                    A (K, 3) float32 CUDA array holding the shared vertices.
+                `triangle_indices` : Array
+                    A (N, 3) uint32 index array, where each row defines the
+                    three vertices of a triangle.
+                    Note: Order the vertices counter-clockwise when seen from the front.
+                `payload` : Array
+                    A (N, D) float32 CUDA array of per-triangle payloads.
+                    Row `i` is the D-vector blended by the winding contribution
+                    of triangle `i`.
+                `queries` : Array
+                    (M, 3) float32 CUDA array of query points for which the
+                    payload field was evaluated.
+                `out_query_gradients` : Array
+                    (M, 3) float32 CUDA array pre-allocated by the caller.
+                    Will be filled with dL/dq_j for each query.
+            )doc") +
+       EPSILON_DOC + R"doc(
+                `stream` : int, optional
+                    The raw 64-bit identifier (handle) of a CUDA stream.
+                    Allows enqueuing operations asynchronously within deep learning frameworks.
+                    For example, in PyTorch pass: `torch.cuda.current_stream().cuda_stream`.
+                    Default is 0 (the default/null stream).
+            )doc" +
+       USE_KAHAN_DOC)
+          .c_str());
+
+  m.def(
+      "brute_force_query_gradients_with_payload_triangle_soup",
+      nb::overload_cast<const Payload_t &, const Triangle_t &,
+                        const Payload_t &, const Vec3_t &, Vec3_t &, float,
+                        const uint64_t, const bool>(
+          &brute_force_query_gradients_with_payload),
+      "grad_output"_a, "triangles"_a, "payload"_a, "queries"_a,
+      "out_query_gradients"_a, "epsilon"_a = 0.004F, "stream"_a = 0,
+      "use_kahan"_a = true,
+      nb::sig(
+          "def "
+          "brute_force_query_gradients_with_payload_triangle_soup(grad_output: "
+          "winder.types.Array[winder.types.Shape[winder.types.M, "
+          "winder.types.D], winder.types.float32, winder.types.cuda], "
+          "triangles: "
+          "winder.types.Array[winder.types.Shape[winder.types.N, "
+          "typing.Literal[3], typing.Literal[3]], winder.types.float32, "
+          "winder.types.cuda], "
+          "payload: "
+          "winder.types.Array[winder.types.Shape[winder.types.N, "
+          "winder.types.D], winder.types.float32, winder.types.cuda], "
+          "queries: "
+          "winder.types.Array[winder.types.Shape[winder.types.M, "
+          "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+          "out_query_gradients: "
+          "winder.types.Array[winder.types.Shape[winder.types.M, "
+          "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+          "epsilon: float = 0.004, "
+          "stream: int = 0, use_kahan: bool = true) -> None"),
+      (std::string(R"doc(
+                Computes the gradient of the payload field loss with respect
+                to the query positions for an explicit triangle soup.
+
+                NOTE: Brute Force implementation: exact, but in `O(N*M*D)`!
+
+                This is the query-side counterpart of
+                `brute_force_payload_gradients_triangle_soup`. For each query
+                `q_j`, it produces a 3-vector
+
+                    dL/dq_j = sum_i ⟨g_j, v_i⟩ · ∂w_i(q_j)/∂q_j
+
+                where `g_j` is the D-vector adjoint at query `j` and `v_i` is
+                the payload of triangle `i`.
+
+                Parameters
+                ----------
+                `grad_output` : Array
+                    (M, D) float32 CUDA array representing the gradient of the
+                    loss with respect to the payload field at each query
+                    location (dL/dW). Row `j` is the D-vector adjoint for query
+                    `j`, aligned with `queries`.
+                `triangles` : Array
+                    A (N, 3, 3) float32 CUDA array holding N triangles.
+                    Note: Order the vertices counter-clockwise when seen from the front.
+                `payload` : Array
+                    A (N, D) float32 CUDA array of per-triangle payloads.
+                    Row `i` is the D-vector blended by the winding contribution
+                    of triangle `i`.
+                `queries` : Array
+                    (M, 3) float32 CUDA array of query points for which the
+                    payload field was evaluated.
+                `out_query_gradients` : Array
+                    (M, 3) float32 CUDA array pre-allocated by the caller.
+                    Will be filled with dL/dq_j for each query.
             )doc") +
        EPSILON_DOC + R"doc(
                 `stream` : int, optional
