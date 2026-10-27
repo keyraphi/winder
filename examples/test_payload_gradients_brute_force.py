@@ -112,8 +112,8 @@ def _to_cuda(x, dtype=torch.float32) -> torch.Tensor:
 def _t(x) -> torch.Tensor:
     """numpy or torch → CPU float64 tensor."""
     if isinstance(x, torch.Tensor):
-        return x.detach().cpu().double()
-    return torch.from_numpy(np.asarray(x, dtype=np.float64)).contiguous()
+        return x.detach().double().cuda()
+    return torch.from_numpy(np.asarray(x, dtype=np.float64)).contiguous().cuda()
 
 
 def _to_numpy(t: torch.Tensor) -> np.ndarray:
@@ -130,7 +130,7 @@ def _scene_scale(positions: np.ndarray) -> float:
 
 def _as_eps_tensor(eps_grad: Optional[torch.Tensor]) -> torch.Tensor:
     if eps_grad is None:
-        return torch.zeros(1, dtype=torch.float32)
+        return torch.zeros(1, dtype=torch.float32, device="cuda")
     return eps_grad.detach().to(torch.float32).reshape(1)
 
 
@@ -1111,7 +1111,7 @@ def test_payload_gradients_pn(
     p64, n64, q64 = _t(points), _t(normals), _t(queries)
     pl64, g64 = _t(payload), _t(grad_output)
 
-    eps_t1 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True)
+    eps_t1 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True, device="cuda")
     ref_payload = pytorch_pn_payload_grads_chunked_64(
         p64,
         n64,
@@ -1122,7 +1122,7 @@ def test_payload_gradients_pn(
         scale,
         cuda_s_regularization,
     )
-    eps_t2 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True)
+    eps_t2 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True, device="cuda")
     ref_p, ref_n, ref_eps = pytorch_pn_geometry_grads_with_payload_chunked_64(
         p64,
         n64,
@@ -1133,7 +1133,7 @@ def test_payload_gradients_pn(
         scale,
         cuda_s_regularization,
     )
-    eps_t3 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True)
+    eps_t3 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True, device="cuda")
     ref_query = pytorch_pn_query_grads_with_payload_chunked_64(
         p64,
         n64,
@@ -1221,7 +1221,7 @@ def test_payload_gradients_triangle(
     t64, q64 = _t(triangles), _t(queries)
     pl64, g64 = _t(payload), _t(grad_output)
 
-    eps_t1 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True)
+    eps_t1 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True, device="cuda")
     ref_payload = pytorch_triangle_payload_grads_chunked_64(
         t64,
         q64,
@@ -1231,7 +1231,7 @@ def test_payload_gradients_triangle(
         scale,
         reg_mode,
     )
-    eps_t2 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True)
+    eps_t2 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True, device="cuda")
     ref_vert, ref_eps = pytorch_triangle_geometry_grads_with_payload_chunked_64(
         t64,
         q64,
@@ -1241,7 +1241,7 @@ def test_payload_gradients_triangle(
         scale,
         reg_mode,
     )
-    eps_t3 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True)
+    eps_t3 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True, device="cuda")
     ref_query = pytorch_triangle_query_grads_with_payload_chunked_64(
         t64,
         q64,
@@ -1323,10 +1323,10 @@ def test_payload_gradients_mesh(
         use_kahan,
     )
 
-    v64, i64, q64 = _t(vertices), _t(indices.astype(np.int64)), _t(queries)
+    v64, i64, q64 = _t(vertices), torch.from_numpy(indices.astype(np.int64)).cuda(), _t(queries)
     pl64, g64 = _t(payload), _t(grad_output)
 
-    eps_t1 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True)
+    eps_t1 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True, device="cuda")
     ref_payload = pytorch_mesh_payload_grads_chunked_64(
         v64,
         i64,
@@ -1337,7 +1337,7 @@ def test_payload_gradients_mesh(
         scale,
         reg_mode,
     )
-    eps_t2 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True)
+    eps_t2 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True, device="cuda")
     ref_vert, ref_eps = pytorch_mesh_geometry_grads_with_payload_chunked_64(
         v64,
         i64,
@@ -1348,7 +1348,7 @@ def test_payload_gradients_mesh(
         scale,
         reg_mode,
     )
-    eps_t3 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True)
+    eps_t3 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True, device="cuda")
     ref_query = pytorch_mesh_query_grads_with_payload_chunked_64(
         v64,
         i64,
@@ -1974,7 +1974,7 @@ def test_edge_cases(vertices, indices, queries, epsilon, results) -> None:
     v1 = rng.standard_normal((1, D)).astype(np.float32)
     g1 = rng.standard_normal((1, D)).astype(np.float32)
     scale1 = _scene_scale(tri1.reshape(-1, 3))
-    eps_t = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True)
+    eps_t = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True, device="cuda")
     ref = pytorch_triangle_payload_grads_chunked_64(
         _t(tri1),
         _t(q1),
@@ -2204,7 +2204,7 @@ def main():
         print(_hdr("\n=== Full gradient matrix: geometry × eps × D ==="))
         # Keep the cross-product limited: representative D per eps/reg
         for eps in eps_values:
-            for D in [1, 4, 32]:
+            for D in [1, 4, 20, 32, 42]:
                 if D not in D_values:
                     continue
                 test_payload_gradients_pn(
