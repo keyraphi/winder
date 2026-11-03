@@ -70,8 +70,6 @@
 
 namespace cg = cooperative_groups;
 
-__constant__ SceneParams d_scene_params;
-
 template <IsGeometry Geometry>
 WindingNumbersBackend<Geometry>::~WindingNumbersBackend() {
   int device = -1;
@@ -165,42 +163,6 @@ WindingNumbersBackend<Geometry>::WindingNumbersBackend(size_t size,
                              max_bvh8_nodes * sizeof(LeafPointers),
                              m_build_stream));
 }
-
-template <IsPrimitiveGeometry PrimitiveGeometry> struct GeometryToAABB {
-  __device__ auto operator()(const PrimitiveGeometry &g) const -> AABB {
-    return g.get_aabb();
-  }
-};
-
-struct MergeAABB {
-  __device__ auto operator()(const AABB &a, const AABB &b) const -> AABB {
-    return AABB::merge(a, b);
-  }
-};
-
-template <IsPrimitiveGeometry PrimitiveGeometry> struct GeometryToMorton {
-
-  __device__ auto operator()(const PrimitiveGeometry &g) const -> uint64_t {
-    const float scale = d_scene_params.scale;
-    const Vec3 min_p = Vec3::from_f16(d_scene_params.bounds.min);
-    // Scale to range [0, 1]
-    const Vec3 geometry_center = g.centroid();
-    float tx = (geometry_center.x - min_p.x) * scale;
-    float ty = (geometry_center.y - min_p.y) * scale;
-    float tz = (geometry_center.z - min_p.z) * scale;
-
-    // Fixed 21-bit integer quantization range [0, 2097151]
-    auto x =
-        static_cast<uint32_t>(fminf(fmaxf(tx * 2097151.F, 0.F), 2097151.F));
-    auto y =
-        static_cast<uint32_t>(fminf(fmaxf(ty * 2097151.F, 0.F), 2097151.F));
-    auto z =
-        static_cast<uint32_t>(fminf(fmaxf(tz * 2097151.F, 0.F), 2097151.F));
-
-    // Expand bits (interleave x, y, z)
-    return morton3D_63bit(x, y, z);
-  }
-};
 
 template <>
 void WindingNumbersBackend<Triangle>::initialize_triangle_data(
@@ -531,7 +493,8 @@ auto WindingNumbersBackend<Geometry>::compute(const float *queries,
   // sort queries by morton code, scaled with bvh8s aabb
   thrust::transform(compute_stream_policy, queries_vec3,
                     queries_vec3 + query_count, queries_morton,
-                    GeometryToMorton<Vec3>{});
+                    GeometryToMorton<Vec3>{.scale = m_norm.scale,
+                                           .min_p = m_norm.min_p,});
 
   thrust::sequence(compute_stream_policy, queries_to_internal,
                    queries_to_internal + query_count);
@@ -613,7 +576,7 @@ auto WindingNumbersBackend<Geometry>::compute_query_gradients(
   // sort queries by morton code, scaled with bvh8s aabb
   thrust::transform(compute_stream_policy, queries_vec3,
                     queries_vec3 + query_count, queries_morton,
-                    GeometryToMorton<Vec3>{});
+                    GeometryToMorton<Vec3>{.scale=m_norm.scale, .min_p=m_norm.min_p});
 
   thrust::sequence(compute_stream_policy, queries_to_internal,
                    queries_to_internal + query_count);
@@ -638,23 +601,23 @@ auto WindingNumbersBackend<Geometry>::compute_query_gradients(
   CUDA_CHECK(
       cudaMallocAsync(&global_counter, sizeof(uint32_t), compute_stream));
   ComputeQueryGradientParams<Geometry> params{
-      .queries=queries_vec3,
-      .sort_indirections=queries_to_internal,
+      .queries = queries_vec3,
+      .sort_indirections = queries_to_internal,
       .bvh8_nodes = m_bvh8_nodes,
-      .bvh8_leaf_pointers=m_bvh8_leaf_pointers,
-      .node_coefficients=m_tailor_coefficients,
-      .leaf_coefficients=m_leaf_coefficients,
-      .leaf_aabbs=m_binary_aabbs + leaf_count - 1,
-      .sorted_geometry=SoAView<Geometry>{m_sorted_geometry, m_count},
-      .query_count=(uint32_t)query_count,
-      .geometry_count=(uint32_t)m_count,
-      .grad_output=grad_output,
-      .out_query_gradients=out_query_gradients,
-      .global_device_counter=global_counter,
-      .beta=beta,
-      .epsilon=epsilon,
-      .scene_scale=scene_scale,
-      .norm=m_norm};
+      .bvh8_leaf_pointers = m_bvh8_leaf_pointers,
+      .node_coefficients = m_tailor_coefficients,
+      .leaf_coefficients = m_leaf_coefficients,
+      .leaf_aabbs = m_binary_aabbs + leaf_count - 1,
+      .sorted_geometry = SoAView<Geometry>{m_sorted_geometry, m_count},
+      .query_count = (uint32_t)query_count,
+      .geometry_count = (uint32_t)m_count,
+      .grad_output = grad_output,
+      .out_query_gradients = out_query_gradients,
+      .global_device_counter = global_counter,
+      .beta = beta,
+      .epsilon = epsilon,
+      .scene_scale = scene_scale,
+      .norm = m_norm};
   query_gradient_traversal(params, m_device, compute_stream);
   // free temporary memory
   CUDA_CHECK(cudaFreeAsync(queries_to_internal, compute_stream));

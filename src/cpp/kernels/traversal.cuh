@@ -105,6 +105,63 @@ struct ComputeGradientsTriangleParams {
 void compute_triangle_gradients(const ComputeGradientsTriangleParams &params,
                                 int device_id, const cudaStream_t &stream);
 
+
+template <IsGeometry Geometry, uint32_t D>
+struct ComputePayloadWindingNumbersParams {
+  const Vec3 *queries;
+  const uint32_t *sort_indirections;
+  const BVH8Node *bvh8_nodes;
+  const LeafPointers *bvh8_leaf_pointers;
+  const PayloadTaylorCoefficientsF16<D> *node_coefficients;
+  const PayloadTaylorCoefficientsF16<D> *leaf_coefficients;
+  const AABB *leaf_aabbs;
+  SoAView<Geometry> sorted_geometry;
+  const float *sorted_payload;
+  uint32_t query_count;
+  uint32_t geometry_count;
+  float *out_payload;
+  uint32_t *global_device_counter;
+  float beta;
+  float epsilon;
+  float scene_scale;
+  SceneNormalization norm;
+};
+
+template <IsGeometry Geometry, uint32_t D>
+struct ComputePayloadQueryGradientParams {
+  const Vec3 *queries;
+  const uint32_t *sort_indirections;
+  const BVH8Node *bvh8_nodes;
+  const LeafPointers *bvh8_leaf_pointers;
+  const PayloadTaylorCoefficientsF16<D> *node_coefficients;
+  const PayloadTaylorCoefficientsF16<D> *leaf_coefficients;
+  const AABB *leaf_aabbs;
+  SoAView<Geometry> sorted_geometry;
+  const float *sorted_payload;
+  uint32_t query_count;
+  uint32_t geometry_count;
+  const float *grad_output;     // (M, D) adjoint
+  float *out_query_gradients;   // (M, 3)
+  uint32_t *global_device_counter;
+  float beta;
+  float epsilon;
+  float scene_scale;
+  SceneNormalization norm;
+};
+
+
+template <IsGeometry Geometry, uint32_t D>
+void compute_payload_winding_numbers(
+    const ComputePayloadWindingNumbersParams<Geometry, D> &params,
+    int device_id, cudaStream_t stream);
+
+template <IsGeometry Geometry, uint32_t D>
+void query_gradient_traversal_payload(
+    const ComputePayloadQueryGradientParams<Geometry, D> &params,
+    int device_id, cudaStream_t stream);
+
+
+
 extern template void compute_winding_numbers<PointNormal>(
     const ComputeWindingNumbersParams<PointNormal> &params, int device_id,
     const cudaStream_t &stream);

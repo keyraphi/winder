@@ -99,6 +99,47 @@ def _hdr(m):
 # =============================================================================
 # Small utilities
 # =============================================================================
+
+# Accumulated timing records for the end-of-run summary.
+# Entries are (geometry, operation, cuda_seconds, ref_seconds).
+_TIMING_LOG: list[tuple[str, str, float, float]] = []
+
+
+def _time(fn, warmup: int = 1, iters: int = 3) -> tuple[any, float]:
+    """Run fn a few times, return (last_result, median_seconds).
+
+    Uses CUDA events so timing survives async launches. warmup ensures the
+    first (cold) call — kernel autotuning, autograd graph cache, cuBLAS
+    handle init, etc. — is discarded.
+    """
+    for _ in range(warmup):
+        result = fn()
+    torch.cuda.synchronize()
+    times = []
+    for _ in range(iters):
+        s = torch.cuda.Event(enable_timing=True)
+        e = torch.cuda.Event(enable_timing=True)
+        s.record()
+        result = fn()
+        e.record()
+        torch.cuda.synchronize()
+        times.append(s.elapsed_time(e) / 1000.0)  # ms → s
+    return result, float(np.median(times))
+
+
+def _print_timing_line(label: str, times: dict[str, tuple[float, float]]) -> None:
+    """Print a compact one-line timing summary and log it for the overall recap.
+
+    times: mapping of {op_name: (cuda_seconds, ref_seconds)}
+    """
+    parts = []
+    for op, (c, r) in times.items():
+        speedup = r / c if c > 1e-9 else float("inf")
+        parts.append(f"{op}={c*1000:.2f}/{r*1000:.2f}ms ({speedup:.0f}x)")
+        # Log for the end-of-run summary. Assumes label's first token is the
+        # geometry type ("PN", "Tri", or "Mesh").
+        _TIMING_LOG.append((label.split()[0], op, c, r))
+    print(f"  timing [{label}]: {'  '.join(parts)}")
 def set_seeds(seed: int) -> None:
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -1064,14 +1105,7 @@ def _record(results: list, name: str, passed: bool) -> None:
 # Per-geometry gradient test
 # =============================================================================
 def test_payload_gradients_pn(
-    points,
-    normals,
-    queries,
-    epsilon,
-    reg_mode,
-    D,
-    seed,
-    results,
+    points, normals, queries, epsilon, reg_mode, D, seed, results,
     use_kahan=False,
 ) -> bool:
     """Full payload, geometry, query gradient test for point-normal."""
@@ -1081,94 +1115,76 @@ def test_payload_gradients_pn(
     grad_output = rng.standard_normal((queries.shape[0], D)).astype(np.float32)
     scale = _scene_scale(points)
 
-    cuda_payload_grad = _run_pn_payload_grad(
-        points,
-        normals,
-        grad_output,
-        queries,
-        epsilon,
-        use_kahan,
-    )
-    cuda_geom_grad, cuda_eps_grad = _run_pn_geometry_grad_with_payload(
-        points,
-        normals,
-        payload,
-        grad_output,
-        queries,
-        epsilon,
-        use_kahan,
-    )
-    cuda_query_grad = _run_pn_query_grad_with_payload(
-        points,
-        normals,
-        payload,
-        grad_output,
-        queries,
-        epsilon,
-        use_kahan,
-    )
-
     p64, n64, q64 = _t(points), _t(normals), _t(queries)
     pl64, g64 = _t(payload), _t(grad_output)
 
-    eps_t1 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True, device="cuda")
-    ref_payload = pytorch_pn_payload_grads_chunked_64(
-        p64,
-        n64,
-        q64,
-        g64,
-        pl64,
-        eps_t1,
-        scale,
-        cuda_s_regularization,
-    )
-    eps_t2 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True, device="cuda")
-    ref_p, ref_n, ref_eps = pytorch_pn_geometry_grads_with_payload_chunked_64(
-        p64,
-        n64,
-        q64,
-        g64,
-        pl64,
-        eps_t2,
-        scale,
-        cuda_s_regularization,
-    )
-    eps_t3 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True, device="cuda")
-    ref_query = pytorch_pn_query_grads_with_payload_chunked_64(
-        p64,
-        n64,
-        q64,
-        g64,
-        pl64,
-        eps_t3,
-        scale,
-        cuda_s_regularization,
-    )
+    def _cuda_payload():
+        return _run_pn_payload_grad(
+            points, normals, grad_output, queries, epsilon, use_kahan,
+        )
+    def _cuda_geom():
+        return _run_pn_geometry_grad_with_payload(
+            points, normals, payload, grad_output, queries, epsilon, use_kahan,
+        )
+    def _cuda_query():
+        return _run_pn_query_grad_with_payload(
+            points, normals, payload, grad_output, queries, epsilon, use_kahan,
+        )
+
+    def _ref_payload():
+        eps_t = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True,
+                             device="cuda")
+        return pytorch_pn_payload_grads_chunked_64(
+            p64, n64, q64, g64, pl64, eps_t, scale, cuda_s_regularization,
+        )
+    def _ref_geom():
+        eps_t = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True,
+                             device="cuda")
+        return pytorch_pn_geometry_grads_with_payload_chunked_64(
+            p64, n64, q64, g64, pl64, eps_t, scale, cuda_s_regularization,
+        )
+    def _ref_query():
+        eps_t = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True,
+                             device="cuda")
+        return pytorch_pn_query_grads_with_payload_chunked_64(
+            p64, n64, q64, g64, pl64, eps_t, scale, cuda_s_regularization,
+        )
+
+    cuda_payload_grad, t_cuda_payload = _time(_cuda_payload)
+    (cuda_geom_grad, cuda_eps_grad), t_cuda_geom = _time(_cuda_geom)
+    cuda_query_grad, t_cuda_query = _time(_cuda_query)
+
+    ref_payload, t_ref_payload = _time(_ref_payload)
+    (ref_p, ref_n, ref_eps), t_ref_geom = _time(_ref_geom)
+    ref_query, t_ref_query = _time(_ref_query)
 
     lbl = f"PN  eps={epsilon:g} reg={reg_mode} D={D}"
+    _print_timing_line(
+        lbl,
+        {
+            "payload": (t_cuda_payload, t_ref_payload),
+            "geom":    (t_cuda_geom,    t_ref_geom),
+            "query":   (t_cuda_query,   t_ref_query),
+        },
+    )
+
     ok_payload = validate_payload_field(
-        cuda_payload_grad,
-        ref_payload.to(torch.float32),
+        cuda_payload_grad, ref_payload.to(torch.float32),
         f"payload_grad[{lbl}]",
     )
     ok_n = validate_vector_field(
-        cuda_geom_grad[:, 0, :],
-        ref_n.to(torch.float32),
+        cuda_geom_grad[:, 0, :], ref_n.to(torch.float32),
         f"grad_n[{lbl}]",
     )
     ok_p = validate_vector_field(
-        cuda_geom_grad[:, 1, :],
-        ref_p.to(torch.float32),
+        cuda_geom_grad[:, 1, :], ref_p.to(torch.float32),
         f"grad_p[{lbl}]",
     )
     ok_eps = validate_scalar_gradient(
-        cuda_eps_grad,
-        _as_eps_tensor(ref_eps),
-        f"grad_eps[{lbl}]",
+        cuda_eps_grad, _as_eps_tensor(ref_eps), f"grad_eps[{lbl}]",
     )
     ok_q = validate_vector_field(
-        cuda_query_grad,
-        ref_query.to(torch.float32),
+        cuda_query_grad, ref_query.to(torch.float32),
         f"query_grad[{lbl}]",
     )
 
@@ -1176,86 +1192,70 @@ def test_payload_gradients_pn(
     _record(results, f"PN_full_{lbl}", passed)
     return passed
 
-
 def test_payload_gradients_triangle(
-    triangles,
-    queries,
-    epsilon,
-    reg_mode,
-    D,
-    seed,
-    results,
-    use_kahan=False,
+    triangles, queries, epsilon, reg_mode, D, seed, results, use_kahan=False,
 ) -> bool:
-    """Full payload, geometry, query gradient test for triangle soup."""
     rng = np.random.default_rng(seed + D * 31 + int(epsilon * 1000) + 1)
     N = len(triangles)
     payload = rng.standard_normal((N, D)).astype(np.float32)
     grad_output = rng.standard_normal((queries.shape[0], D)).astype(np.float32)
     scale = _scene_scale(triangles.reshape(-1, 3))
 
-    cuda_payload_grad = _run_tri_payload_grad(
-        triangles,
-        grad_output,
-        queries,
-        epsilon,
-        use_kahan,
-    )
-    cuda_geom_grad, cuda_eps_grad = _run_tri_geometry_grad_with_payload(
-        triangles,
-        payload,
-        grad_output,
-        queries,
-        epsilon,
-        use_kahan,
-    )
-    cuda_query_grad = _run_tri_query_grad_with_payload(
-        triangles,
-        payload,
-        grad_output,
-        queries,
-        epsilon,
-        use_kahan,
-    )
-
     t64, q64 = _t(triangles), _t(queries)
     pl64, g64 = _t(payload), _t(grad_output)
 
-    eps_t1 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True, device="cuda")
-    ref_payload = pytorch_triangle_payload_grads_chunked_64(
-        t64,
-        q64,
-        g64,
-        pl64,
-        eps_t1,
-        scale,
-        reg_mode,
-    )
-    eps_t2 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True, device="cuda")
-    ref_vert, ref_eps = pytorch_triangle_geometry_grads_with_payload_chunked_64(
-        t64,
-        q64,
-        g64,
-        pl64,
-        eps_t2,
-        scale,
-        reg_mode,
-    )
-    eps_t3 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True, device="cuda")
-    ref_query = pytorch_triangle_query_grads_with_payload_chunked_64(
-        t64,
-        q64,
-        g64,
-        pl64,
-        eps_t3,
-        scale,
-        reg_mode,
-    )
+    def _cuda_payload():
+        return _run_tri_payload_grad(
+            triangles, grad_output, queries, epsilon, use_kahan,
+        )
+    def _cuda_geom():
+        return _run_tri_geometry_grad_with_payload(
+            triangles, payload, grad_output, queries, epsilon, use_kahan,
+        )
+    def _cuda_query():
+        return _run_tri_query_grad_with_payload(
+            triangles, payload, grad_output, queries, epsilon, use_kahan,
+        )
+
+    def _ref_payload():
+        eps_t = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True,
+                             device="cuda")
+        return pytorch_triangle_payload_grads_chunked_64(
+            t64, q64, g64, pl64, eps_t, scale, reg_mode,
+        )
+    def _ref_geom():
+        eps_t = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True,
+                             device="cuda")
+        return pytorch_triangle_geometry_grads_with_payload_chunked_64(
+            t64, q64, g64, pl64, eps_t, scale, reg_mode,
+        )
+    def _ref_query():
+        eps_t = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True,
+                             device="cuda")
+        return pytorch_triangle_query_grads_with_payload_chunked_64(
+            t64, q64, g64, pl64, eps_t, scale, reg_mode,
+        )
+
+    cuda_payload_grad, t_cuda_payload = _time(_cuda_payload)
+    (cuda_geom_grad, cuda_eps_grad), t_cuda_geom = _time(_cuda_geom)
+    cuda_query_grad, t_cuda_query = _time(_cuda_query)
+
+    ref_payload, t_ref_payload = _time(_ref_payload)
+    (ref_vert, ref_eps), t_ref_geom = _time(_ref_geom)
+    ref_query, t_ref_query = _time(_ref_query)
 
     lbl = f"Tri eps={epsilon:g} reg={reg_mode} D={D}"
+    _print_timing_line(
+        lbl,
+        {
+            "payload": (t_cuda_payload, t_ref_payload),
+            "geom":    (t_cuda_geom,    t_ref_geom),
+            "query":   (t_cuda_query,   t_ref_query),
+        },
+    )
+
     ok_payload = validate_payload_field(
-        cuda_payload_grad,
-        ref_payload.to(torch.float32),
+        cuda_payload_grad, ref_payload.to(torch.float32),
         f"payload_grad[{lbl}]",
     )
     ok_v = validate_vector_field(
@@ -1264,121 +1264,94 @@ def test_payload_gradients_triangle(
         f"grad_vert[{lbl}]",
     )
     ok_eps = validate_scalar_gradient(
-        cuda_eps_grad,
-        _as_eps_tensor(ref_eps),
-        f"grad_eps[{lbl}]",
+        cuda_eps_grad, _as_eps_tensor(ref_eps), f"grad_eps[{lbl}]",
     )
     ok_q = validate_vector_field(
-        cuda_query_grad,
-        ref_query.to(torch.float32),
+        cuda_query_grad, ref_query.to(torch.float32),
         f"query_grad[{lbl}]",
     )
     passed = all([ok_payload, ok_v, ok_eps, ok_q])
     _record(results, f"Tri_full_{lbl}", passed)
     return passed
 
-
 def test_payload_gradients_mesh(
-    vertices,
-    indices,
-    queries,
-    epsilon,
-    reg_mode,
-    D,
-    seed,
-    results,
+    vertices, indices, queries, epsilon, reg_mode, D, seed, results,
     use_kahan=False,
 ) -> bool:
-    """Full payload, geometry, query gradient test for mesh."""
     rng = np.random.default_rng(seed + D * 31 + int(epsilon * 1000) + 2)
     N = len(indices)
     payload = rng.standard_normal((N, D)).astype(np.float32)
     grad_output = rng.standard_normal((queries.shape[0], D)).astype(np.float32)
     scale = _scene_scale(vertices[indices].reshape(-1, 3))
 
-    cuda_payload_grad = _run_mesh_payload_grad(
-        vertices,
-        indices,
-        grad_output,
-        queries,
-        epsilon,
-        use_kahan,
-    )
-    cuda_geom_grad, cuda_eps_grad = _run_mesh_geometry_grad_with_payload(
-        vertices,
-        indices,
-        payload,
-        grad_output,
-        queries,
-        epsilon,
-        use_kahan,
-    )
-    cuda_query_grad = _run_mesh_query_grad_with_payload(
-        vertices,
-        indices,
-        payload,
-        grad_output,
-        queries,
-        epsilon,
-        use_kahan,
-    )
-
-    v64, i64, q64 = _t(vertices), torch.from_numpy(indices.astype(np.int64)).cuda(), _t(queries)
+    v64 = _t(vertices)
+    i64 = torch.from_numpy(indices.astype(np.int64)).cuda()
+    q64 = _t(queries)
     pl64, g64 = _t(payload), _t(grad_output)
 
-    eps_t1 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True, device="cuda")
-    ref_payload = pytorch_mesh_payload_grads_chunked_64(
-        v64,
-        i64,
-        q64,
-        g64,
-        pl64,
-        eps_t1,
-        scale,
-        reg_mode,
-    )
-    eps_t2 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True, device="cuda")
-    ref_vert, ref_eps = pytorch_mesh_geometry_grads_with_payload_chunked_64(
-        v64,
-        i64,
-        q64,
-        g64,
-        pl64,
-        eps_t2,
-        scale,
-        reg_mode,
-    )
-    eps_t3 = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True, device="cuda")
-    ref_query = pytorch_mesh_query_grads_with_payload_chunked_64(
-        v64,
-        i64,
-        q64,
-        g64,
-        pl64,
-        eps_t3,
-        scale,
-        reg_mode,
-    )
+    def _cuda_payload():
+        return _run_mesh_payload_grad(
+            vertices, indices, grad_output, queries, epsilon, use_kahan,
+        )
+    def _cuda_geom():
+        return _run_mesh_geometry_grad_with_payload(
+            vertices, indices, payload, grad_output, queries, epsilon, use_kahan,
+        )
+    def _cuda_query():
+        return _run_mesh_query_grad_with_payload(
+            vertices, indices, payload, grad_output, queries, epsilon, use_kahan,
+        )
+
+    def _ref_payload():
+        eps_t = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True,
+                             device="cuda")
+        return pytorch_mesh_payload_grads_chunked_64(
+            v64, i64, q64, g64, pl64, eps_t, scale, reg_mode,
+        )
+    def _ref_geom():
+        eps_t = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True,
+                             device="cuda")
+        return pytorch_mesh_geometry_grads_with_payload_chunked_64(
+            v64, i64, q64, g64, pl64, eps_t, scale, reg_mode,
+        )
+    def _ref_query():
+        eps_t = torch.tensor(epsilon, dtype=torch.float64, requires_grad=True,
+                             device="cuda")
+        return pytorch_mesh_query_grads_with_payload_chunked_64(
+            v64, i64, q64, g64, pl64, eps_t, scale, reg_mode,
+        )
+
+    cuda_payload_grad, t_cuda_payload = _time(_cuda_payload)
+    (cuda_geom_grad, cuda_eps_grad), t_cuda_geom = _time(_cuda_geom)
+    cuda_query_grad, t_cuda_query = _time(_cuda_query)
+
+    ref_payload, t_ref_payload = _time(_ref_payload)
+    (ref_vert, ref_eps), t_ref_geom = _time(_ref_geom)
+    ref_query, t_ref_query = _time(_ref_query)
 
     lbl = f"Mesh eps={epsilon:g} reg={reg_mode} D={D}"
+    _print_timing_line(
+        lbl,
+        {
+            "payload": (t_cuda_payload, t_ref_payload),
+            "geom":    (t_cuda_geom,    t_ref_geom),
+            "query":   (t_cuda_query,   t_ref_query),
+        },
+    )
+
     ok_payload = validate_payload_field(
-        cuda_payload_grad,
-        ref_payload.to(torch.float32),
+        cuda_payload_grad, ref_payload.to(torch.float32),
         f"payload_grad[{lbl}]",
     )
     ok_v = validate_vector_field(
-        cuda_geom_grad,
-        ref_vert.to(torch.float32),
+        cuda_geom_grad, ref_vert.to(torch.float32),
         f"grad_vert[{lbl}]",
     )
     ok_eps = validate_scalar_gradient(
-        cuda_eps_grad,
-        _as_eps_tensor(ref_eps),
-        f"grad_eps[{lbl}]",
+        cuda_eps_grad, _as_eps_tensor(ref_eps), f"grad_eps[{lbl}]",
     )
     ok_q = validate_vector_field(
-        cuda_query_grad,
-        ref_query.to(torch.float32),
+        cuda_query_grad, ref_query.to(torch.float32),
         f"query_grad[{lbl}]",
     )
     passed = all([ok_payload, ok_v, ok_eps, ok_q])
@@ -2256,6 +2229,24 @@ def main():
 
     elapsed = time() - t0
     ok = print_summary(results)
+    if _TIMING_LOG:
+       print("\n" + "=" * 100)
+       print(_hdr("Timing recap"))
+       print("=" * 100)
+       for op in ["payload", "geom", "query"]:
+           rows = [(c, r) for _g, o, c, r in _TIMING_LOG if o == op]
+           if not rows:
+               continue
+           total_c = sum(c for c, _ in rows)
+           total_r = sum(r for _, r in rows)
+           speedup = total_r / total_c if total_c > 1e-9 else float("inf")
+           print(
+               f"  {op:<10}  "
+               f"cuda_total={total_c*1000:>10.1f}ms  "
+               f"ref_total={total_r*1000:>10.1f}ms  "
+               f"speedup={speedup:>7.1f}x  (n={len(rows)})"
+           )
+
     print(f"\nElapsed: {elapsed:.2f}s")
     sys.exit(0 if ok else 1)
 

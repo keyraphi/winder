@@ -16,12 +16,12 @@ void gather_queries_and_grad_outputs_soa(
     const cudaStream_t &stream, const SceneNormalization &norm);
 
 // Gather kernel to read PointNormals into SoA format
-void gather_point_normals_soa(const float *__restrict__ points,
-                              const float *__restrict__ normals,
-                              const uint32_t *__restrict__ indices,
-                              float *__restrict__ out_geometry, uint32_t count,
-                              const SceneNormalization &norm = SceneNormalization::identity(),
-                              const cudaStream_t &stream = 0);
+void gather_point_normals_soa(
+    const float *__restrict__ points, const float *__restrict__ normals,
+    const uint32_t *__restrict__ indices, float *__restrict__ out_geometry,
+    uint32_t count,
+    const SceneNormalization &norm = SceneNormalization::identity(),
+    const cudaStream_t &stream = 0);
 
 // Gather kernel to read Triangles into SoA format
 void gather_triangles_soa(
@@ -50,3 +50,11 @@ void populate_binary_tree_aabb_and_leaf_coefficients_backward(
     const BinaryNode *binary_nodes, AABB *binary_aabbs,
     const uint32_t *binary_parents, float *atomic_counters,
     uint32_t query_count, const cudaStream_t &stream);
+
+template <IsGeometry Geometry, uint32_t D>
+void populate_binary_tree_aabb_and_leaf_coefficients_payload(
+    const float *sorted_geometry, const float *sorted_payload,
+    PayloadTaylorCoefficientsF16<D> *leaf_coefficients, uint32_t leaf_count,
+    const BinaryNode *binary_nodes, AABB *binary_aabbs,
+    const uint32_t *binary_parents, float *atomic_weights,
+    uint32_t geometry_count, cudaStream_t stream);

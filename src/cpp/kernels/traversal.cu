@@ -13,6 +13,7 @@
 #include "winding_numbers_backend.h"
 #include <cooperative_groups.h>
 #include <cooperative_groups/scan.h>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cub/block/block_scan.cuh>
@@ -1228,3 +1229,502 @@ template void query_gradient_traversal<PointNormal>(
 template void query_gradient_traversal<Triangle>(
     const ComputeQueryGradientParams<Triangle> &params, int device_id,
     const cudaStream_t &stream);
+
+template <uint32_t D>
+constexpr uint32_t components_per_thread = (D < 8U) ? D : 8U;
+
+template <uint32_t D>
+constexpr uint32_t threads_per_query =
+    (D + components_per_thread<D> - 1U) / components_per_thread<D>;
+
+template <uint32_t D>
+constexpr uint32_t queries_per_warp = 32U / threads_per_query<D>;
+
+static_assert(threads_per_query<128> <= 32,
+              "D too large for warp-cooperative traversal");
+
+//
+// Forward: payload winding field
+template <IsGeometry Geometry, uint32_t D>
+__global__ void __launch_bounds__(128) traverse_payload_winding_numbers_kernel(
+    const Vec3 *__restrict__ queries,
+    const uint32_t *__restrict__ sort_indirections,
+    const BVH8Node *__restrict__ bvh8_nodes,
+    const LeafPointers *__restrict__ bvh8_leaf_pointers,
+    const PayloadTaylorCoefficientsF16<D> *__restrict__ node_coefficients,
+    const PayloadTaylorCoefficientsF16<D> *__restrict__ leaf_coefficients,
+    const AABB *__restrict__ leaf_aabbs,
+    const SoAView<Geometry> sorted_geometry,
+    const float *__restrict__ sorted_payload, const uint32_t query_count,
+    const uint32_t geometry_count, float *__restrict__ out_payload,
+    uint32_t *__restrict__ global_device_counter, const float beta_2,
+    const typename Geometry::Context ctx, const SceneNormalization norm) {
+
+  constexpr uint32_t COMPONENTS_PER_THREAD = components_per_thread<D>;
+  constexpr uint32_t THREADS_PER_QUERY = threads_per_query<D>;
+  constexpr uint32_t QUERIES_PER_WARP = queries_per_warp<D>;
+
+  const uint32_t warp_id = threadIdx.x / 32;
+  const uint32_t lane_id = threadIdx.x % 32;
+
+  // Per-thread role
+  const uint32_t my_query_slot = lane_id / THREADS_PER_QUERY; // 0..Q-1
+  const uint32_t my_dblock = lane_id % THREADS_PER_QUERY;     // 0..K-1
+  const uint32_t my_d0 =
+      my_dblock * COMPONENTS_PER_THREAD; // first d index handled
+  const uint32_t my_d_count =
+      (D - my_d0 < COMPONENTS_PER_THREAD) ? (D - my_d0) : COMPONENTS_PER_THREAD;
+
+  __shared__ uint32_t shared_stack[4][64];
+  __shared__ BVH8Node current_node_cache[4];
+  __shared__ PayloadTaylorCoefficientsF16<D> current_coeff_cache[4];
+  __shared__ LeafPointers shared_leaf_ptrs[4];
+  __shared__ float w_leaf_values[4][32];
+
+  uint32_t warp_tile_base;
+
+  while (true) {
+    if (lane_id == 0) {
+      warp_tile_base = atomicAdd(global_device_counter, QUERIES_PER_WARP);
+    }
+    warp_tile_base = __shfl_sync(0xFFFFFFFF, warp_tile_base, 0);
+
+    if (warp_tile_base >= query_count) {
+      break;
+    }
+
+    int my_required_stack_depth = std::numeric_limits<int>::max();
+
+    const uint32_t my_query_idx = warp_tile_base + my_query_slot;
+    Vec3 my_query{.x = 0.F, .y = 0.F, .z = 0.F};
+    uint32_t original_query_idx = 0xFFFFFFFF;
+    if (my_query_idx >= query_count) {
+      my_required_stack_depth = -1;
+    } else {
+      original_query_idx = sort_indirections[my_query_idx];
+      my_query = norm.to_normalized(queries[original_query_idx]);
+    }
+
+    float acc[COMPONENTS_PER_THREAD];
+#pragma unroll
+    for (uint32_t c = 0; c < COMPONENTS_PER_THREAD; ++c) {
+      acc[c] = 0.F;
+    }
+
+    int stack_ptr = 0;
+    if (lane_id == 0) {
+      shared_stack[warp_id][stack_ptr] = 0;
+    }
+    stack_ptr++;
+
+    const float two_eps = 2.F * ctx.eps_length;
+
+    while (true) {
+      uint32_t stack_not_empty_mask = __ballot_sync(0xFFFFFFFF, stack_ptr > 0);
+      if (stack_not_empty_mask == 0) {
+        break;
+      }
+      uint32_t current_node_idx;
+      --stack_ptr;
+      if (lane_id == 0) {
+        current_node_idx = shared_stack[warp_id][stack_ptr];
+      }
+      current_node_idx = __shfl_sync(0xFFFFFFFF, current_node_idx, 0);
+      load_shared_cooperative<BVH8Node>(&current_node_cache[warp_id],
+                                        bvh8_nodes + current_node_idx, lane_id);
+      __syncwarp();
+
+      const BVH8Node &current_node = current_node_cache[warp_id];
+
+      bool is_active = stack_ptr < my_required_stack_depth;
+      if (is_active) {
+        my_required_stack_depth = std::numeric_limits<int>::max();
+      }
+
+      bool need_coeffs =
+          is_active && should_node_be_approximated(
+                           my_query, current_node.getAABB(), beta_2, two_eps);
+
+      uint32_t load_mask = __ballot_sync(0xFFFFFFFF, need_coeffs);
+      if (load_mask > 0) {
+        load_shared_cooperative<PayloadTaylorCoefficientsF16<D>>(
+            &current_coeff_cache[warp_id], node_coefficients + current_node_idx,
+            lane_id);
+        __syncwarp();
+      }
+      if (need_coeffs) {
+        const AABB node_aabb = current_node.getAABB();
+        const Vec3 com = node_aabb.center_of_mass;
+
+        // Compute the shared geometry of the approximation once per node
+        const Vec3 r = com - my_query;
+        const float inv_R = r.inv_length();
+        const Vec3_f16 r_hat = Vec3_f16::from_float(r * inv_R);
+        const float inv_R2 = inv_R * inv_R;
+        const float inv_R3 = inv_R2 * inv_R;
+        const float inv_R4 = inv_R3 * inv_R;
+        constexpr float INV_4PI = 0.07957747154F;
+        const float f0 = INV_4PI * inv_R2;
+        const float f1 = INV_4PI * inv_R3;
+        const float f2 = INV_4PI * inv_R4;
+
+#pragma unroll
+        for (uint32_t c = 0; c < COMPONENTS_PER_THREAD; ++c) {
+          if (c >= my_d_count) {
+            break;
+          }
+          const uint32_t d = my_d0 + c;
+          const auto &coeffs = current_coeff_cache[warp_id];
+          float v =
+              computeZeroOrderContribution(coeffs.getZeroOrder(d), r_hat) * f0;
+          v += computeFirstOrderContribution(coeffs.getFirstOrder(d), r_hat) *
+               f1;
+          v += computeSecondOrderContribution(coeffs.getSecondOrder(d), r_hat) *
+               f2;
+          acc[c] += v;
+        }
+        my_required_stack_depth = stack_ptr;
+      }
+
+      bool is_still_active = my_required_stack_depth > stack_ptr;
+      uint32_t interest_mask = __ballot_sync(0xFFFFFFFF, is_still_active);
+      if (interest_mask == 0) {
+        continue;
+      }
+
+      bool is_leaf = lane_id < 8
+                         ? current_node.getChildMeta(lane_id) == ChildType::LEAF
+                         : false;
+      uint32_t leaf_mask = __ballot_sync(0xFFFFFFFF, is_leaf);
+      if (leaf_mask > 0) {
+        load_shared_cooperative(&shared_leaf_ptrs[warp_id],
+                                &bvh8_leaf_pointers[current_node_idx], lane_id);
+        __syncwarp();
+      }
+
+      uint32_t added_inner_node_counter = 0;
+      for (uint32_t child_idx = 0; child_idx < 8; ++child_idx) {
+        ChildType child_type = current_node.getChildMeta(child_idx);
+        if (child_type == ChildType::EMPTY) {
+          continue;
+        }
+
+        if (child_type == ChildType::LEAF) {
+          const uint32_t leaf_idx =
+              shared_leaf_ptrs[warp_id].indices[child_idx];
+          const AABB child_aabb = leaf_aabbs[leaf_idx];
+
+          bool need_leaf_coeffs =
+              is_still_active && should_node_be_approximated(
+                                     my_query, child_aabb, beta_2, two_eps);
+          uint32_t load_mask_l = __ballot_sync(0xFFFFFFFF, need_leaf_coeffs);
+          if (load_mask_l > 0) {
+            load_shared_cooperative<PayloadTaylorCoefficientsF16<D>>(
+                &current_coeff_cache[warp_id], leaf_coefficients + leaf_idx,
+                lane_id);
+            __syncwarp();
+          }
+
+          bool detail_needed = true;
+          if (need_leaf_coeffs) {
+            const Vec3 com = child_aabb.center_of_mass;
+            const Vec3 r = com - my_query;
+            const float inv_R = r.inv_length();
+            const Vec3_f16 r_hat = Vec3_f16::from_float(r * inv_R);
+            const float inv_R2 = inv_R * inv_R;
+            const float inv_R3 = inv_R2 * inv_R;
+            const float inv_R4 = inv_R3 * inv_R;
+            constexpr float INV_4PI = 0.07957747154F;
+            const float f0 = INV_4PI * inv_R2;
+            const float f1 = INV_4PI * inv_R3;
+            const float f2 = INV_4PI * inv_R4;
+#pragma unroll
+            for (uint32_t c = 0; c < COMPONENTS_PER_THREAD; ++c) {
+              if (c >= my_d_count) {
+                break;
+              }
+              const uint32_t d = my_d0 + c;
+              const auto &coeffs = current_coeff_cache[warp_id];
+              float v =
+                  computeZeroOrderContribution(coeffs.getZeroOrder(d), r_hat) *
+                  f0;
+              v += computeFirstOrderContribution(coeffs.getFirstOrder(d),
+                                                 r_hat) *
+                   f1;
+              v += computeSecondOrderContribution(coeffs.getSecondOrder(d),
+                                                  r_hat) *
+                   f2;
+              acc[c] += v;
+            }
+            detail_needed = false;
+          }
+
+          uint32_t detail_mask =
+              __ballot_sync(0xFFFFFFFF, detail_needed && is_still_active);
+          if (detail_mask == 0) {
+            continue;
+          }
+
+          // Load this thread's leaf primitive (prim j = lane_id).
+          const uint32_t my_geom_idx = leaf_idx * 32 + lane_id;
+          const bool my_geom_in_bounds = my_geom_idx < geometry_count;
+          Geometry my_geometry =
+              Geometry::load(sorted_geometry, my_geom_idx, geometry_count);
+
+          while (detail_mask > 0) {
+            const int leader_lane = __ffs(detail_mask) - 1;
+            const uint32_t leader_slot = leader_lane / THREADS_PER_QUERY;
+            // Clear all K bits for the leader's query
+            const uint32_t group_clear =
+                ((THREADS_PER_QUERY == 32U)
+                     ? 0xFFFFFFFFU
+                     : (((1U << THREADS_PER_QUERY) - 1U)
+                        << (leader_slot * THREADS_PER_QUERY)));
+            detail_mask &= ~group_clear;
+
+            // Broadcast leader's query
+            const Vec3 shared_query{
+                .x = __shfl_sync(0xFFFFFFFF, my_query.x, leader_lane),
+                .y = __shfl_sync(0xFFFFFFFF, my_query.y, leader_lane),
+                .z = __shfl_sync(0xFFFFFFFF, my_query.z, leader_lane),
+            };
+
+            // Phase 1: each lane computes w_j for its primitive j
+            float my_w = 0.F;
+            if (my_geom_in_bounds) {
+              my_w = my_geometry.contributionToQuery(shared_query, ctx);
+            }
+            w_leaf_values[warp_id][lane_id] = my_w;
+            __syncwarp();
+
+            // Phase 2: K threads for leader_slot accumulate into their d-block
+            if (my_query_slot == leader_slot) {
+              const float *my_v_base = sorted_payload + my_d0;
+              for (uint32_t j = 0; j < LEAF_SIZE; ++j) {
+                if (leaf_idx * LEAF_SIZE + j >= geometry_count) {
+                  break;
+                }
+                const float w_j = w_leaf_values[warp_id][j];
+                const float *v_j =
+                    my_v_base +
+                    (static_cast<size_t>(leaf_idx * LEAF_SIZE + j) * D);
+#pragma unroll
+                for (uint32_t c = 0; c < COMPONENTS_PER_THREAD; ++c) {
+                  if (c >= my_d_count) {
+                    break;
+                  }
+                  acc[c] += w_j * v_j[c];
+                }
+              }
+            }
+            __syncwarp();
+          }
+        } else {
+          const uint32_t child_node_idx =
+              current_node.child_base + added_inner_node_counter;
+          added_inner_node_counter++;
+          if (lane_id == 0) {
+            shared_stack[warp_id][stack_ptr] = child_node_idx;
+          }
+          stack_ptr++;
+        }
+      }
+    }
+
+    if (my_required_stack_depth >= 0) {
+      float *out =
+          out_payload + static_cast<size_t>(original_query_idx) * D + my_d0;
+#pragma unroll
+      for (uint32_t c = 0; c < COMPONENTS_PER_THREAD; ++c) {
+        if (c >= my_d_count) {
+          break;
+        }
+        out[c] = acc[c];
+      }
+    }
+  }
+}
+
+// ===========================================================================
+// Single-leaf fallback (geometry_count <= 32)
+// ===========================================================================
+template <IsGeometry Geometry, uint32_t D>
+__global__ void traverse_payload_single_leaf_kernel(
+    const Vec3 *__restrict__ queries,
+    const uint32_t *__restrict__ sort_indirections,
+    const SoAView<Geometry> sorted_geometry,
+    const float *__restrict__ sorted_payload, const uint32_t query_count,
+    const uint32_t geometry_count, float *__restrict__ out_payload,
+    const typename Geometry::Context ctx, const SceneNormalization norm) {
+
+  constexpr uint32_t COMPONENTS_PER_THREAD = components_per_thread<D>;
+  constexpr uint32_t THREADS_PER_QUERY = threads_per_query<D>;
+  constexpr uint32_t QUERIES_PER_WARP = 32U / THREADS_PER_QUERY;
+
+  const uint32_t warp_id = threadIdx.x / 32;
+  const uint32_t lane_id = threadIdx.x % 32;
+  const uint32_t my_query_slot = lane_id / THREADS_PER_QUERY;
+  const uint32_t my_d0 = (lane_id % THREADS_PER_QUERY) * COMPONENTS_PER_THREAD;
+  const uint32_t my_d_count =
+      (D - my_d0 < COMPONENTS_PER_THREAD) ? (D - my_d0) : COMPONENTS_PER_THREAD;
+
+  __shared__ Geometry shared_geometry[32];
+  __shared__ float w_leaf_values[4][32];
+
+  if (threadIdx.x < geometry_count) {
+    shared_geometry[threadIdx.x] =
+        Geometry::load(sorted_geometry, threadIdx.x, geometry_count);
+  }
+  __syncthreads();
+
+  uint32_t warp_tile_base = blockIdx.x * (blockDim.x / 32) * QUERIES_PER_WARP +
+                            warp_id * QUERIES_PER_WARP;
+  // Static dispatch (no atomic counter for the single-leaf path)
+  const uint32_t my_query_idx = warp_tile_base + my_query_slot;
+  if (my_query_idx >= query_count)
+    return;
+
+  const uint32_t original_idx = sort_indirections[my_query_idx];
+  const Vec3 my_query = norm.to_normalized(queries[original_idx]);
+
+  // Phase 1: every lane computes w for primitive lane_id
+  float my_w = 0.F;
+  if (lane_id < geometry_count) {
+    my_w = shared_geometry[lane_id].contributionToQuery(my_query, ctx);
+  }
+  w_leaf_values[warp_id][lane_id] = my_w;
+  __syncwarp();
+
+  // Phase 2: each thread accumulates its d-block over all 32 primitives
+  float acc[COMPONENTS_PER_THREAD];
+#pragma unroll
+  for (uint32_t c = 0; c < COMPONENTS_PER_THREAD; ++c)
+    acc[c] = 0.F;
+
+  const float *my_v_base = sorted_payload + my_d0;
+  for (uint32_t j = 0; j < geometry_count; ++j) {
+    const float w_j = w_leaf_values[warp_id][j];
+    const float *v_j = my_v_base + j * D;
+#pragma unroll
+    for (uint32_t c = 0; c < COMPONENTS_PER_THREAD; ++c) {
+      if (c >= my_d_count)
+        break;
+      acc[c] += w_j * v_j[c];
+    }
+  }
+
+  float *out = out_payload + static_cast<size_t>(original_idx) * D + my_d0;
+#pragma unroll
+  for (uint32_t c = 0; c < COMPONENTS_PER_THREAD; ++c) {
+    if (c >= my_d_count)
+      break;
+    out[c] = acc[c];
+  }
+}
+
+// ===========================================================================
+// Launchers
+// ===========================================================================
+template <IsGeometry Geometry, uint32_t D>
+void compute_payload_winding_numbers(
+    const ComputePayloadWindingNumbersParams<Geometry, D> &params,
+    int device_id, cudaStream_t stream) {
+  if (params.query_count == 0)
+    return;
+
+  const auto ctx = Geometry::Context::make(params.epsilon, params.scene_scale);
+
+  if (params.geometry_count <= 32) {
+    constexpr uint32_t threads = 256;
+    constexpr uint32_t Q = queries_per_warp<D>;
+    const uint32_t warps_per_block = threads / 32;
+    const uint32_t queries_per_block = warps_per_block * Q;
+    const uint32_t blocks =
+        (params.query_count + queries_per_block - 1) / queries_per_block;
+    traverse_payload_single_leaf_kernel<Geometry, D>
+        <<<blocks, threads, 0, stream>>>(
+            params.queries, params.sort_indirections, params.sorted_geometry,
+            params.sorted_payload, params.query_count, params.geometry_count,
+            params.out_payload, ctx, params.norm);
+    CUDA_CHECK(cudaGetLastError());
+    return;
+  }
+
+  const float beta_2 = params.beta * params.beta;
+
+  constexpr int threads = 128;
+  int blocks_per_sm = 0;
+
+  uint32_t global_device_counter_reset = 0;
+  CUDA_CHECK(cudaMemcpyAsync(params.global_device_counter,
+                             &global_device_counter_reset, sizeof(uint32_t),
+                             cudaMemcpyHostToDevice, stream));
+
+  cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+      &blocks_per_sm, traverse_payload_winding_numbers_kernel<Geometry, D>,
+      threads, 0);
+
+  cudaDeviceProp deviceProp;
+  cudaGetDeviceProperties(&deviceProp, device_id);
+  int blocks = blocks_per_sm * deviceProp.multiProcessorCount;
+
+  traverse_payload_winding_numbers_kernel<Geometry, D>
+      <<<blocks, threads, 0, stream>>>(
+          params.queries, params.sort_indirections, params.bvh8_nodes,
+          params.bvh8_leaf_pointers, params.node_coefficients,
+          params.leaf_coefficients, params.leaf_aabbs, params.sorted_geometry,
+          params.sorted_payload, params.query_count, params.geometry_count,
+          params.out_payload, params.global_device_counter, beta_2, ctx,
+          params.norm);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+template <IsGeometry Geometry, uint32_t D>
+void query_gradient_traversal_payload(
+    const ComputePayloadQueryGradientParams<Geometry, D> &params, int device_id,
+    cudaStream_t stream) {
+  // Phase 3 is the next milestone. The kernel structure mirrors the forward
+  // traversal, but the per-node approximation uses the adjoint-weighted
+  // coefficients
+  //     A_k = Σ_d g_j[d] * C_k[d]      (per-node D-contraction)
+  // which turn the D-vector field gradient into the scalar adjoint's
+  // query gradient. The leaf path also needs a tiled gv_j = Σ_d g_j[d] v_j[d].
+  //
+  // Shipping the stub now keeps the backend compiling. Replace with the real
+  // implementation in the next session.
+  throw std::runtime_error(
+      "Payload query gradient traversal is not yet implemented (Phase 3).");
+}
+
+// ---------------------------------------------------------------------------
+// Explicit instantiations, one per (geometry, bucket).
+// ---------------------------------------------------------------------------
+#define WINDER_INSTANTIATE_PAYLOAD_TRAVERSAL(GEOM, DIM)                        \
+  template void compute_payload_winding_numbers<GEOM, DIM>(                    \
+      const ComputePayloadWindingNumbersParams<GEOM, DIM> &, int,              \
+      cudaStream_t);                                                           \
+  template void query_gradient_traversal_payload<GEOM, DIM>(                   \
+      const ComputePayloadQueryGradientParams<GEOM, DIM> &, int,               \
+      cudaStream_t);
+
+WINDER_INSTANTIATE_PAYLOAD_TRAVERSAL(PointNormal, 1)
+WINDER_INSTANTIATE_PAYLOAD_TRAVERSAL(PointNormal, 2)
+WINDER_INSTANTIATE_PAYLOAD_TRAVERSAL(PointNormal, 3)
+WINDER_INSTANTIATE_PAYLOAD_TRAVERSAL(PointNormal, 4)
+WINDER_INSTANTIATE_PAYLOAD_TRAVERSAL(PointNormal, 8)
+WINDER_INSTANTIATE_PAYLOAD_TRAVERSAL(PointNormal, 16)
+WINDER_INSTANTIATE_PAYLOAD_TRAVERSAL(PointNormal, 32)
+WINDER_INSTANTIATE_PAYLOAD_TRAVERSAL(PointNormal, 64)
+WINDER_INSTANTIATE_PAYLOAD_TRAVERSAL(PointNormal, 128)
+
+WINDER_INSTANTIATE_PAYLOAD_TRAVERSAL(Triangle, 1)
+WINDER_INSTANTIATE_PAYLOAD_TRAVERSAL(Triangle, 2)
+WINDER_INSTANTIATE_PAYLOAD_TRAVERSAL(Triangle, 3)
+WINDER_INSTANTIATE_PAYLOAD_TRAVERSAL(Triangle, 4)
+WINDER_INSTANTIATE_PAYLOAD_TRAVERSAL(Triangle, 8)
+WINDER_INSTANTIATE_PAYLOAD_TRAVERSAL(Triangle, 16)
+WINDER_INSTANTIATE_PAYLOAD_TRAVERSAL(Triangle, 32)
+WINDER_INSTANTIATE_PAYLOAD_TRAVERSAL(Triangle, 64)
+WINDER_INSTANTIATE_PAYLOAD_TRAVERSAL(Triangle, 128)
+
+#undef WINDER_INSTANTIATE_PAYLOAD_TRAVERSAL

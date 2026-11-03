@@ -69,6 +69,7 @@ private:
   // them yet
   WindingNumbersBackend(size_t size, int device_id, uint64_t stream);
 
+  SceneParams m_scene_params;
   SceneNormalization m_norm = SceneNormalization::identity();
 
   const size_t m_count;

@@ -1,6 +1,7 @@
 #pragma once
 #include "aabb.h"
 #include "geometry.h"
+#include "vec3.h"
 #include <cstddef>
 #include <cstdint>
 #include <cuda_runtime_api.h>
@@ -38,6 +39,14 @@ struct SceneParams {
   float scale;
   AABB bounds;
 };
+
+template <IsPrimitiveGeometry PrimitiveGeometry> struct GeometryToMorton {
+  float scale;
+  Vec3 min_p;
+
+  __device__ auto operator()(const PrimitiveGeometry &g) const -> uint64_t;
+};
+
 
 template <IsPrimitiveGeometry PrimitiveGeometry>
 auto initializeMortonCodes(const PrimitiveGeometry *geometry,
