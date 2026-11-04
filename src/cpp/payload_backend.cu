@@ -10,15 +10,20 @@
 #include "kernels/mesh.cuh"
 #include "kernels/payload.cuh"
 #include "kernels/traversal.cuh"
+#include "mat3x3.h"
 #include "payload_backend.h"
 #include "scene_normalization.h"
 #include "soa.h"
 #include "taylor_coefficients.h"
+#include "tensor3.h"
+#include "thrust/detail/copy.inl"
 #include "thrust/detail/fill.inl"
 #include "thrust/detail/reduce.inl"
 #include "thrust/detail/sequence.inl"
 #include "thrust/detail/sort.inl"
 #include "thrust/execution_policy.h"
+#include "thrust/iterator/permutation_iterator.h"
+#include "thrust/iterator/transform_iterator.h"
 #include "thrust/system/cuda/detail/execution_policy.h"
 #include "thrust/system/cuda/detail/fill.h"
 #include "thrust/transform.h"
@@ -27,11 +32,15 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <cuda_bf16.h>
+#include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
 #include <driver_types.h>
 #include <format>
 #include <memory>
+#include <queue>
 #include <stdexcept>
 #include <string>
 #include <thrust/copy.h>
@@ -39,6 +48,7 @@
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/reduce.h>
 #include <thrust/sequence.h>
+#include <vector>
 #include <thrust/sort.h>
 
 using thrust::fill_n;
@@ -152,6 +162,7 @@ void PayloadWindingNumbersBackend<Geometry, D>::initialize_triangle_data(
   gather_triangles_soa(triangles, m_to_internal, m_sorted_geometry, m_count,
                        m_norm, m_build_stream);
   gather_payload<D>(payload, m_to_internal, m_sorted_payload, m_count,
+      m_payload_dim_user,
                     m_build_stream);
 
   // ---------- Leaf coefficients ----------
@@ -526,9 +537,10 @@ auto PayloadWindingNumbersBackend<Geometry, D>::compute_payload_query_gradients(
                              query_count * sizeof(uint32_t), compute_stream));
   CUDA_CHECK(cudaMallocAsync(&queries_morton, query_count * sizeof(uint64_t),
                              compute_stream));
-  thrust::transform(compute_stream_policy, queries_vec3,
-                    queries_vec3 + query_count, queries_morton,
-                    GeometryToMorton<Vec3>{m_norm.scale, m_norm.min_p});
+  thrust::transform(
+      compute_stream_policy, queries_vec3, queries_vec3 + query_count,
+      queries_morton,
+      GeometryToMorton<Vec3>{.scale = m_norm.scale, .min_p = m_norm.min_p});
   thrust::sequence(compute_stream_policy, queries_to_internal,
                    queries_to_internal + query_count);
   thrust::stable_sort_by_key(compute_stream_policy, queries_morton,
@@ -580,7 +592,7 @@ auto PayloadWindingNumbersBackend<Geometry, D>::compute_payload_query_gradients(
 // ===========================================================================
 template <IsGeometry Geometry, uint32_t D>
 auto PayloadWindingNumbersBackend<Geometry, D>::CreateFromTriangles(
-    const float *triangles, const float *payload, size_t triangle_count,
+    const float *triangles, const float *payload, size_t triangle_count, uint32_t payload_dim_user,
     int device_id, uint64_t stream)
     -> std::unique_ptr<PayloadWindingNumbersBackend<Triangle, D>>
   requires std::is_same_v<Geometry, Triangle>
@@ -588,6 +600,7 @@ auto PayloadWindingNumbersBackend<Geometry, D>::CreateFromTriangles(
   ScopedCudaDevice device_scope(device_id);
   auto self = std::unique_ptr<PayloadWindingNumbersBackend>{
       new PayloadWindingNumbersBackend(triangle_count, device_id, stream)};
+  self->m_payload_dim_user = payload_dim_user;
   self->initialize_triangle_data(triangles, payload);
   return self;
 }
@@ -596,13 +609,14 @@ template <IsGeometry Geometry, uint32_t D>
 auto PayloadWindingNumbersBackend<Geometry, D>::CreateFromMesh(
     const float *vertices, size_t vertex_count,
     const uint32_t *triangle_indices, const float *payload,
-    size_t triangle_count, int device_id, uint64_t stream)
+    size_t triangle_count, uint32_t payload_dim_user, int device_id, uint64_t stream)
     -> std::unique_ptr<PayloadWindingNumbersBackend<Triangle, D>>
   requires std::is_same_v<Geometry, Triangle>
 {
   ScopedCudaDevice device_scope(device_id);
   auto self = std::unique_ptr<PayloadWindingNumbersBackend>{
       new PayloadWindingNumbersBackend(triangle_count, device_id, stream)};
+  self->m_payload_dim_user = payload_dim_user;
 
   if (triangle_count == 0) {
     return self;
@@ -638,29 +652,404 @@ auto PayloadWindingNumbersBackend<Geometry, D>::CreateFromMesh(
 template <IsGeometry Geometry, uint32_t D>
 auto PayloadWindingNumbersBackend<Geometry, D>::CreateFromPoints(
     const float *points, const float *scaled_normals, const float *payload,
-    size_t point_count, int device_id, uint64_t stream)
+    size_t point_count, uint32_t payload_dim_user; int device_id, uint64_t stream)
     -> std::unique_ptr<PayloadWindingNumbersBackend<PointNormal, D>>
   requires std::is_same_v<Geometry, PointNormal>
 {
   ScopedCudaDevice device_scope(device_id);
   auto self = std::unique_ptr<PayloadWindingNumbersBackend>{
       new PayloadWindingNumbersBackend(point_count, device_id, stream)};
+  self->m_payload_dim_user = payload_dim_user;
   self->initialize_point_data(points, scaled_normals, payload);
   return self;
 }
 
 // ===========================================================================
-// dump — prints component d=0 only
+// dump — full BVH8 tree + payload coefficients
+//
+// Renders the BVH8 hierarchy, AABB bounds, and Taylor coefficient tables.
+// For payload backends (D > 1), each node additionally shows the L2-norm of
+// the zero-order coefficients summed across all D components, so that
+// "is the payload actually populated?" can be checked without rendering
+// every component. Coefficient tables themselves only show component d=0
+// (matching the scalar backend layout for D=1); use a per-component dump
+// extension if a specific d ≠ 0 needs inspection.
 // ===========================================================================
 template <IsGeometry Geometry, uint32_t D>
 auto PayloadWindingNumbersBackend<Geometry, D>::dump() const -> std::string {
-  return "digraph BVH8 { /* payload D=" + std::to_string(D) +
-         " — see scalar backend */ }\n";
+  // Edge case: no geometry at all
+  if (m_count == 0) {
+    return "digraph BVH8 {\n}\n";
+  }
+
+  std::string result = "digraph BVH8 {\n";
+  result += "  node [fontname=\"Arial\", fontsize=10];\n";
+  result += "  rankdir=TB;\n\n";
+  result += std::format(
+      "  // Payload Winding Numbers: D = {}, geometry_count = {}\n\n", D,
+      m_count);
+
+  // -------------------------------------------------------------------------
+  // Host-safe bit reinterpretation for f16 / bf16 coefficient slots.
+  // The __ushort_as_half / __ushort_as_bfloat16 CUDA intrinsics are
+  // __device__ only, so memcpy through raw uint16_t is the portable path.
+  // -------------------------------------------------------------------------
+  auto read_half = [](uint16_t bits) -> half {
+    __half_raw raw;
+    raw.x = bits;
+    return half(raw); // __half(__half_raw) is a bit-preserving ctor
+  };
+  auto read_bf16 = [](uint16_t bits) -> __nv_bfloat16 {
+    __nv_bfloat16_raw raw;
+    raw.x = bits;
+    return __nv_bfloat16(
+        raw); // __nv_bfloat16(__nv_bfloat16_raw) is bit-preserving
+  };
+
+  // Slot layout (from PayloadTaylorCoefficientsF16):
+  //   slots 0..2   : zero order, x/y/z
+  //   slots 3..11  : first order, row-major 3x3
+  //   slots 12..29 : second order, 18 unique symmetric entries
+  auto read_zero = [&](const PayloadTaylorCoefficientsF16<D> &c,
+                       uint32_t d) -> Vec3 {
+    return {__half2float(read_half(c.data[0][d])),
+            __half2float(read_half(c.data[1][d])),
+            __half2float(read_half(c.data[2][d]))};
+  };
+  auto read_first = [&](const PayloadTaylorCoefficientsF16<D> &c,
+                        uint32_t d) -> Mat3x3 {
+    Mat3x3 m;
+    for (int i = 0; i < 9; ++i) {
+      m.data[i] = __half2float(read_half(c.data[3 + i][d]));
+    }
+    return m;
+  };
+  auto read_second = [&](const PayloadTaylorCoefficientsF16<D> &c,
+                         uint32_t d) -> Tensor3 {
+    Tensor3_bf16_compressed compressed;
+    for (int i = 0; i < 18; ++i) {
+      compressed.data[i] = read_bf16(c.data[12 + i][d]);
+    }
+    return Tensor3_compressed::from_bf16(compressed).uncompress();
+  };
+  auto payload_norm_sq =
+      [&](const PayloadTaylorCoefficientsF16<D> &c) -> float {
+    float sum = 0.F;
+    for (uint32_t d = 0; d < D; ++d) {
+      Vec3 v = read_zero(c, d);
+      sum += v.x * v.x + v.y * v.y + v.z * v.z;
+    }
+    return sum;
+  };
+
+  // =========================================================================
+  // Edge Case 2: only one leaf (no internal nodes)
+  // =========================================================================
+  if (m_count <= LEAF_SIZE) {
+    std::vector<AABB> leaf_aabbs(1);
+    CUDA_CHECK(cudaMemcpy(leaf_aabbs.data(), m_binary_aabbs, sizeof(AABB),
+                          cudaMemcpyDeviceToHost));
+
+    std::vector<Geometry> geometry(m_count);
+    CUDA_CHECK(cudaMemcpy(geometry.data(), m_sorted_geometry,
+                          m_count * sizeof(Geometry), cudaMemcpyDeviceToHost));
+    SoAView<Geometry> geometry_view{reinterpret_cast<float *>(geometry.data()),
+                                    m_count};
+
+    std::vector<PayloadTaylorCoefficientsF16<D>> leaf_coefficients(1);
+    CUDA_CHECK(cudaMemcpy(leaf_coefficients.data(), m_leaf_coefficients,
+                          sizeof(PayloadTaylorCoefficientsF16<D>),
+                          cudaMemcpyDeviceToHost));
+
+    const AABB &leaf_aabb = leaf_aabbs[0];
+    const Vec3 leaf_com = leaf_aabb.center_of_mass;
+    const auto &leaf_coeffs = leaf_coefficients[0];
+    const Vec3 leaf_zero = read_zero(leaf_coeffs, 0);
+    const Mat3x3 leaf_first = read_first(leaf_coeffs, 0);
+
+    result += "  L0 [shape=none, label=<\n";
+    result += "    <TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\" "
+              "CELLPADDING=\"4\" BGCOLOR=\"#eaffea\">\n";
+    result += std::format(
+        "      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#4CAF50\"><B><FONT "
+        "COLOR=\"white\">LEAF 0 (Root Leaf, payload D={})</FONT></B>"
+        "</TD></TR>\n",
+        D);
+    result +=
+        std::format("      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#c8e6c9\"><I>CoM: "
+                    "({:.4f}, {:.4f}, {:.4f})</I></TD></TR>\n",
+                    leaf_com.x, leaf_com.y, leaf_com.z);
+    result += std::format(
+        "      <TR><TD COLSPAN=\"4\"><FONT POINT-SIZE=\"9\">AABB "
+        "Min: ({:.3f}, {:.3f}, {:.3f})<BR/>AABB Max: ({:.3f}, "
+        "{:.3f}, {:.3f})</FONT></TD></TR>\n",
+        __half2float(leaf_aabb.min.x), __half2float(leaf_aabb.min.y),
+        __half2float(leaf_aabb.min.z), __half2float(leaf_aabb.max.x),
+        __half2float(leaf_aabb.max.y), __half2float(leaf_aabb.max.z));
+
+    if constexpr (D > 1) {
+      result += std::format(
+          "      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#e8f5e9\"><FONT "
+          "POINT-SIZE=\"9\"><I>Payload: ||zero||² across all D = {:.4f}</I>"
+          "</FONT></TD></TR>\n",
+          payload_norm_sq(leaf_coeffs));
+    }
+
+    result +=
+        std::format("      <TR><TD BGCOLOR=\"#c8e6c9\"><B>Zero (d=0)</B></TD>"
+                    "<TD>{:.4f}</TD><TD>{:.4f}</TD><TD>{:.4f}</TD></TR>\n",
+                    leaf_zero.x, leaf_zero.y, leaf_zero.z);
+    result += "      <TR><TD ROWSPAN=\"3\" BGCOLOR=\"#c8e6c9\"><B>1st "
+              "Order (d=0)</B></TD>\n";
+    for (int r = 0; r < 3; ++r) {
+      if (r > 0)
+        result += "      <TR>\n";
+      result += std::format(
+          "        <TD>{:.4f}</TD><TD>{:.4f}</TD><TD>{:.4f}</TD></TR>\n",
+          leaf_first.data[r * 3 + 0], leaf_first.data[r * 3 + 1],
+          leaf_first.data[r * 3 + 2]);
+    }
+
+    result += std::format(
+        "      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#c8e6c9\"><I>Geometry "
+        "(Max {} Packets)</I></TD></TR>\n",
+        LEAF_SIZE);
+    for (size_t g_id = 0; g_id < m_count; ++g_id) {
+      const Geometry &g = Geometry::load(geometry_view, g_id, m_count);
+      result += std::format(
+          "      <TR><TD>P{}</TD><TD COLSPAN=\"3\" ALIGN=\"LEFT\"><FONT "
+          "POINT-SIZE=\"9\">{}</FONT></TD></TR>\n",
+          g_id, g.dump());
+    }
+    result += "    </TABLE>>];\n}\n";
+    return result;
+  }
+
+  // =========================================================================
+  // Standard BVH8 multi-node, multi-leaf traversal
+  // =========================================================================
+  uint32_t node_count = 0;
+  CUDA_CHECK(cudaMemcpy(&node_count, m_bvh8_node_count, sizeof(uint32_t),
+                        cudaMemcpyDeviceToHost));
+
+  std::vector<BVH8Node> bvh8_nodes(node_count);
+  CUDA_CHECK(cudaMemcpy(bvh8_nodes.data(), m_bvh8_nodes,
+                        sizeof(BVH8Node) * node_count, cudaMemcpyDeviceToHost));
+
+  uint32_t leaf_count = (m_count + LEAF_SIZE - 1) / LEAF_SIZE;
+  std::vector<AABB> leaf_aabbs(leaf_count);
+  CUDA_CHECK(cudaMemcpy(leaf_aabbs.data(), m_binary_aabbs + leaf_count - 1,
+                        sizeof(AABB) * leaf_count, cudaMemcpyDeviceToHost));
+
+  std::vector<Geometry> geometry(m_count);
+  CUDA_CHECK(cudaMemcpy(geometry.data(), m_sorted_geometry,
+                        m_count * sizeof(Geometry), cudaMemcpyDeviceToHost));
+  SoAView<Geometry> geometry_view{reinterpret_cast<float *>(geometry.data()),
+                                  m_count};
+
+  std::vector<LeafPointers> leaf_pointers(node_count);
+  CUDA_CHECK(cudaMemcpy(leaf_pointers.data(), m_bvh8_leaf_pointers,
+                        node_count * sizeof(LeafPointers),
+                        cudaMemcpyDeviceToHost));
+
+  std::vector<PayloadTaylorCoefficientsF16<D>> leaf_coefficients(leaf_count);
+  CUDA_CHECK(cudaMemcpy(leaf_coefficients.data(), m_leaf_coefficients,
+                        leaf_count * sizeof(PayloadTaylorCoefficientsF16<D>),
+                        cudaMemcpyDeviceToHost));
+
+  std::vector<PayloadTaylorCoefficientsF16<D>> node_coefficients(node_count);
+  CUDA_CHECK(cudaMemcpy(node_coefficients.data(), m_tailor_coefficients,
+                        sizeof(PayloadTaylorCoefficientsF16<D>) * node_count,
+                        cudaMemcpyDeviceToHost));
+
+  // Breadth-First Search (matches the layout used by the scalar backend)
+  std::queue<uint32_t> queue;
+  queue.push(0); // Root internal node
+  int empty_counter = 0;
+
+  while (!queue.empty()) {
+    uint32_t current_id = queue.front();
+    queue.pop();
+
+    const BVH8Node &current_node = bvh8_nodes[current_id];
+    const auto &current_coeffs = node_coefficients[current_id];
+    AABB aabb = current_node.getAABB();
+    Vec3 node_com = aabb.center_of_mass;
+
+    const Vec3 node_zero = read_zero(current_coeffs, 0);
+    const Mat3x3 node_first = read_first(current_coeffs, 0);
+    const Tensor3 node_second = read_second(current_coeffs, 0);
+
+    // 1. Render internal node
+    result += std::format("  N{} [shape=none, label=<\n", current_id);
+    result += "    <TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\" "
+              "CELLPADDING=\"4\" BGCOLOR=\"#f0faff\">\n";
+    result += std::format(
+        "      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#2196F3\"><B><FONT "
+        "COLOR=\"white\">NODE {} (payload D={})</FONT></B></TD></TR>\n",
+        current_id, D);
+    result +=
+        std::format("      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#bbdefb\"><I>CoM: "
+                    "({:.4f}, {:.4f}, {:.4f})</I></TD></TR>\n",
+                    node_com.x, node_com.y, node_com.z);
+    result += std::format(
+        "      <TR><TD COLSPAN=\"4\"><FONT POINT-SIZE=\"9\">AABB Min: "
+        "({:.3f}, {:.3f}, {:.3f})<BR/>AABB Max: ({:.3f}, {:.3f}, "
+        "{:.3f})</FONT></TD></TR>\n",
+        __half2float(aabb.min.x), __half2float(aabb.min.y),
+        __half2float(aabb.min.z), __half2float(aabb.max.x),
+        __half2float(aabb.max.y), __half2float(aabb.max.z));
+
+    if constexpr (D > 1) {
+      result += std::format(
+          "      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#e3f2fd\"><FONT "
+          "POINT-SIZE=\"9\"><I>Payload: ||zero||² across all D = {:.4f}</I>"
+          "</FONT></TD></TR>\n",
+          payload_norm_sq(current_coeffs));
+    }
+
+    result +=
+        std::format("      <TR><TD BGCOLOR=\"#bbdefb\"><B>Zero (d=0)</B></TD>"
+                    "<TD>{:.4f}</TD><TD>{:.4f}</TD><TD>{:.4f}</TD></TR>\n",
+                    node_zero.x, node_zero.y, node_zero.z);
+
+    result += "      <TR><TD ROWSPAN=\"3\" BGCOLOR=\"#bbdefb\"><B>1st "
+              "Order (d=0)</B></TD>\n";
+    for (int r = 0; r < 3; ++r) {
+      if (r > 0)
+        result += "      <TR>\n";
+      result += std::format(
+          "        <TD>{:.4f}</TD><TD>{:.4f}</TD><TD>{:.4f}</TD></TR>\n",
+          node_first.data[r * 3 + 0], node_first.data[r * 3 + 1],
+          node_first.data[r * 3 + 2]);
+    }
+
+    result += "      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#bbdefb\"><B>2nd "
+              "Order (d=0)</B></TD></TR>\n";
+    for (int s = 0; s < 3; ++s) {
+      result += std::format("      <TR><TD ROWSPAN=\"3\">Slice {}</TD>\n", s);
+      for (int r = 0; r < 3; ++r) {
+        if (r > 0)
+          result += "      <TR>\n";
+        int b = (s * 9) + (r * 3);
+        result += std::format(
+            "        <TD>{:.4f}</TD><TD>{:.4f}</TD><TD>{:.4f}</TD></TR>\n",
+            node_second.data[b + 0], node_second.data[b + 1],
+            node_second.data[b + 2]);
+      }
+    }
+    result += "    </TABLE>>];\n";
+
+    // 2. Enqueue / render children in order
+    uint32_t child_base = current_node.child_base;
+    uint32_t child_offset = 0;
+    LeafPointers current_leaf_pointers = leaf_pointers[current_id];
+
+    for (size_t child_id = 0; child_id < 8; child_id++) {
+      ChildType child_type = current_node.getChildMeta(child_id);
+      switch (child_type) {
+      case ChildType::INTERNAL: {
+        uint32_t next_idx = child_offset++ + child_base;
+        queue.push(next_idx);
+        result += std::format("  N{} -> N{} [label=\"{}\", weight=3];\n",
+                              current_id, next_idx, child_id);
+        break;
+      }
+      case ChildType::LEAF: {
+        uint32_t l_id = current_leaf_pointers.indices[child_id];
+        AABB leaf_aabb = leaf_aabbs[l_id];
+        const auto &leaf_coeffs = leaf_coefficients[l_id];
+        Vec3 leaf_com = leaf_aabb.center_of_mass;
+
+        const Vec3 leaf_zero = read_zero(leaf_coeffs, 0);
+        const Mat3x3 leaf_first = read_first(leaf_coeffs, 0);
+
+        result += std::format("  L{} [shape=none, label=<\n", l_id);
+        result += "    <TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\" "
+                  "CELLPADDING=\"4\" BGCOLOR=\"#eaffea\">\n";
+        result += std::format(
+            "      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#4CAF50\"><B><FONT "
+            "COLOR=\"white\">LEAF {} (payload D={})</FONT></B></TD></TR>\n",
+            l_id, D);
+        result += std::format(
+            "      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#c8e6c9\"><I>CoM: ({:.4f}, "
+            "{:.4f}, {:.4f})</I></TD></TR>\n",
+            leaf_com.x, leaf_com.y, leaf_com.z);
+        result += std::format(
+            "      <TR><TD COLSPAN=\"4\"><FONT POINT-SIZE=\"9\" "
+            "COLOR=\"#333333\">AABB Min: ({:.2f}, {:.2f}, {:.2f}) Max: "
+            "({:.2f}, {:.2f}, {:.2f})</FONT></TD></TR>\n",
+            __half2float(leaf_aabb.min.x), __half2float(leaf_aabb.min.y),
+            __half2float(leaf_aabb.min.z), __half2float(leaf_aabb.max.x),
+            __half2float(leaf_aabb.max.y), __half2float(leaf_aabb.max.z));
+
+        if constexpr (D > 1) {
+          result += std::format(
+              "      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#e8f5e9\"><FONT "
+              "POINT-SIZE=\"9\"><I>Payload: ||zero||² across all D = {:.4f}</I>"
+              "</FONT></TD></TR>\n",
+              payload_norm_sq(leaf_coeffs));
+        }
+
+        result += std::format(
+            "      <TR><TD BGCOLOR=\"#c8e6c9\"><B>Zero (d=0)</B></TD>"
+            "<TD>{:.4f}</TD><TD>{:.4f}</TD><TD>{:.4f}</TD></TR>\n",
+            leaf_zero.x, leaf_zero.y, leaf_zero.z);
+        result += "      <TR><TD ROWSPAN=\"3\" BGCOLOR=\"#c8e6c9\"><B>1st "
+                  "Order (d=0)</B></TD>\n";
+        for (int r = 0; r < 3; ++r) {
+          if (r > 0)
+            result += "      <TR>\n";
+          result += std::format(
+              "        <TD>{:.4f}</TD><TD>{:.4f}</TD><TD>{:.4f}</TD></TR>\n",
+              leaf_first.data[r * 3 + 0], leaf_first.data[r * 3 + 1],
+              leaf_first.data[r * 3 + 2]);
+        }
+
+        result += std::format(
+            "      <TR><TD COLSPAN=\"4\" BGCOLOR=\"#c8e6c9\"><I>Geometry "
+            "(Max {} Packets)</I></TD></TR>\n",
+            LEAF_SIZE);
+        size_t g_off = l_id * LEAF_SIZE;
+        for (size_t g_id = 0; g_id < LEAF_SIZE; g_id++) {
+          size_t global_idx = g_off + g_id;
+          if (global_idx >= m_count)
+            break;
+          const Geometry &g =
+              Geometry::load(geometry_view, global_idx, m_count);
+          result += std::format(
+              "      <TR><TD>P{}</TD><TD COLSPAN=\"3\" ALIGN=\"LEFT\"><FONT "
+              "POINT-SIZE=\"8\">{}</FONT></TD></TR>\n",
+              g_id, g.dump());
+        }
+
+        result += "    </TABLE>>];\n";
+        result += std::format(
+            "  N{} -> L{} [label=\"{}\", color=\"#4CAF50\", penwidth=2];\n",
+            current_id, l_id, child_id);
+        break;
+      }
+      case ChildType::EMPTY: {
+        int e_id = empty_counter++;
+        result +=
+            std::format("  E{} [label=\"\", shape=point, color=gray];\n", e_id);
+        result += std::format(
+            "  N{} -> E{} [style=dotted, color=gray, arrowhead=none];\n",
+            current_id, e_id);
+        break;
+      }
+      }
+    }
+  }
+
+  result += "}\n";
+  return result;
 }
 
 // ===========================================================================
 // Explicit instantiations
 // ===========================================================================
+
 template class PayloadWindingNumbersBackend<PointNormal, 1>;
 template class PayloadWindingNumbersBackend<PointNormal, 2>;
 template class PayloadWindingNumbersBackend<PointNormal, 3>;

@@ -116,6 +116,7 @@ struct ComputePayloadWindingNumbersParams {
   const PayloadTaylorCoefficientsF16<D> *leaf_coefficients;
   const AABB *leaf_aabbs;
   SoAView<Geometry> sorted_geometry;
+  uint32_t payload_dim_user;
   const float *sorted_payload;
   uint32_t query_count;
   uint32_t geometry_count;
@@ -138,6 +139,7 @@ struct ComputePayloadQueryGradientParams {
   const AABB *leaf_aabbs;
   SoAView<Geometry> sorted_geometry;
   const float *sorted_payload;
+  uint32_t payload_dim_user;
   uint32_t query_count;
   uint32_t geometry_count;
   const float *grad_output;     // (M, D) adjoint

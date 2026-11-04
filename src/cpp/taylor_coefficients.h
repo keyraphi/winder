@@ -30,7 +30,7 @@ struct alignas(128) TaylorCoefficients {
     TaylorCoefficients result;
     result.zero_order = Vec3::from_f16(t.zero_order);
     result.first_order = Mat3x3::from_f16(t.first_order);
-    result.second_order = Tensor3_compressed::from_f16(t.second_order);
+    result.second_order = Tensor3_compressed::from_bf16(t.second_order);
     return result;
   }
 };

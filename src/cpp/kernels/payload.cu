@@ -10,45 +10,47 @@ template <uint32_t D, uint32_t BlockSize = 256>
 __global__ void gather_payload_kernel(const float *__restrict__ payload,
                                       const uint32_t *__restrict__ sort_indices,
                                       float *__restrict__ sorted_payload,
-                                      size_t total_elements) {
-
+                                      size_t num_rows,
+                                      uint32_t payload_dim_user) {
+  // sorted_payload has bucket-D stride (zero-padded);
+  // payload has user stride (payload_dim_user).
+  const size_t total_elements = num_rows * static_cast<size_t>(D);
   const size_t idx = static_cast<size_t>(blockIdx.x) * BlockSize + threadIdx.x;
-  if (idx >= total_elements) {
+  if (idx >= total_elements)
     return;
-  }
 
   const size_t row = idx / D;
   const size_t col = idx - row * D;
 
-  const uint32_t src_row = __ldg(sort_indices + row);
-  sorted_payload[idx] = __ldg(payload + static_cast<size_t>(src_row) * D + col);
+  if (col < payload_dim_user) {
+    const uint32_t src_row = __ldg(sort_indices + row);
+    sorted_payload[idx] =
+        __ldg(payload + static_cast<size_t>(src_row) * payload_dim_user + col);
+  } else {
+    sorted_payload[idx] = 0.F;
+  }
 }
 
 template <uint32_t D>
 void launch_gather_payload(const float *payload, const uint32_t *sort_indices,
                            float *sorted_payload, size_t n_rows,
-                           cudaStream_t stream) {
-
+                           uint32_t payload_dim_user, cudaStream_t stream) {
   const size_t total = n_rows * static_cast<size_t>(D);
-  if (total == 0) {
+  if (total == 0)
     return;
-  }
-
   constexpr uint32_t threads = 256;
-
-  const auto blocks =
-      static_cast<uint32_t>((total + threads - 1) / threads);
-
+  const auto blocks = static_cast<uint32_t>((total + threads - 1) / threads);
   gather_payload_kernel<D, threads><<<blocks, threads, 0, stream>>>(
-      payload, sort_indices, sorted_payload, total);
+      payload, sort_indices, sorted_payload, n_rows, payload_dim_user);
   CUDA_CHECK(cudaGetLastError());
 }
 
 template <uint32_t D>
 void gather_payload(const float *payload, const uint32_t *sort_indices,
-                    float *sorted_payload, size_t n_rows, cudaStream_t stream) {
+                    float *sorted_payload, size_t n_rows,
+                    uint32_t payload_dim_user, cudaStream_t stream) {
   launch_gather_payload<D>(payload, sort_indices, sorted_payload, n_rows,
-                           stream);
+                           payload_dim_user, stream);
 }
 
 auto payload_d_bucket(uint32_t d) -> uint32_t {
@@ -70,33 +72,46 @@ void gather_payload_dynamic(const float *payload, const uint32_t *sort_indices,
                             float *sorted_payload, size_t n_rows, uint32_t d,
                             cudaStream_t stream) {
   switch (payload_d_bucket(d)) {
-  case 1:
-    return gather_payload<1>(payload, sort_indices, sorted_payload, n_rows,
-                             stream);
-  case 2:
-    return gather_payload<2>(payload, sort_indices, sorted_payload, n_rows,
-                             stream);
-  case 3:
-    return gather_payload<3>(payload, sort_indices, sorted_payload, n_rows,
-                             stream);
-  case 4:
-    return gather_payload<4>(payload, sort_indices, sorted_payload, n_rows,
-                             stream);
-  case 8:
-    return gather_payload<8>(payload, sort_indices, sorted_payload, n_rows,
-                             stream);
-  case 16:
-    return gather_payload<16>(payload, sort_indices, sorted_payload, n_rows,
-                              stream);
-  case 32:
-    return gather_payload<32>(payload, sort_indices, sorted_payload, n_rows,
-                              stream);
-  case 64:
-    return gather_payload<64>(payload, sort_indices, sorted_payload, n_rows,
-                              stream);
-  case 128:
-    return gather_payload<128>(payload, sort_indices, sorted_payload, n_rows,
-                               stream);
+  case 1: {
+    gather_payload<1>(payload, sort_indices, sorted_payload, n_rows, d, stream);
+  }
+    return;
+  case 2: {
+    gather_payload<2>(payload, sort_indices, sorted_payload, n_rows, d, stream);
+  }
+    return;
+  case 3: {
+    gather_payload<3>(payload, sort_indices, sorted_payload, n_rows, d, stream);
+  }
+    return;
+  case 4: {
+    gather_payload<4>(payload, sort_indices, sorted_payload, n_rows, d, stream);
+  }
+    return;
+  case 8: {
+    gather_payload<8>(payload, sort_indices, sorted_payload, n_rows, d, stream);
+  }
+    return;
+  case 16: {
+    gather_payload<16>(payload, sort_indices, sorted_payload, n_rows, d,
+                       stream);
+  }
+    return;
+  case 32: {
+    gather_payload<32>(payload, sort_indices, sorted_payload, n_rows, d,
+                       stream);
+  }
+    return;
+  case 64: {
+    gather_payload<64>(payload, sort_indices, sorted_payload, n_rows, d,
+                       stream);
+  }
+    return;
+  case 128: {
+    gather_payload<128>(payload, sort_indices, sorted_payload, n_rows, d,
+                        stream);
+  }
+    return;
   default:
     // Unreachable: payload_d_bucket either returns one of the above or throws
     throw std::runtime_error(
@@ -107,20 +122,20 @@ void gather_payload_dynamic(const float *payload, const uint32_t *sort_indices,
 // ---------------------------------------------------------------------------
 // Explicit instantiations — one per D bucket.
 template void gather_payload<1>(const float *, const uint32_t *, float *,
-                                size_t, cudaStream_t);
+                                size_t, uint32_t, cudaStream_t);
 template void gather_payload<2>(const float *, const uint32_t *, float *,
-                                size_t, cudaStream_t);
+                                size_t, uint32_t, cudaStream_t);
 template void gather_payload<3>(const float *, const uint32_t *, float *,
-                                size_t, cudaStream_t);
+                                size_t, uint32_t, cudaStream_t);
 template void gather_payload<4>(const float *, const uint32_t *, float *,
-                                size_t, cudaStream_t);
+                                size_t, uint32_t, cudaStream_t);
 template void gather_payload<8>(const float *, const uint32_t *, float *,
-                                size_t, cudaStream_t);
+                                size_t, uint32_t, cudaStream_t);
 template void gather_payload<16>(const float *, const uint32_t *, float *,
-                                 size_t, cudaStream_t);
+                                 size_t, uint32_t, cudaStream_t);
 template void gather_payload<32>(const float *, const uint32_t *, float *,
-                                 size_t, cudaStream_t);
+                                 size_t, uint32_t, cudaStream_t);
 template void gather_payload<64>(const float *, const uint32_t *, float *,
-                                 size_t, cudaStream_t);
+                                 size_t, uint32_t, cudaStream_t);
 template void gather_payload<128>(const float *, const uint32_t *, float *,
-                                  size_t, cudaStream_t);
+                                  size_t, uint32_t, cudaStream_t);

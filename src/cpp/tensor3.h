@@ -3,8 +3,8 @@
 #include "mat3x3.h"
 #include "vec3.h"
 #include <cstdint>
-#include <cuda_fp16.h>
 #include <cuda_bf16.h>
+#include <cuda_fp16.h>
 #include <cuda_runtime_api.h>
 
 struct Tensor3_bf16 {
@@ -13,8 +13,8 @@ struct Tensor3_bf16 {
 struct Tensor3 {
   float data[27];
 
-  __host__ static auto from_outer_product(const Mat3x3 &m,
-                                                     const Vec3 &v) -> Tensor3 {
+  __host__ static auto from_outer_product(const Mat3x3 &m, const Vec3 &v)
+      -> Tensor3 {
     Tensor3 result;
     for (int i = 0; i < 3; i++) {
       for (int j = 0; j < 3; j++) {
@@ -76,8 +76,15 @@ struct Tensor3_bf16_compressed {
 struct Tensor3_compressed {
   float data[18];
 
+  __host__ __device__ __forceinline__ static auto zero() -> Tensor3_compressed {
+    Tensor3_compressed result;
+    for (int i = 0; i < 18; ++i) {
+      result.data[i] = 0.F;
+    }
+    return result;
+  }
   __host__ __device__ __forceinline__ static auto
-  from_f16(const Tensor3_bf16_compressed &t) -> Tensor3_compressed {
+  from_bf16(const Tensor3_bf16_compressed &t) -> Tensor3_compressed {
     Tensor3_compressed result;
     for (int i = 0; i < 18; ++i) {
       result.data[i] = __bfloat162float(t.data[i]);
@@ -97,6 +104,14 @@ struct Tensor3_compressed {
       data[i] += t.data[i];
     }
     return *this;
+  }
+
+  __host__ __device__ __forceinline__ auto operator*(const float f) const {
+    Tensor3_compressed result;
+    for (int i = 0; i < 18; i++) {
+      result.data[i] += data[i] * f;
+    }
+    return result;
   }
 
   __host__ __device__ inline auto uncompress() const -> Tensor3 {
@@ -132,15 +147,6 @@ struct Tensor3_compressed {
   }
 };
 
-__host__ __device__ __forceinline__ static auto
-from_float(const Tensor3_compressed &t) -> Tensor3_bf16_compressed {
-  Tensor3_bf16_compressed result;
-  for (int i = 0; i < 18; ++i) {
-    result.data[i] = __float2bfloat16(t.data[i]);
-  }
-  return result;
-}
-
 __host__ __device__ __forceinline__ auto
 Tensor3_bf16_compressed::operator=(const Tensor3_compressed &t)
     -> Tensor3_bf16_compressed {
@@ -158,4 +164,9 @@ Tensor3_bf16_compressed::from_float(const Tensor3_compressed &t)
     result.data[i] = __float2bfloat16(t.data[i]);
   }
   return result;
+}
+
+__host__ __device__ __forceinline__ auto operator*(const float n,
+                                                   const Tensor3_compressed &t) -> Tensor3_compressed {
+  return t * n;
 }

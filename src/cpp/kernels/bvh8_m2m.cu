@@ -370,7 +370,7 @@ load_d_f16(const PayloadTaylorCoefficientsF16<D> &src, uint32_t d, Vec3 &zero,
            Mat3x3 &first, Tensor3_compressed &second) {
   zero = Vec3::from_f16(src.getZeroOrder(d));
   first = Mat3x3::from_f16(src.getFirstOrder(d));
-  second = Tensor3_compressed::from_f16(src.getSecondOrder(d));
+  second = Tensor3_compressed::from_bf16(src.getSecondOrder(d));
 }
 
 template <uint32_t D>
