@@ -47,8 +47,8 @@ void launch_gather_payload(const float *payload, const uint32_t *sort_indices,
 
 template <uint32_t D>
 void gather_payload(const float *payload, const uint32_t *sort_indices,
-                    float *sorted_payload, size_t n_rows,
-                    uint32_t payload_dim_user, cudaStream_t stream) {
+                    float *sorted_payload, const size_t n_rows,
+                    const uint32_t payload_dim_user, cudaStream_t stream) {
   launch_gather_payload<D>(payload, sort_indices, sorted_payload, n_rows,
                            payload_dim_user, stream);
 }

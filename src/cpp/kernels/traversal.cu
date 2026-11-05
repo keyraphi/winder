@@ -1649,7 +1649,7 @@ __global__ void traverse_payload_single_leaf_kernel(
 template <IsGeometry Geometry, uint32_t D>
 void compute_payload_winding_numbers(
     const ComputePayloadWindingNumbersParams<Geometry, D> &params,
-    int device_id, cudaStream_t stream, bool use_kahan = false) {
+    int device_id, cudaStream_t stream, bool use_kahan) {
   if (params.query_count == 0) {
     return;
   }
@@ -2157,7 +2157,7 @@ __global__ void traverse_payload_query_grad_single_leaf_kernel(
 template <IsGeometry Geometry, uint32_t D>
 void query_gradient_traversal_payload(
     const ComputePayloadQueryGradientParams<Geometry, D> &params, int device_id,
-    cudaStream_t stream, bool use_kahan = true) {
+    cudaStream_t stream, bool use_kahan) {
   if (params.query_count == 0) {
     return;
   }

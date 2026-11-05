@@ -1,5 +1,7 @@
 #include "geometry.h"
 #include "gradient_backend.h"
+#include "kernels/payload.cuh"
+#include "payload_backend.h"
 #include "winder_brute_force.h"
 #include "winding_numbers_backend.h"
 #include <cstddef>
@@ -1061,6 +1063,244 @@ private:
   explicit WindingNumbersEngine(
       std::unique_ptr<WindingNumbersBackend<Triangle>> backend)
       : m_impl_tri(std::move(backend)) {}
+};
+
+#include "payload_backend.h"
+#include <format>
+#include <memory>
+#include <stdexcept>
+
+// =========================================================================
+// Type-erasure layer for PayloadWindingNumbersBackend.
+//
+// The backend is templated on both Geometry (PointNormal / Triangle) and D
+// (one of 9 buckets). The Python-facing PayloadField must handle both at
+// runtime, so we route every call through a small virtual interface.
+//
+// The virtual call overhead is irrelevant: compute() dispatches a ~1ms
+// kernel launch, and compute_query_gradients the same. The interface pays
+// for itself with zero measurable cost.
+// =========================================================================
+
+class IPayloadBackendBase {
+public:
+  virtual ~IPayloadBackendBase() = default;
+
+  [[nodiscard]] virtual auto dimension() const -> uint32_t = 0;
+
+  virtual auto compute(const float *queries, size_t query_count,
+                       float *out_payload, float beta, float epsilon,
+                       size_t stream, bool use_kahan = false) const -> void = 0;
+
+  virtual auto compute_query_gradients(const float *grad_output,
+                                       const float *queries, size_t query_count,
+                                       float *out_query_gradients, float beta,
+                                       float epsilon, size_t stream,
+                                       bool use_kahan = false) const
+      -> void = 0;
+
+  [[nodiscard]] virtual auto dump() const -> std::string = 0;
+};
+
+template <IsGeometry Geometry, uint32_t D_bucket>
+class PayloadBackendImpl final : public IPayloadBackendBase {
+public:
+  PayloadBackendImpl(
+      std::unique_ptr<PayloadWindingNumbersBackend<Geometry, D_bucket>> impl,
+      uint32_t d_user)
+      : m_impl(std::move(impl)), m_dim_user(d_user) {}
+
+  [[nodiscard]] auto dimension() const -> uint32_t override {
+    return m_dim_user;
+  }
+
+  auto compute(const float *queries, size_t query_count, float *out_payload,
+               float beta, float epsilon, size_t stream,
+               bool use_kahan = false) const -> void override {
+    m_impl->compute_payload(queries, query_count, out_payload, beta, epsilon,
+                            stream, use_kahan);
+  }
+
+  auto compute_query_gradients(const float *grad_output, const float *queries,
+                               size_t query_count, float *out_query_gradients,
+                               float beta, float epsilon, size_t stream,
+                               bool use_kahan = false) const -> void override {
+    m_impl->compute_payload_query_gradients(grad_output, queries, query_count,
+                                            out_query_gradients, beta, epsilon,
+                                            stream, use_kahan);
+  }
+
+  [[nodiscard]] auto dump() const -> std::string override {
+    return m_impl->dump();
+  }
+
+private:
+  std::unique_ptr<PayloadWindingNumbersBackend<Geometry, D_bucket>> m_impl;
+  uint32_t m_dim_user;
+};
+
+// Returns the smallest supported bucket >= d_user.
+// Throws if d_user is outside [1, 128].
+auto resolve_payload_bucket(uint64_t d_user) -> uint32_t {
+  if (d_user < 1 || d_user > 128) {
+    throw std::runtime_error(std::format(
+        "Payload dimensionality D={} is out of range. Must be in [1, 128].",
+        d_user));
+  }
+  return payload_d_bucket(static_cast<uint32_t>(d_user)); // existing helper
+}
+
+template <typename F>
+auto dispatch_payload_dim(uint32_t d, F &&f)
+    -> std::unique_ptr<IPayloadBackendBase> {
+  switch (d) {
+  case 1:
+    return f.template operator()<1>();
+  case 2:
+    return f.template operator()<2>();
+  case 3:
+    return f.template operator()<3>();
+  case 4:
+    return f.template operator()<4>();
+  case 8:
+    return f.template operator()<8>();
+  case 16:
+    return f.template operator()<16>();
+  case 32:
+    return f.template operator()<32>();
+  case 64:
+    return f.template operator()<64>();
+  case 128:
+    return f.template operator()<128>();
+  default:
+    throw std::runtime_error("dispatch_payload_dim: unreachable");
+  }
+}
+
+// =========================================================================
+// PayloadField — user-facing engine
+// =========================================================================
+
+class PayloadField {
+public:
+  // --- Triangle soup ---
+  PayloadField(const Triangle_t &triangles, const Payload_t &payload,
+               const uint64_t stream = 0)
+      : m_impl{make_triangle_backend(triangles, payload, stream)} {}
+
+  // --- Shared-vertex mesh ---
+  PayloadField(const Vec3_t &vertices, const TriangleIdx_t &triangle_indices,
+               const Payload_t &payload, const uint64_t stream = 0)
+      : m_impl{make_mesh_backend(vertices, triangle_indices, payload, stream)} {
+  }
+
+  // --- Point cloud ---
+  PayloadField(const Vec3_t &points, const Vec3_t &scaled_normals,
+               const Payload_t &payload, const uint64_t stream = 0)
+      : m_impl{make_point_backend(points, scaled_normals, payload, stream)} {}
+
+  // --- Forward ---
+  auto compute(const Vec3_t &queries, Payload_t &out_payload, float beta = -1.F,
+               float epsilon = 0.004F, const uint64_t stream = 0,
+               const bool use_kahan = false) const -> void {
+    if (out_payload.shape(0) != queries.shape(0)) {
+      throw std::runtime_error(
+          "Shape[0] of queries must equal shape[0] of out_payload.");
+    }
+    if (out_payload.shape(1) != m_impl->dimension()) {
+      throw std::runtime_error(
+          std::format("Shape[1] of out_payload ({}) must equal payload D ({}).",
+                      out_payload.shape(1), m_impl->dimension()));
+    }
+    m_impl->compute(queries.data(), queries.shape(0), out_payload.data(), beta,
+                    epsilon, stream, use_kahan);
+  }
+
+  // --- Query gradients ---
+  auto compute_query_gradients(const Payload_t &grad_output,
+                               const Vec3_t &queries,
+                               Vec3_t &out_query_gradients, float beta = -1.F,
+                               float epsilon = 0.004F,
+                               const uint64_t stream = 0, bool use_kahan = false) const -> void {
+    if (grad_output.shape(0) != queries.shape(0)) {
+      throw std::runtime_error(
+          "Shape[0] of grad_output must equal shape[0] of queries.");
+    }
+    if (grad_output.shape(1) != m_impl->dimension()) {
+      throw std::runtime_error(
+          std::format("Shape[1] of grad_output ({}) must equal payload D ({}).",
+                      grad_output.shape(1), m_impl->dimension()));
+    }
+    if (out_query_gradients.shape(0) != queries.shape(0)) {
+      throw std::runtime_error(
+          "Shape[0] of out_query_gradients must equal shape[0] of queries.");
+    }
+    if (out_query_gradients.shape(1) != 3) {
+      throw std::runtime_error("Shape[1] of out_query_gradients must be 3.");
+    }
+    m_impl->compute_query_gradients(
+        grad_output.data(), queries.data(), queries.shape(0),
+        out_query_gradients.data(), beta, epsilon, stream, use_kahan);
+  }
+
+  [[nodiscard]] auto dump() const -> std::string { return m_impl->dump(); }
+
+  [[nodiscard]] auto dimension() const -> uint32_t {
+    return m_impl->dimension();
+  }
+
+private:
+  static auto make_triangle_backend(const Triangle_t &triangles,
+                                    const Payload_t &payload, uint64_t stream)
+      -> std::unique_ptr<IPayloadBackendBase> {
+    const auto d_user = static_cast<uint32_t>(payload.shape(1));
+    const uint32_t d_bucket = resolve_payload_bucket(d_user);
+    return dispatch_payload_dim(
+        d_bucket, [&]<uint32_t D>() -> std::unique_ptr<IPayloadBackendBase> {
+          auto impl =
+              PayloadWindingNumbersBackend<Triangle, D>::CreateFromTriangles(
+                  triangles.data(), payload.data(), triangles.shape(0), d_user,
+                  triangles.device_id(), stream);
+          return std::make_unique<PayloadBackendImpl<Triangle, D>>(
+              std::move(impl), d_user);
+        });
+  }
+
+  static auto make_mesh_backend(const Vec3_t &vertices,
+                                const TriangleIdx_t &triangle_indices,
+                                const Payload_t &payload, uint64_t stream)
+      -> std::unique_ptr<IPayloadBackendBase> {
+    const auto d_user = static_cast<uint32_t>(payload.shape(1));
+    const uint32_t d_bucket = resolve_payload_bucket(d_user);
+    return dispatch_payload_dim(
+        d_bucket, [&]<uint32_t D>() -> std::unique_ptr<IPayloadBackendBase> {
+          auto impl = PayloadWindingNumbersBackend<Triangle, D>::CreateFromMesh(
+              vertices.data(), vertices.shape(0), triangle_indices.data(),
+              payload.data(), triangle_indices.shape(0), d_user,
+              vertices.device_id(), stream);
+          return std::make_unique<PayloadBackendImpl<Triangle, D>>(
+              std::move(impl), d_user);
+        });
+  }
+
+  static auto make_point_backend(const Vec3_t &points,
+                                 const Vec3_t &scaled_normals,
+                                 const Payload_t &payload, uint64_t stream)
+      -> std::unique_ptr<IPayloadBackendBase> {
+    const auto d_user = static_cast<uint32_t>(payload.shape(1));
+    const uint32_t d_bucket = resolve_payload_bucket(d_user);
+    return dispatch_payload_dim(
+        d_bucket, [&]<uint32_t D>() -> std::unique_ptr<IPayloadBackendBase> {
+          auto impl =
+              PayloadWindingNumbersBackend<PointNormal, D>::CreateFromPoints(
+                  points.data(), scaled_normals.data(), payload.data(),
+                  points.shape(0), d_user, points.device_id(), stream);
+          return std::make_unique<PayloadBackendImpl<PointNormal, D>>(
+              std::move(impl), d_user);
+        });
+  }
+
+  std::unique_ptr<IPayloadBackendBase> m_impl;
 };
 
 NB_MODULE(winder_module, m) {
@@ -2861,6 +3101,7 @@ NB_MODULE(winder_module, m) {
                 respect to the computed winding numbers back to the geometry.
 
                 Parameters
+
                 ----------
                 `vertices`  : Array
                     (K, 3) float32 CUDA array representing the shared vertices used in the triangles
@@ -3010,4 +3251,207 @@ NB_MODULE(winder_module, m) {
            R"doc(
             Returns a detailed .dot string representation of the internal BVH8 Tree.
           )doc");
+  // ===========================================================================
+  // PayloadField
+  // ===========================================================================
+  nb::class_<PayloadField>(m, "PayloadField")
+      // --- Triangle soup ---
+      .def(nb::init<const Triangle_t &, const Payload_t &, const uint64_t>(),
+           "triangles"_a, "payload"_a, "stream"_a = 0,
+           nb::sig(
+               "def __init__(self, triangles: "
+               "winder.types.Array[winder.types.Shape[winder.types.N, "
+               "typing.Literal[3], typing.Literal[3]], winder.types.float32, "
+               "winder.types.cuda], payload: "
+               "winder.types.Array[winder.types.Shape[winder.types.N, "
+               "winder.types.D], winder.types.float32, winder.types.cuda], "
+               "stream: int = 0) -> None"),
+           R"doc(
+              Initialize the payload field engine from an explicit triangle soup.
+
+              Parameters
+              ----------
+              `triangles` : Array
+                  (N, 3, 3) float32 CUDA array holding N triangles.
+                  Note: Order the vertices counter-clockwise when seen from the front.
+              `payload` : Array
+                  (N, D) float32 CUDA array. Row `i` is the D-vector blended by
+                  triangle `i`'s winding contribution. `D` must be one of
+                  {1, 2, 3, 4, 8, 16, 32, 64, 128}.
+              `stream` : int, optional
+                  Raw 64-bit CUDA stream handle. Default is 0.
+          )doc")
+
+      // --- Mesh ---
+      .def(nb::init<const Vec3_t &, const TriangleIdx_t &, const Payload_t &,
+                    const uint64_t>(),
+           "vertices"_a, "triangle_indices"_a, "payload"_a, "stream"_a = 0,
+           nb::sig(
+               "def __init__(self, vertices: "
+               "winder.types.Array[winder.types.Shape[winder.types.K, "
+               "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+               "triangle_indices: "
+               "winder.types.Array[winder.types.Shape[winder.types.N, "
+               "typing.Literal[3]], winder.types.uint32, winder.types.cuda], "
+               "payload: "
+               "winder.types.Array[winder.types.Shape[winder.types.N, "
+               "winder.types.D], winder.types.float32, winder.types.cuda], "
+               "stream: int = 0) -> None"),
+           R"doc(
+              Initialize the payload field engine from a shared-vertex mesh.
+
+              Parameters
+              ----------
+              `vertices` : Array
+                  (K, 3) float32 CUDA array holding K vertices.
+              `triangle_indices` : Array
+                  (N, 3) uint32 CUDA array, each row indexes 3 vertices of a triangle.
+                  Note: Order the vertices counter-clockwise when seen from the front.
+              `payload` : Array
+                  (N, D) float32 CUDA array, one D-vector per triangle (not
+                  per vertex). `D` must be one of {1, 2, 3, 4, 8, 16, 32, 64, 128}.
+              `stream` : int, optional
+                  Raw 64-bit CUDA stream handle. Default is 0.
+          )doc")
+
+      // --- Point cloud ---
+      .def(nb::init<const Vec3_t &, const Vec3_t &, const Payload_t &,
+                    const uint64_t>(),
+           "points"_a, "scaled_normals"_a, "payload"_a, "stream"_a = 0,
+           nb::sig(
+               "def __init__(self, points: "
+               "winder.types.Array[winder.types.Shape[winder.types.N, "
+               "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+               "scaled_normals: "
+               "winder.types.Array[winder.types.Shape[winder.types.N, "
+               "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+               "payload: "
+               "winder.types.Array[winder.types.Shape[winder.types.N, "
+               "winder.types.D], winder.types.float32, winder.types.cuda], "
+               "stream: int = 0) -> None"),
+           R"doc(
+              Initialize the payload field engine from an oriented point cloud.
+
+              Parameters
+              ----------
+              `points` : Array
+                  (N, 3) float32 CUDA array of point positions.
+              `scaled_normals` : Array
+                  (N, 3) float32 CUDA array of area-scaled normals.
+                  The scaled normal direction is the orientation,
+                  the scale is the associated Voronoi area.
+              `payload` : Array
+                  (N, D) float32 CUDA array, one D-vector per point.
+                  `D` must be one of {1, 2, 3, 4, 8, 16, 32, 64, 128}.
+              `stream` : int, optional
+                  Raw 64-bit CUDA stream handle. Default is 0.
+          )doc")
+
+      // --- Forward ---
+      .def("compute", &PayloadField::compute, "queries"_a, "out_payload"_a,
+           "beta"_a = -1.F, "epsilon"_a = 0.004F, "stream"_a = 0, "use_kahan"_a = false,
+           nb::sig(
+               "def compute(self, queries: "
+               "winder.types.Array[winder.types.Shape[winder.types.M, "
+               "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+               "out_payload: "
+               "winder.types.Array[winder.types.Shape[winder.types.M, "
+               "winder.types.D], winder.types.float32, winder.types.cuda], "
+               "beta: float = -1, epsilon: float = 0.004, "
+               "stream: int = 0, use_kahan: bool = false) -> None"),
+           (std::string(R"doc(
+              Computes the payload field at the given query locations.
+
+              `out_payload` is filled with
+
+                  w_V(q_j) = sum_i v_i * w(q_j | g_i)
+
+              where `w(q_j | g_i)` is the winding contribution of primitive
+              `i` at query `j`. For `D=1` and `v_i = 1` for all `i`, this
+              reduces exactly to the scalar winding number field.
+
+              Parameters
+              ----------
+              `queries` : Array
+                  (M, 3) float32 CUDA array of query points.
+              `out_payload` : Array
+                  (M, D) float32 CUDA array pre-allocated by the caller.
+              `beta` : float
+                  Barnes-Hut opening criterion. Use any negative number to
+                  get the default (2.3 for point clouds, 2.0 for triangles).
+              `epsilon` : float
+                  Dimensionless regularization scale. See the scalar engine's
+                  docstring for details. Default is 0.004.
+              `stream` : int, optional
+                  Raw 64-bit CUDA stream handle. Default is 0.
+          )doc") +
+       USE_KAHAN_DOC).c_str())
+
+      // --- Query gradients ---
+      .def("compute_query_gradients", &PayloadField::compute_query_gradients,
+           "grad_output"_a, "queries"_a, "out_query_gradients"_a,
+           "beta"_a = -1.F, "epsilon"_a = 0.004F, "stream"_a = 0, "use_kahan"_a = false,
+           nb::sig(
+               "def compute_query_gradients(self, grad_output: "
+               "winder.types.Array[winder.types.Shape[winder.types.M, "
+               "winder.types.D], winder.types.float32, winder.types.cuda], "
+               "queries: "
+               "winder.types.Array[winder.types.Shape[winder.types.M, "
+               "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+               "out_query_gradients: "
+               "winder.types.Array[winder.types.Shape[winder.types.M, "
+               "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+               "beta: float = -1, epsilon: float = 0.004, "
+               "stream: int = 0, use_kahan: bool = false) -> None"),
+           (std::string(R"doc(
+              Computes the gradient of the loss with respect to the query
+              positions.
+
+              Intended usage:
+
+                  engine = PayloadField(triangles, payload, stream)
+                  out = torch.empty(M, D, device="cuda")
+                  engine.compute(queries, out, beta=2.3, epsilon=0.004,
+                                 stream=stream)
+                  loss = some_loss(out)
+                  loss.backward()
+                  dL_dW = out.grad
+                  grad_q = torch.empty(M, 3, device="cuda")
+                  engine.compute_query_gradients(dL_dW, queries, grad_q,
+                                                 beta=2.3, epsilon=0.004,
+                                                 stream=stream)
+
+              The BVH8 built at construction is reused; no re-build is
+              triggered by this call.
+
+              Parameters
+              ----------
+              `grad_output` : Array
+                  (M, D) float32 CUDA array — gradient of the loss w.r.t. the
+                  payload field at each query. Row `j` is the D-vector adjoint
+                  for query `j`, aligned index-for-index with `queries`.
+              `queries` : Array
+                  (M, 3) float32 CUDA array of query points.
+              `out_query_gradients` : Array
+                  (M, 3) float32 CUDA array pre-allocated by the caller.
+              `beta`, `epsilon`, `stream` : as in `compute`.
+          )doc")+
+      USE_KAHAN_DOC).c_str())
+
+      // --- Debug ---
+      .def("dump", &PayloadField::dump, nb::sig("def dump(self) -> str"),
+           R"doc(
+              Returns a Graphviz .dot representation of the internal BVH8
+              tree, including AABBs and Taylor coefficient tables.
+
+              Coefficient tables are rendered for component `d=0`. For `D>1`
+              each node additionally shows the L2 norm of the zero-order
+              payload coefficients summed across all D components, so payload
+              presence / overflow / NaN issues can be spotted at a glance.
+          )doc")
+
+      // --- Introspection ---
+      .def_prop_ro(
+          "dimension", &PayloadField::dimension,
+          "The payload dimensionality D this engine was constructed with.");
 }

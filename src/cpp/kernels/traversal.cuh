@@ -116,10 +116,10 @@ struct ComputePayloadWindingNumbersParams {
   const PayloadTaylorCoefficientsF16<D> *leaf_coefficients;
   const AABB *leaf_aabbs;
   SoAView<Geometry> sorted_geometry;
-  uint32_t payload_dim_user;
   const float *sorted_payload;
   uint32_t query_count;
   uint32_t geometry_count;
+  uint32_t payload_dim_user;
   float *out_payload;
   uint32_t *global_device_counter;
   float beta;
@@ -139,9 +139,9 @@ struct ComputePayloadQueryGradientParams {
   const AABB *leaf_aabbs;
   SoAView<Geometry> sorted_geometry;
   const float *sorted_payload;
-  uint32_t payload_dim_user;
   uint32_t query_count;
   uint32_t geometry_count;
+  uint32_t payload_dim_user;
   const float *grad_output;     // (M, D) adjoint
   float *out_query_gradients;   // (M, 3)
   uint32_t *global_device_counter;
@@ -155,12 +155,12 @@ struct ComputePayloadQueryGradientParams {
 template <IsGeometry Geometry, uint32_t D>
 void compute_payload_winding_numbers(
     const ComputePayloadWindingNumbersParams<Geometry, D> &params,
-    int device_id, cudaStream_t stream);
+    int device_id, cudaStream_t stream, bool use_kahan = false);
 
 template <IsGeometry Geometry, uint32_t D>
 void query_gradient_traversal_payload(
     const ComputePayloadQueryGradientParams<Geometry, D> &params,
-    int device_id, cudaStream_t stream);
+    int device_id, cudaStream_t stream, bool use_kahan = false);
 
 
 

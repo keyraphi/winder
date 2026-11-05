@@ -8,7 +8,8 @@
 //     sorted_payload[i, :] = payload[sort_indices[i], :]
 template <uint32_t D>
 void gather_payload(const float *payload, const uint32_t *sort_indices,
-                    float *sorted_payload, size_t n_rows, cudaStream_t stream);
+                    float *sorted_payload, size_t n_rows,
+                    uint32_t payload_dim_user, cudaStream_t stream);
 
 // Runtime-D dispatcher. Picks the compile-time `D` that matches the bucket
 // used by PayloadWindingNumbersBackend. Throws for `d > 128`.

@@ -56,14 +56,14 @@ public:
   // --- Inference ---------------------------------------------------------
   auto compute_payload(const float *queries, size_t query_count,
                        float *out_payload, float beta = -1.F,
-                       float epsilon = 0.004F, size_t stream = 0) const -> void;
+                       float epsilon = 0.004F, size_t stream = 0, bool use_kahan = false) const -> void;
 
   auto compute_payload_query_gradients(const float *grad_output,
                                        const float *queries, size_t query_count,
                                        float *out_query_gradients,
                                        float beta = -1.F,
                                        float epsilon = 0.004F,
-                                       size_t stream = 0) const -> void;
+                                       size_t stream = 0, bool use_kahan = false) const -> void;
 
   [[nodiscard]] auto point_count() const -> size_t { return m_count; }
   [[nodiscard]] auto device_id() const -> int { return m_device; }

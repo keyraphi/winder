@@ -48,8 +48,8 @@
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/reduce.h>
 #include <thrust/sequence.h>
-#include <vector>
 #include <thrust/sort.h>
+#include <vector>
 
 using thrust::fill_n;
 
@@ -162,8 +162,7 @@ void PayloadWindingNumbersBackend<Geometry, D>::initialize_triangle_data(
   gather_triangles_soa(triangles, m_to_internal, m_sorted_geometry, m_count,
                        m_norm, m_build_stream);
   gather_payload<D>(payload, m_to_internal, m_sorted_payload, m_count,
-      m_payload_dim_user,
-                    m_build_stream);
+                    m_payload_dim_user, m_build_stream);
 
   // ---------- Leaf coefficients ----------
   uint32_t leaf_count = (m_count + LEAF_SIZE - 1) / LEAF_SIZE;
@@ -319,7 +318,7 @@ void PayloadWindingNumbersBackend<Geometry, D>::initialize_point_data(
   gather_point_normals_soa(points, normals, m_to_internal, m_sorted_geometry,
                            m_count, m_norm, m_build_stream);
   gather_payload<D>(payload, m_to_internal, m_sorted_payload, m_count,
-                    m_build_stream);
+                    m_payload_dim_user, m_build_stream);
 
   // ---------- Leaf coefficients ----------
   uint32_t leaf_count = (m_count + LEAF_SIZE - 1) / LEAF_SIZE;
@@ -449,7 +448,7 @@ void PayloadWindingNumbersBackend<Geometry, D>::initialize_point_data(
 template <IsGeometry Geometry, uint32_t D>
 auto PayloadWindingNumbersBackend<Geometry, D>::compute_payload(
     const float *queries, size_t query_count, float *out_payload, float beta,
-    float epsilon, size_t stream) const -> void {
+    float epsilon, size_t stream, const bool use_kahan) const -> void {
   if (m_count == 0) {
     return;
   }
@@ -500,6 +499,7 @@ auto PayloadWindingNumbersBackend<Geometry, D>::compute_payload(
       .sorted_payload = m_sorted_payload,
       .query_count = static_cast<uint32_t>(query_count),
       .geometry_count = static_cast<uint32_t>(m_count),
+      .payload_dim_user = m_payload_dim_user,
       .out_payload = out_payload,
       .global_device_counter = global_counter,
       .beta = beta,
@@ -508,7 +508,7 @@ auto PayloadWindingNumbersBackend<Geometry, D>::compute_payload(
       .norm = m_norm};
 
   compute_payload_winding_numbers<Geometry, D>(params, m_device,
-                                               compute_stream);
+                                               compute_stream, use_kahan);
 
   CUDA_CHECK(cudaFreeAsync(queries_to_internal, compute_stream));
   CUDA_CHECK(cudaFreeAsync(global_counter, compute_stream));
@@ -520,7 +520,7 @@ auto PayloadWindingNumbersBackend<Geometry, D>::compute_payload(
 template <IsGeometry Geometry, uint32_t D>
 auto PayloadWindingNumbersBackend<Geometry, D>::compute_payload_query_gradients(
     const float *grad_output, const float *queries, size_t query_count,
-    float *out_query_gradients, float beta, float epsilon, size_t stream) const
+    float *out_query_gradients, float beta, float epsilon, size_t stream, const bool use_kahan) const
     -> void {
   if (m_count == 0) {
     return;
@@ -572,6 +572,7 @@ auto PayloadWindingNumbersBackend<Geometry, D>::compute_payload_query_gradients(
       .sorted_payload = m_sorted_payload,
       .query_count = (uint32_t)query_count,
       .geometry_count = (uint32_t)m_count,
+      .payload_dim_user = m_payload_dim_user,
       .grad_output = grad_output,
       .out_query_gradients = out_query_gradients,
       .global_device_counter = global_counter,
@@ -581,7 +582,7 @@ auto PayloadWindingNumbersBackend<Geometry, D>::compute_payload_query_gradients(
       .norm = m_norm};
 
   query_gradient_traversal_payload<Geometry, D>(params, m_device,
-                                                compute_stream);
+                                                compute_stream, use_kahan);
 
   CUDA_CHECK(cudaFreeAsync(queries_to_internal, compute_stream));
   CUDA_CHECK(cudaFreeAsync(global_counter, compute_stream));
@@ -592,8 +593,8 @@ auto PayloadWindingNumbersBackend<Geometry, D>::compute_payload_query_gradients(
 // ===========================================================================
 template <IsGeometry Geometry, uint32_t D>
 auto PayloadWindingNumbersBackend<Geometry, D>::CreateFromTriangles(
-    const float *triangles, const float *payload, size_t triangle_count, uint32_t payload_dim_user,
-    int device_id, uint64_t stream)
+    const float *triangles, const float *payload, size_t triangle_count,
+    uint32_t payload_dim_user, int device_id, uint64_t stream)
     -> std::unique_ptr<PayloadWindingNumbersBackend<Triangle, D>>
   requires std::is_same_v<Geometry, Triangle>
 {
@@ -609,7 +610,8 @@ template <IsGeometry Geometry, uint32_t D>
 auto PayloadWindingNumbersBackend<Geometry, D>::CreateFromMesh(
     const float *vertices, size_t vertex_count,
     const uint32_t *triangle_indices, const float *payload,
-    size_t triangle_count, uint32_t payload_dim_user, int device_id, uint64_t stream)
+    size_t triangle_count, uint32_t payload_dim_user, int device_id,
+    uint64_t stream)
     -> std::unique_ptr<PayloadWindingNumbersBackend<Triangle, D>>
   requires std::is_same_v<Geometry, Triangle>
 {
@@ -652,7 +654,8 @@ auto PayloadWindingNumbersBackend<Geometry, D>::CreateFromMesh(
 template <IsGeometry Geometry, uint32_t D>
 auto PayloadWindingNumbersBackend<Geometry, D>::CreateFromPoints(
     const float *points, const float *scaled_normals, const float *payload,
-    size_t point_count, uint32_t payload_dim_user; int device_id, uint64_t stream)
+    size_t point_count, uint32_t payload_dim_user, int device_id,
+    uint64_t stream)
     -> std::unique_ptr<PayloadWindingNumbersBackend<PointNormal, D>>
   requires std::is_same_v<Geometry, PointNormal>
 {
