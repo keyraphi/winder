@@ -1794,7 +1794,7 @@ __global__ void __launch_bounds__(128) traverse_payload_query_gradient_kernel(
   __shared__ BVH8Node current_node_cache[4];
   __shared__ PayloadTaylorCoefficientsF16<D> current_coeff_cache[4];
   __shared__ LeafPointers shared_leaf_ptrs[4];
-  __shared__ Vec3 grad_leaf_values[4][32];
+  __shared__ float4 grad_leaf_values[4][32];
 
   uint32_t warp_tile_base;
 
@@ -2004,7 +2004,7 @@ __global__ void __launch_bounds__(128) traverse_payload_query_gradient_kernel(
               my_grad =
                   my_geometry.queryGradContribution(shared_query, 1.F, ctx);
             }
-            grad_leaf_values[warp_id][lane_id] = my_grad;
+            grad_leaf_values[warp_id][lane_id] = make_float4(my_grad.x, my_grad.y, my_grad.z, 0.F);
             __syncwarp();
 
             if (my_query_slot == leader_slot) {
@@ -2019,7 +2019,9 @@ __global__ void __launch_bounds__(128) traverse_payload_query_gradient_kernel(
                 float partial_dot = payload_partial_dot<COMPONENTS_PER_THREAD>(
                     g_block, v_j + my_d0, my_d_count);
 
-                const Vec3 w_grad = grad_leaf_values[warp_id][j];
+                const float4 w_f4 = grad_leaf_values[warp_id][j];
+                const Vec3 w_grad{.x=w_f4.x, .y=w_f4.y, .z=w_f4.z};
+
                 const Vec3 delta = w_grad * partial_dot;
                 if constexpr (UseKahan) {
                   kahan_add(acc_grad, delta, acc_grad_comp);
