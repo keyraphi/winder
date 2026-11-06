@@ -4,6 +4,7 @@ try:
     from .winder_module import (
         WindingNumberEngine,
         GradientEngine,
+        PayloadField,
         brute_force_winding_numbers_mesh,
         brute_force_winding_numbers_point_normal,
         brute_force_winding_numbers_triangle_soup,
@@ -40,6 +41,7 @@ except ImportError as e:
 __all__ = [
     "WindingNumberEngine",
     "GradientEngine",
+    "PayloadField",
     "brute_force_winding_numbers_mesh",
     "brute_force_winding_numbers_point_normal",
     "brute_force_winding_numbers_triangle_soup",

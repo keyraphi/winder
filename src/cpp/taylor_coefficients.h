@@ -41,7 +41,7 @@ template <uint32_t D> struct alignas(64) PayloadTaylorCoefficientsF16 {
   static constexpr uint32_t kSlots = 30;
   uint16_t data[kSlots][D];
 
-  __device__ __forceinline__ Vec3_f16 getZeroOrder(uint32_t d) const {
+  __device__ __forceinline__ auto getZeroOrder(uint32_t d) const -> Vec3_f16 {
     return Vec3_f16{
         .x = __ushort_as_half(data[0][d]),
         .y = __ushort_as_half(data[1][d]),
@@ -49,7 +49,7 @@ template <uint32_t D> struct alignas(64) PayloadTaylorCoefficientsF16 {
     };
   }
 
-  __device__ __forceinline__ Mat3x3_f16 getFirstOrder(uint32_t d) const {
+  __device__ __forceinline__ auto getFirstOrder(uint32_t d) const -> Mat3x3_f16 {
     Mat3x3_f16 result;
 #pragma unroll
     for (int i = 0; i < 9; ++i) {
@@ -58,8 +58,8 @@ template <uint32_t D> struct alignas(64) PayloadTaylorCoefficientsF16 {
     return result;
   }
 
-  __device__ __forceinline__ Tensor3_bf16_compressed
-  getSecondOrder(uint32_t d) const {
+  __device__ __forceinline__ auto
+  getSecondOrder(uint32_t d) const -> Tensor3_bf16_compressed {
     Tensor3_bf16_compressed result;
 #pragma unroll
     for (int i = 0; i < 18; ++i) {

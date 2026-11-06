@@ -62,6 +62,30 @@ __device__ __forceinline__ void payload_accum_fma(float &acc, float &comp,
   }
 }
 
+template <uint32_t N>
+__device__ __forceinline__ float
+payload_partial_dot(const float (&g_block)[N], const float *__restrict__ v,
+                    uint32_t d_count) {
+  float dot = 0.F;
+  if constexpr (N == 4) {
+    if (d_count == 4) {
+      const float4 p = __ldg(reinterpret_cast<const float4 *>(v));
+      dot = __fmaf_rn(g_block[0], p.x, 0.F);
+      dot = __fmaf_rn(g_block[1], p.y, dot);
+      dot = __fmaf_rn(g_block[2], p.z, dot);
+      dot = __fmaf_rn(g_block[3], p.w, dot);
+      return dot;
+    }
+  }
+#pragma unroll
+  for (uint32_t c = 0; c < N; ++c) {
+    if (c >= d_count)
+      break;
+    dot = __fmaf_rn(g_block[c], v[c], dot);
+  }
+  return dot;
+}
+
 template <typename T>
 __device__ __forceinline__ void
 load_shared_cooperative(T *shared_dst, const T *global_src, uint32_t lane_id) {
@@ -79,6 +103,14 @@ load_shared_cooperative(T *shared_dst, const T *global_src, uint32_t lane_id) {
                                      // BackwardTaylorCoefficientsF16 (32 bytes)
     if (lane_id < 8) {
       dst_u32[lane_id] = src_u32[lane_id];
+    }
+  } else if constexpr (words % 4 == 0) {
+    // 16-byte vectorised copy – requires 16-byte alignment
+    constexpr uint32_t quads = words / 4;
+    auto *dst_u4 = reinterpret_cast<uint4 *>(shared_dst);
+    const auto *src_u4 = reinterpret_cast<const uint4 *>(global_src);
+    for (uint32_t i = lane_id; i < quads; i += 32) {
+      dst_u4[i] = src_u4[i];
     }
   } else { // Generic fallback
     for (uint32_t i = lane_id; i < words; i += 32) {
@@ -1256,7 +1288,7 @@ template void query_gradient_traversal<Triangle>(
     const cudaStream_t &stream);
 
 template <uint32_t D>
-constexpr uint32_t components_per_thread = (D < 8U) ? D : 8U;
+constexpr uint32_t components_per_thread = (D < 4U) ? D : 4U;
 
 template <uint32_t D>
 constexpr uint32_t threads_per_query =
@@ -1390,8 +1422,9 @@ __global__ void __launch_bounds__(128) traverse_payload_winding_numbers_kernel(
 
 #pragma unroll
         for (uint32_t c = 0; c < COMPONENTS_PER_THREAD; ++c) {
-          if (c >= my_d_count)
+          if (c >= my_d_count) {
             break;
+          }
           const uint32_t d = my_d0 + c;
           const auto &coeffs = current_coeff_cache[warp_id];
           float v =
@@ -1522,12 +1555,13 @@ __global__ void __launch_bounds__(128) traverse_payload_winding_numbers_kernel(
                 const float *v_j =
                     my_v_base +
                     (static_cast<size_t>(leaf_idx * LEAF_SIZE + j) * D);
-#pragma unroll
+
                 for (uint32_t c = 0; c < COMPONENTS_PER_THREAD; ++c) {
-                  if (c >= my_d_count) {
-                    break;
+
+                  if (c < my_d_count) {
+                    payload_accum_fma<UseKahan>(acc[c], acc_comp[c], w_j,
+                                                v_j[c]);
                   }
-                  payload_accum_fma<UseKahan>(acc[c], acc_comp[c], w_j, v_j[c]);
                 }
               }
             }
@@ -1742,7 +1776,7 @@ __global__ void __launch_bounds__(128) traverse_payload_query_gradient_kernel(
     uint32_t *__restrict__ global_device_counter, const float beta_2,
     const typename Geometry::Context ctx, const SceneNormalization norm) {
 
-  constexpr uint32_t COMPONENT_PER_THREAD = components_per_thread<D>;
+  constexpr uint32_t COMPONENTS_PER_THREAD = components_per_thread<D>;
   constexpr uint32_t THREADS_PER_QUERY = threads_per_query<D>;
   constexpr uint32_t QUERIES_PER_WARP = queries_per_warp<D>;
 
@@ -1750,11 +1784,11 @@ __global__ void __launch_bounds__(128) traverse_payload_query_gradient_kernel(
   const uint32_t lane_id = threadIdx.x % 32;
   const uint32_t my_query_slot = lane_id / THREADS_PER_QUERY;
   const uint32_t my_dblock = lane_id % THREADS_PER_QUERY;
-  const uint32_t my_d0 = my_dblock * COMPONENT_PER_THREAD;
+  const uint32_t my_d0 = my_dblock * COMPONENTS_PER_THREAD;
   const uint32_t my_d_count =
       (my_d0 >= payload_dim_user)
           ? 0U
-          : min(COMPONENT_PER_THREAD, payload_dim_user - my_d0);
+          : min(COMPONENTS_PER_THREAD, payload_dim_user - my_d0);
 
   __shared__ uint32_t shared_stack[4][64];
   __shared__ BVH8Node current_node_cache[4];
@@ -1776,9 +1810,9 @@ __global__ void __launch_bounds__(128) traverse_payload_query_gradient_kernel(
     const uint32_t my_query_idx = warp_tile_base + my_query_slot;
     Vec3 my_query{.x = 0.F, .y = 0.F, .z = 0.F};
     uint32_t original_query_idx = 0xFFFFFFFF;
-    float g_block[COMPONENT_PER_THREAD];
+    float g_block[COMPONENTS_PER_THREAD];
 #pragma unroll
-    for (uint32_t c = 0; c < COMPONENT_PER_THREAD; ++c)
+    for (uint32_t c = 0; c < COMPONENTS_PER_THREAD; ++c)
       g_block[c] = 0.F;
 
     if (my_query_idx >= query_count) {
@@ -1792,7 +1826,7 @@ __global__ void __launch_bounds__(128) traverse_payload_query_gradient_kernel(
           grad_output +
           static_cast<size_t>(original_query_idx) * payload_dim_user + my_d0;
 #pragma unroll
-      for (uint32_t c = 0; c < COMPONENT_PER_THREAD; ++c) {
+      for (uint32_t c = 0; c < COMPONENTS_PER_THREAD; ++c) {
         if (c < my_d_count) {
           g_block[c] = g_full[c];
         }
@@ -1848,7 +1882,7 @@ __global__ void __launch_bounds__(128) traverse_payload_query_gradient_kernel(
         Tensor3_compressed tilde_2 = Tensor3_compressed::zero();
 
 #pragma unroll
-        for (uint32_t c = 0; c < COMPONENT_PER_THREAD; ++c) {
+        for (uint32_t c = 0; c < COMPONENTS_PER_THREAD; ++c) {
           if (c >= my_d_count)
             break;
           const float g = g_block[c];
@@ -1916,9 +1950,10 @@ __global__ void __launch_bounds__(128) traverse_payload_query_gradient_kernel(
             Mat3x3 tilde_1 = Mat3x3::zero();
             Tensor3_compressed tilde_2 = Tensor3_compressed::zero();
 #pragma unroll
-            for (uint32_t c = 0; c < COMPONENT_PER_THREAD; ++c) {
-              if (c >= my_d_count)
+            for (uint32_t c = 0; c < COMPONENTS_PER_THREAD; ++c) {
+              if (c >= my_d_count) {
                 break;
+              }
               const float g = g_block[c];
               const uint32_t d = my_d0 + c;
               tilde_0 += g * Vec3::from_f16(coeffs.getZeroOrder(d));
@@ -1975,23 +2010,22 @@ __global__ void __launch_bounds__(128) traverse_payload_query_gradient_kernel(
             if (my_query_slot == leader_slot) {
               for (uint32_t j = 0; j < LEAF_SIZE; ++j) {
                 const uint32_t geom_j = leaf_idx * LEAF_SIZE + j;
-                if (geom_j >= geometry_count)
+                if (geom_j >= geometry_count) {
                   break;
+                }
                 const float *v_j =
                     sorted_payload + static_cast<size_t>(geom_j * D);
-                float partial_dot = 0.F;
-#pragma unroll
-                for (uint32_t c = 0; c < COMPONENT_PER_THREAD; ++c) {
-                  if (c >= my_d_count)
-                    break;
-                  partial_dot += g_block[c] * v_j[my_d0 + c];
-                }
+
+                float partial_dot = payload_partial_dot<COMPONENTS_PER_THREAD>(
+                    g_block, v_j + my_d0, my_d_count);
+
                 const Vec3 w_grad = grad_leaf_values[warp_id][j];
                 const Vec3 delta = w_grad * partial_dot;
-                if constexpr (UseKahan)
+                if constexpr (UseKahan) {
                   kahan_add(acc_grad, delta, acc_grad_comp);
-                else
+                } else {
                   acc_grad += delta;
+                }
               }
             }
             __syncwarp();
@@ -2116,16 +2150,14 @@ __global__ void traverse_payload_query_grad_single_leaf_kernel(
       if (my_query_slot == leader_slot) {
         for (uint32_t j = 0; j < LEAF_SIZE; ++j) {
           const uint32_t geom_j = p_base + j;
-          if (geom_j >= geometry_count)
+          if (geom_j >= geometry_count) {
             break;
-          const float *v_j = sorted_payload + geom_j * D; // bucket stride
-          float partial_dot = 0.F;
-#pragma unroll
-          for (uint32_t c = 0; c < COMPONENTS_PER_THREAD; ++c) {
-            if (c >= my_d_count)
-              break;
-            partial_dot += g_block[c] * v_j[my_d0 + c];
           }
+          const float *v_j = sorted_payload + geom_j * D; // bucket stride
+
+          float partial_dot = payload_partial_dot<COMPONENTS_PER_THREAD>(
+              g_block, v_j + my_d0, my_d_count);
+
           const Vec3 w_grad = grad_values[warp_id][j];
           const Vec3 delta = w_grad * partial_dot;
           if constexpr (UseKahan)
@@ -2174,16 +2206,16 @@ void query_gradient_traversal_payload(
       traverse_payload_query_grad_single_leaf_kernel<Geometry, D, true>
           <<<blocks, threads, 0, stream>>>(
               params.queries, params.sort_indirections, params.sorted_geometry,
-              params.sorted_payload, params.payload_dim_user, params.grad_output, params.query_count,
-              params.geometry_count, params.out_query_gradients, ctx,
-              params.norm);
+              params.sorted_payload, params.payload_dim_user,
+              params.grad_output, params.query_count, params.geometry_count,
+              params.out_query_gradients, ctx, params.norm);
     } else {
       traverse_payload_query_grad_single_leaf_kernel<Geometry, D, false>
           <<<blocks, threads, 0, stream>>>(
               params.queries, params.sort_indirections, params.sorted_geometry,
-              params.sorted_payload, params.payload_dim_user, params.grad_output, params.query_count,
-              params.geometry_count, params.out_query_gradients, ctx,
-              params.norm);
+              params.sorted_payload, params.payload_dim_user,
+              params.grad_output, params.query_count, params.geometry_count,
+              params.out_query_gradients, ctx, params.norm);
     }
     CUDA_CHECK(cudaGetLastError());
     return;
@@ -2212,9 +2244,10 @@ void query_gradient_traversal_payload(
             params.queries, params.sort_indirections, params.bvh8_nodes,
             params.bvh8_leaf_pointers, params.node_coefficients,
             params.leaf_coefficients, params.leaf_aabbs, params.sorted_geometry,
-            params.sorted_payload, params.payload_dim_user, params.grad_output, params.query_count,
-            params.geometry_count, params.out_query_gradients,
-            params.global_device_counter, beta_2, ctx, params.norm);
+            params.sorted_payload, params.payload_dim_user, params.grad_output,
+            params.query_count, params.geometry_count,
+            params.out_query_gradients, params.global_device_counter, beta_2,
+            ctx, params.norm);
   } else {
     cudaOccupancyMaxActiveBlocksPerMultiprocessor(
         &blocks_per_sm,
@@ -2225,9 +2258,10 @@ void query_gradient_traversal_payload(
             params.queries, params.sort_indirections, params.bvh8_nodes,
             params.bvh8_leaf_pointers, params.node_coefficients,
             params.leaf_coefficients, params.leaf_aabbs, params.sorted_geometry,
-            params.sorted_payload, params.payload_dim_user, params.grad_output, params.query_count,
-            params.geometry_count, params.out_query_gradients,
-            params.global_device_counter, beta_2, ctx, params.norm);
+            params.sorted_payload, params.payload_dim_user, params.grad_output,
+            params.query_count, params.geometry_count,
+            params.out_query_gradients, params.global_device_counter, beta_2,
+            ctx, params.norm);
   }
   CUDA_CHECK(cudaGetLastError());
 }
