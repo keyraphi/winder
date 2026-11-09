@@ -106,10 +106,10 @@ struct Tensor3_compressed {
     return *this;
   }
 
-  __host__ __device__ __forceinline__ auto operator*(const float f) const {
+  __host__ __device__ __forceinline__ auto operator*(const float f) const -> Tensor3_compressed{
     Tensor3_compressed result;
     for (int i = 0; i < 18; i++) {
-      result.data[i] += data[i] * f;
+      result.data[i] = data[i] * f;
     }
     return result;
   }

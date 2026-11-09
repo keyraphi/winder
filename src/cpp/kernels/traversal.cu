@@ -1602,8 +1602,7 @@ __global__ void traverse_payload_single_leaf_kernel(
     const Vec3 *__restrict__ queries,
     const uint32_t *__restrict__ sort_indirections,
     const SoAView<Geometry> sorted_geometry,
-    const float *__restrict__ sorted_payload,
-    const uint32_t payload_dim_user, // NEW
+    const float *__restrict__ sorted_payload, const uint32_t payload_dim_user,
     const uint32_t query_count, const uint32_t geometry_count,
     float *__restrict__ out_payload, const typename Geometry::Context ctx,
     const SceneNormalization norm) {
@@ -1622,7 +1621,7 @@ __global__ void traverse_payload_single_leaf_kernel(
           : min(COMPONENTS_PER_THREAD, payload_dim_user - my_d0);
 
   __shared__ Geometry shared_geometry[32];
-  __shared__ float w_leaf_values[4][32];
+  __shared__ float w_leaf_values[8][32];
 
   if (threadIdx.x < geometry_count) {
     shared_geometry[threadIdx.x] =
@@ -1630,22 +1629,20 @@ __global__ void traverse_payload_single_leaf_kernel(
   }
   __syncthreads();
 
-  uint32_t warp_tile_base = blockIdx.x * (blockDim.x / 32) * QUERIES_PER_WARP +
-                            warp_id * QUERIES_PER_WARP;
+  const uint32_t warps_per_block = blockDim.x / 32;
+  const uint32_t warp_tile_base =
+      blockIdx.x * warps_per_block * QUERIES_PER_WARP +
+      warp_id * QUERIES_PER_WARP;
   const uint32_t my_query_idx = warp_tile_base + my_query_slot;
-  if (my_query_idx >= query_count) {
-    return;
-  }
 
-  const uint32_t original_idx = sort_indirections[my_query_idx];
-  const Vec3 my_query = norm.to_normalized(queries[original_idx]);
-
-  float my_w = 0.F;
-  if (lane_id < geometry_count) {
-    my_w = shared_geometry[lane_id].contributionToQuery(my_query, ctx);
+  // Keep thread alive for __shfl_sync even when it has no query.
+  const bool my_active = my_query_idx < query_count;
+  Vec3 my_query{.x = 0.F, .y = 0.F, .z = 0.F};
+  uint32_t original_idx = 0xFFFFFFFF;
+  if (my_active) {
+    original_idx = sort_indirections[my_query_idx];
+    my_query = norm.to_normalized(queries[original_idx]);
   }
-  w_leaf_values[warp_id][lane_id] = my_w;
-  __syncwarp();
 
   float acc[COMPONENTS_PER_THREAD];
   float acc_comp[COMPONENTS_PER_THREAD];
@@ -1655,26 +1652,50 @@ __global__ void traverse_payload_single_leaf_kernel(
     acc_comp[c] = 0.F;
   }
 
-  const float *my_v_base = sorted_payload + my_d0;
-  for (uint32_t j = 0; j < geometry_count; ++j) {
-    const float w_j = w_leaf_values[warp_id][j];
-    const float *v_j = my_v_base + static_cast<size_t>(j * D);
+  for (uint32_t leader_slot = 0; leader_slot < QUERIES_PER_WARP;
+       ++leader_slot) {
+    const uint32_t leader_lane = leader_slot * THREADS_PER_QUERY;
+    if ((warp_tile_base + leader_slot) >= query_count) {
+      continue;
+    }
+
+    const Vec3 shared_query{
+        .x = __shfl_sync(0xFFFFFFFF, my_query.x, leader_lane),
+        .y = __shfl_sync(0xFFFFFFFF, my_query.y, leader_lane),
+        .z = __shfl_sync(0xFFFFFFFF, my_query.z, leader_lane),
+    };
+
+    float my_w = 0.F;
+    if (lane_id < geometry_count) {
+      my_w = shared_geometry[lane_id].contributionToQuery(shared_query, ctx);
+    }
+    w_leaf_values[warp_id][lane_id] = my_w;
+    __syncwarp();
+
+    if (my_query_slot == leader_slot) {
+      for (uint32_t j = 0; j < geometry_count; ++j) {
+        const float w_j = w_leaf_values[warp_id][j];
+        const float *v_j = sorted_payload + my_d0 + static_cast<size_t>(j) * D;
+#pragma unroll
+        for (uint32_t c = 0; c < COMPONENTS_PER_THREAD; ++c) {
+          if (c >= my_d_count) {
+            break;
+          }
+          payload_accum_fma<UseKahan>(acc[c], acc_comp[c], w_j, v_j[c]);
+        }
+      }
+    }
+    __syncwarp();
+  }
+
+  if (my_active && my_d_count > 0) {
+    float *out = out_payload +
+                 static_cast<size_t>(original_idx) * payload_dim_user + my_d0;
 #pragma unroll
     for (uint32_t c = 0; c < COMPONENTS_PER_THREAD; ++c) {
       if (c >= my_d_count) {
         break;
       }
-      payload_accum_fma<UseKahan>(acc[c], acc_comp[c], w_j, v_j[c]);
-    }
-  }
-
-  if (my_d_count > 0) {
-    float *out = out_payload +
-                 static_cast<size_t>(original_idx) * payload_dim_user + my_d0;
-#pragma unroll
-    for (uint32_t c = 0; c < COMPONENTS_PER_THREAD; ++c) {
-      if (c >= my_d_count)
-        break;
       out[c] = acc[c];
     }
   }
@@ -1965,10 +1986,12 @@ __global__ void __launch_bounds__(128) traverse_payload_query_gradient_kernel(
                 my_query, child_aabb.center_of_mass,
                 Vec3_f16::from_float(tilde_0), Mat3x3_f16::from_float(tilde_1),
                 Tensor3_bf16_compressed::from_float(tilde_2));
-            if constexpr (UseKahan)
+
+            if constexpr (UseKahan) {
               kahan_add(acc_grad, approx_grad, acc_grad_comp);
-            else
+            } else {
               acc_grad += approx_grad;
+            }
             detail_needed = false;
           }
 
@@ -2004,7 +2027,8 @@ __global__ void __launch_bounds__(128) traverse_payload_query_gradient_kernel(
               my_grad =
                   my_geometry.queryGradContribution(shared_query, 1.F, ctx);
             }
-            grad_leaf_values[warp_id][lane_id] = make_float4(my_grad.x, my_grad.y, my_grad.z, 0.F);
+            grad_leaf_values[warp_id][lane_id] =
+                make_float4(my_grad.x, my_grad.y, my_grad.z, 0.F);
             __syncwarp();
 
             if (my_query_slot == leader_slot) {
@@ -2020,7 +2044,7 @@ __global__ void __launch_bounds__(128) traverse_payload_query_gradient_kernel(
                     g_block, v_j + my_d0, my_d_count);
 
                 const float4 w_f4 = grad_leaf_values[warp_id][j];
-                const Vec3 w_grad{.x=w_f4.x, .y=w_f4.y, .z=w_f4.z};
+                const Vec3 w_grad{.x = w_f4.x, .y = w_f4.y, .z = w_f4.z};
 
                 const Vec3 delta = w_grad * partial_dot;
                 if constexpr (UseKahan) {
@@ -2088,7 +2112,7 @@ __global__ void traverse_payload_query_grad_single_leaf_kernel(
           : min(COMPONENTS_PER_THREAD, payload_dim_user - my_d0);
 
   __shared__ Geometry shared_geometry[32];
-  __shared__ Vec3 grad_values[4][32];
+  __shared__ Vec3 grad_values[8][32];
 
   if (threadIdx.x < geometry_count) {
     shared_geometry[threadIdx.x] =

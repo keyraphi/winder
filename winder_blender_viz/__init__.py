@@ -1,17 +1,16 @@
 bl_info = {
     "name": "Winding Number Field & Optimization Visualizer",
     "author": "Raphael Braun",
-    "version": (1, 0, 0),
+    "version": (1, 1, 0),
     "blender": (5, 2, 0),
     "location": "View3D > Sidebar > Winder Tab",
-    "description": "Interactive 3D Winding Fields, Gradient Descent Optimizations, and Loss Landscapes using CUDA DLPack.",
+    "description": "Interactive 3D Winding Fields, Payload Fields, Gradient Descent Optimizations, and Loss Landscapes using CUDA DLPack.",
     "category": "3D View",
 }
 
 from pathlib import Path
 import sys
 
-# Inject addon root directory into sys.path to resolve 'import winder'
 addon_dir = str(Path(__file__).parent.resolve())
 if addon_dir not in sys.path:
     sys.path.insert(0, addon_dir)
@@ -26,16 +25,24 @@ from .operators import (
     WM_OT_create_optimization,
     WM_OT_create_winding_field,
     WM_OT_create_query_gradients,
+    WM_OT_create_payload_field,
+    WM_OT_create_payload_query_gradients,
+    WM_OT_create_payload_query_streamlines,
+    WM_OT_toggle_payload_colors,
     WM_OT_toggle_freeze_grid,
     WM_OT_dump_forward_bvh,
     WM_OT_dump_backward_bvh,
     WM_OT_create_query_streamlines,
+    WM_OT_regenerate_payload_colors,
+    WM_OT_create_payload_isosurface,
     update_all_streamlines,
     update_streamline_radius,
     update_all_query_gradients,
     update_contour_shells,
     update_all_winding_fields,
     update_query_grad_scale,
+    update_payload_color_pattern,
+    update_payload_isosurface,
 )
 
 
@@ -43,15 +50,20 @@ class WinderProperties(bpy.types.PropertyGroup):
     geometry_mode: bpy.props.EnumProperty(
         name="Mode",
         items=[
-            (
-                "PointNormal",
-                "Point Normal",
-                "Triangles treat as point-normal dipoles",
-            ),
+            ("PointNormal", "Point Normal", "Triangles treat as point-normal dipoles"),
             ("Triangle", "Triangle", "Exact triangle potential evaluation"),
             ("Mesh", "Mesh", "Vertex/Index explicit mesh topology"),
         ],
         default="PointNormal",
+        update=update_all_winding_fields,
+    )
+    use_fast_engine: bpy.props.BoolProperty(
+        name="Use Fast Engine (BVH)",
+        default=True,
+        description=(
+            "Use the BVH-accelerated engine. Uncheck to use brute-force evaluation. "
+            "Brute force is only practical for tiny geometry (<1000 elements)."
+        ),
         update=update_all_winding_fields,
     )
     query_res: bpy.props.IntProperty(
@@ -203,6 +215,50 @@ class WinderProperties(bpy.types.PropertyGroup):
         default=True,
         update=update_contour_shells,
     )
+    payload_color_pattern: bpy.props.EnumProperty(
+        name="Payload Color Pattern",
+        items=[
+            (
+                "checkerboard",
+                "3D Checkerboard",
+                "High-contrast spatial pattern (8 saturated colors)",
+            ),
+            (
+                "random_polygon",
+                "Random per Polygon",
+                "Random saturated color per polygon (no per-triangle averaging)",
+            ),
+            (
+                "xyz_gradient",
+                "XYZ Gradient",
+                "RGB gradient along world XYZ - useful for linearity checks",
+            ),
+        ],
+        default="checkerboard",
+        update=update_payload_color_pattern,
+    )
+    payload_color_cells: bpy.props.IntProperty(
+        name="Pattern Cells/Axis",
+        default=12,
+        min=2,
+        max=64,
+        description="Cells per axis for checkerboard mode",
+        update=update_payload_color_pattern,
+    )
+
+    payload_isosurface_threshold: bpy.props.FloatProperty(
+        name="Iso Threshold",
+        default=0.5,
+        min=0.0,
+        max=1.0,
+        precision=3,
+        description=(
+            "Isosurface threshold on the |payload| field. "
+            "0.5 sits roughly at the mesh surface for a uniformly-normalized "
+            "payload; sweep to expand / contract the surface"
+        ),
+        update=update_payload_isosurface,
+    )
 
 
 class VIEW3D_PT_winder_panel(bpy.types.Panel):
@@ -224,7 +280,8 @@ class VIEW3D_PT_winder_panel(bpy.types.Panel):
         row.prop(props, "grid_padding")
         layout.prop(props, "epsilon")
 
-        # Display Freeze / Unfreeze toggle button for active object
+        layout.prop(props, "use_fast_engine")
+
         if obj and obj.type == "MESH":
             is_frozen = obj.get("winder_is_grid_frozen", False)
             btn_text = "Unfreeze Grid" if is_frozen else "Freeze Grid"
@@ -258,6 +315,50 @@ class VIEW3D_PT_winder_panel(bpy.types.Panel):
         box.operator("winder.create_query_streamlines", icon="IPO_EASE_IN_OUT")
 
         layout.separator()
+        box = layout.box()
+        box.label(text="Payload Field (D=3, RGB)", icon="COLOR")
+        box.label(
+            text="Uses vertex colors. Auto-generates pattern if missing.",
+            icon="INFO",
+        )
+        box.prop(props, "payload_color_pattern")
+        if props.payload_color_pattern == "checkerboard":
+            box.prop(props, "payload_color_cells")
+        row = box.row(align=True)
+        row.operator(
+            "winder.create_payload_field",
+            text="Create Payload Field",
+            icon="OUTLINER_DATA_VOLUME",
+        )
+        row.operator(
+            "winder.regenerate_payload_colors",
+            text="Regenerate Colors",
+            icon="FILE_REFRESH",
+        )
+        box.operator(
+            "winder.toggle_payload_colors",
+            text="Show/Hide Vertex Colors on Mesh",
+            icon="COLOR",
+        )
+        box.operator(
+            "winder.create_payload_query_streamlines",
+            text="Create Payload Field Lines (∇W)",
+            icon="CURVE_DATA",
+        )
+        box.operator(
+            "winder.create_payload_query_gradients",
+            text="Payload Gradient RGB Volume",
+            icon="ORIENTATION_NORMAL",
+        )
+        box.label(text="Payload Isosurface", icon="SURFACE_NCURVE")
+        box.prop(props, "payload_isosurface_threshold")
+        box.operator(
+            "winder.create_payload_isosurface",
+            text="Create Payload Isosurface",
+            icon="MESH_ICOSPHERE",
+        )
+
+        layout.separator()
         layout.prop(props, "loss_type")
         layout.prop(props, "learning_rate")
         layout.operator("winder.create_optimization", icon="MOD_PHYSICS")
@@ -270,7 +371,6 @@ class VIEW3D_PT_winder_panel(bpy.types.Panel):
         layout.prop(props, "is_winding_field")
         layout.operator("winder.create_3d_contours", icon="SURFACE_NCURVE")
 
-        # BVH Debug Section
         layout.separator()
         box = layout.box()
         box.label(text="BVH8 Tree Debug", icon="NODETREE")
@@ -279,9 +379,6 @@ class VIEW3D_PT_winder_panel(bpy.types.Panel):
         bvh_row.operator("winder.dump_backward_bvh", text="Dump Backward", icon="BACK")
 
 
-# -------------------------------------------------------------------------
-# Optimization Animation Step Handler
-# -------------------------------------------------------------------------
 @bpy.app.handlers.persistent
 def on_frame_change_optimization(scene):
     if not scene.get("winder_is_optimizing", False):
@@ -295,12 +392,10 @@ def on_frame_change_optimization(scene):
     props = scene.winder_props
     lr = props.learning_rate
 
-    # Step Source mesh vertices along negative gradient direction (-lr * grad)
     mesh = source.data
     verts = np.empty((len(mesh.vertices), 3), dtype=np.float32)
     mesh.vertices.foreach_get("co", verts.ravel())
 
-    # Gradient computation drives source vertex offset directly
     source.tag_update()
 
 
@@ -313,9 +408,15 @@ classes = (
     WM_OT_create_loss_landscape,
     WM_OT_create_3d_contours,
     WM_OT_create_query_gradients,
+    WM_OT_create_payload_field,
+    WM_OT_create_payload_query_gradients,
+    WM_OT_create_payload_query_streamlines,
+    WM_OT_toggle_payload_colors,
     WM_OT_create_query_streamlines,
     WM_OT_dump_forward_bvh,
     WM_OT_dump_backward_bvh,
+    WM_OT_regenerate_payload_colors,
+    WM_OT_create_payload_isosurface,
 )
 
 
@@ -324,15 +425,11 @@ def register():
         bpy.utils.register_class(cls)
     bpy.types.Scene.winder_props = bpy.props.PointerProperty(type=WinderProperties)
     bpy.app.handlers.frame_change_post.append(on_frame_change_optimization)
-
-    # Register live depsgraph updates handler for transform/edit auto-recompute
     register_handlers()
 
 
 def unregister():
-    # Unregister live depsgraph updates handler
     unregister_handlers()
-
     bpy.app.handlers.frame_change_post.remove(on_frame_change_optimization)
     del bpy.types.Scene.winder_props
     for cls in reversed(classes):

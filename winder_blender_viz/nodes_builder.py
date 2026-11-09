@@ -637,3 +637,185 @@ def build_streamline_geometry_nodes(
     links.new(set_mat.outputs["Geometry"], smooth.inputs["Geometry"])
     links.new(smooth.outputs["Geometry"], out_node.inputs["Geometry"])
     return ng
+
+def get_or_create_payload_volume_material(
+    mat_name="Winder_PayloadVolume_Material",
+    attribute_prefix="payload",
+):
+    """Volume shader mapping (payload_r, payload_g, payload_b) → raw RGB color.
+
+    Density is read from the precomputed `density` grid (magnitude of the RGB
+    vector at each voxel). `attribute_prefix="payload_grad"` reuses the same
+    layout for the query-gradient RGB volume.
+    """
+    mat = bpy.data.materials.get(mat_name)
+    if mat is None:
+        mat = bpy.data.materials.new(name=mat_name)
+        mat.use_nodes = True
+        nodes = mat.node_tree.nodes
+        links = mat.node_tree.links
+        nodes.clear()
+
+        out_node = nodes.new("ShaderNodeOutputMaterial")
+        princ_vol = nodes.new("ShaderNodeVolumePrincipled")
+
+        # RGB → vector
+        def _attr(name):
+            a = nodes.new("ShaderNodeAttribute")
+            a.attribute_type = "GEOMETRY"
+            a.attribute_name = name
+            return a
+
+        attr_r = _attr(f"{attribute_prefix}_r")
+        attr_g = _attr(f"{attribute_prefix}_g")
+        attr_b = _attr(f"{attribute_prefix}_b")
+
+        combine = nodes.new("ShaderNodeCombineXYZ")
+        links.new(attr_r.outputs["Fac"], combine.inputs["X"])
+        links.new(attr_g.outputs["Fac"], combine.inputs["Y"])
+        links.new(attr_b.outputs["Fac"], combine.inputs["Z"])
+
+        # Density from precomputed grid
+        attr_density = _attr("density")
+        dens_scale = nodes.new("ShaderNodeMath")
+        dens_scale.operation = "MULTIPLY"
+        dens_scale.inputs[1].default_value = 5.0
+        links.new(attr_density.outputs["Fac"], dens_scale.inputs[0])
+        links.new(dens_scale.outputs["Value"], princ_vol.inputs["Density"])
+
+        # Color = raw RGB
+        links.new(combine.outputs["Vector"], princ_vol.inputs["Color"])
+
+        links.new(princ_vol.outputs["Volume"], out_node.inputs["Volume"])
+
+    return mat
+
+def get_or_create_payload_isosurface_material(
+    mat_name="Winder_PayloadIsosurface_Material",
+):
+    """Material for the payload isosurface: reads the PayloadColor attribute
+    written by the GN tree and uses it as Base Color + subtle emission."""
+    mat = bpy.data.materials.get(mat_name)
+    if mat is None:
+        mat = bpy.data.materials.new(name=mat_name)
+        mat.use_nodes = True
+        nodes = mat.node_tree.nodes
+        links = mat.node_tree.links
+        nodes.clear()
+
+        out = nodes.new("ShaderNodeOutputMaterial")
+        out.location = (300, 0)
+        bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+        bsdf.location = (0, 0)
+        bsdf.inputs["Roughness"].default_value = 0.5
+
+        attr = nodes.new("ShaderNodeAttribute")
+        attr.location = (-300, 0)
+        attr.attribute_type = "GEOMETRY"
+        attr.attribute_name = "PayloadColor"
+
+        links.new(attr.outputs["Color"], bsdf.inputs["Base Color"])
+        if "Emission Color" in bsdf.inputs:
+            links.new(attr.outputs["Color"], bsdf.inputs["Emission Color"])
+            bsdf.inputs["Emission Strength"].default_value = 0.2
+
+        links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+    return mat
+
+def _new_node_safe(nodes, candidates):
+    """Create the first available node type from `candidates`."""
+    last_err = None
+    for node_type in candidates:
+        try:
+            return nodes.new(node_type)
+        except RuntimeError as e:
+            last_err = e
+            continue
+    raise RuntimeError(
+        f"Could not create any of {candidates} in this Blender version: {last_err}"
+    )
+
+
+def _set_input_safe(node, names, value):
+    """Set the first matching input socket name to `value`."""
+    if isinstance(names, str):
+        names = [names]
+    for name in names:
+        if name in node.inputs:
+            node.inputs[name].default_value = value
+            return True
+    return False
+
+
+def _find_output_safe(node, names):
+    """Return the first matching output socket, or None."""
+    if isinstance(names, str):
+        names = [names]
+    for name in names:
+        if name in node.outputs:
+            return node.outputs[name]
+    return None
+
+def _build_iso_gn_tree(vol_obj, node_group_name=None):
+    """Build a GN tree that just does: Volume → VolumeToMesh(threshold) → Output.
+
+    No color sampling — colors are baked in Python via winder.PayloadField,
+    so we don't depend on the (unstable) Sample Grid / Get Named Grid node
+    socket names in Blender 5.x.
+    """
+    if node_group_name is None:
+        node_group_name = f"GN_PayloadIsosurfaceTopo_{vol_obj.name}"
+
+    ng = bpy.data.node_groups.get(node_group_name)
+    if ng is None:
+        ng = bpy.data.node_groups.new(name=node_group_name, type="GeometryNodeTree")
+    else:
+        ng.nodes.clear()
+        ng.interface.clear()
+
+    ng.interface.new_socket(
+        name="Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry"
+    )
+    tsock = ng.interface.new_socket(
+        name="Threshold", in_out="INPUT", socket_type="NodeSocketFloat"
+    )
+    tsock.default_value = 0.5
+    tsock.min_value = 0.0
+    tsock.max_value = 1.0
+
+    nodes = ng.nodes
+    links = ng.links
+    in_node = nodes.new("NodeGroupInput")
+    out_node = nodes.new("NodeGroupOutput")
+
+    vol_info = nodes.new("GeometryNodeObjectInfo")
+    vol_info.inputs["Object"].default_value = vol_obj
+
+    v2m = nodes.new("GeometryNodeVolumeToMesh")
+    # Blender 5.x: Grid socket input; 4.x: Volume + grid_name.
+    if "Grid" in v2m.inputs:
+        try:
+            get_grid = nodes.new("GeometryNodeGetNamedGrid")
+            if "Geometry" in get_grid.inputs:
+                links.new(vol_info.outputs["Geometry"], get_grid.inputs["Geometry"])
+            for n in ("Name", "Grid Name"):
+                if n in get_grid.inputs:
+                    get_grid.inputs[n].default_value = "density"
+                    break
+            links.new(get_grid.outputs["Grid"], v2m.inputs["Grid"])
+        except RuntimeError:
+            # Fall back to Volume → VolumeToMesh via grid_name property
+            links.new(vol_info.outputs["Geometry"], v2m.inputs["Volume"])
+            if hasattr(v2m, "grid_name"):
+                v2m.grid_name = "density"
+    else:
+        links.new(vol_info.outputs["Geometry"], v2m.inputs["Volume"])
+        if hasattr(v2m, "grid_name"):
+            v2m.grid_name = "density"
+
+    links.new(in_node.outputs["Threshold"], v2m.inputs["Threshold"])
+    if "Adaptivity" in v2m.inputs:
+        v2m.inputs["Adaptivity"].default_value = 0.0
+
+    links.new(v2m.outputs["Mesh"], out_node.inputs["Geometry"])
+    return ng
