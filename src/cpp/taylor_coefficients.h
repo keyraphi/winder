@@ -131,10 +131,17 @@ template <uint32_t D> struct alignas(128) PayloadTaylorCoefficients {
   }
 };
 
-// ###### BACKWARD ########################
+// ###### GEOMETRY GRADIENTS ########################
 // 40 byte
 struct BackwardTaylorCoefficients {
   float zero_order;
   Vec3 first_order;
   SymMat3x3 second_order;
 };
+
+template <uint32_t D> struct alignas(64) BackwardPayloadTaylorCoefficients {
+  float zero_order[D];
+  Vec3 first_order[D];
+  SymMat3x3 second_order[D];
+};
+

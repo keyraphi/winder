@@ -556,3 +556,178 @@ template void compute_internal_tailor_coefficients_m2m_payload<128>(
     const LeafPointers *, PayloadTaylorCoefficientsF16<128> *,
     PayloadTaylorCoefficients<128> *, const uint32_t *, uint32_t, uint32_t *,
     cudaStream_t);
+
+// ============================================================================
+// Backward payload m2m shift — one d-channel at a time.
+// ============================================================================
+__device__ __forceinline__ void
+m2m_shift_d_backward(float &zero_acc, Vec3 &first_acc, SymMat3x3 &second_acc,
+                     const float child_zero, const Vec3 &child_first,
+                     const SymMat3x3 &child_second, const Vec3 &shift) {
+
+  zero_acc += child_zero;
+  first_acc += child_first + child_zero * shift;
+
+  const float vx = shift.x;
+  const float vy = shift.y;
+  const float vz = shift.z;
+  const float g1x = child_first.x;
+  const float g1y = child_first.y;
+  const float g1z = child_first.z;
+  const float g0 = child_zero;
+  const auto &c2 = child_second.data;
+  auto &s2 = second_acc.data;
+
+  // Diagonal
+  s2[0] += c2[0] + 2.0F * g1x * vx + g0 * vx * vx; // xx
+  s2[3] += c2[3] + 2.0F * g1y * vy + g0 * vy * vy; // yy
+  s2[5] += c2[5] + 2.0F * g1z * vz + g0 * vz * vz; // zz
+  // Off-diagonal (M_2 symmetric)
+  s2[1] += c2[1] + g1x * vy + vx * g1y + g0 * vx * vy; // xy
+  s2[2] += c2[2] + g1x * vz + vx * g1z + g0 * vx * vz; // xz
+  s2[4] += c2[4] + g1y * vz + vy * g1z + g0 * vy * vz; // yz
+}
+
+// ============================================================================
+// Backward payload m2m — races up the tree, one thread per leaf.
+// ============================================================================
+template <uint32_t D>
+__global__ void
+compute_internal_tailor_coefficients_m2m_backward_payload_kernel(
+    BVH8Node *nodes, const uint32_t *internal_parent_map,
+    const AABB *leaf_aabbs,
+    const BackwardPayloadTaylorCoefficients<D> *leaf_coefficients,
+    const uint32_t *leaf_parents, const LeafPointers *leaf_pointers,
+    BackwardPayloadTaylorCoefficients<D> *node_tailor_coefficients,
+    const uint32_t *nodes_child_count, const uint32_t leaf_count,
+    uint32_t *atomic_counters) {
+
+  const uint32_t leaf_idx = threadIdx.x + blockIdx.x * blockDim.x;
+  if (leaf_idx >= leaf_count) {
+    return;
+  }
+
+  uint32_t current_node_idx = leaf_parents[leaf_idx];
+
+  while (current_node_idx != 0xFFFFFFFF) {
+    const BVH8Node node = nodes[current_node_idx];
+    const uint32_t expected_children = nodes_child_count[current_node_idx];
+
+    // Only the last-arriving child thread merges. All others exit.
+    if (atomicAdd(&atomic_counters[current_node_idx], 1) <
+        expected_children - 1) {
+      return;
+    }
+
+    const Vec3 parent_center = node._aabb_com;
+
+    for (uint32_t d = 0; d < D; ++d) {
+      float zero_acc = 0.F;
+      Vec3 first_acc = Vec3::zero();
+      SymMat3x3 second_acc = {0.F, 0.F, 0.F, 0.F, 0.F, 0.F};
+
+      uint32_t internal_child_count = 0;
+#pragma unroll
+      for (uint32_t i = 0; i < 8; ++i) {
+        if (node.getChildMeta(i) == ChildType::EMPTY) {
+          continue;
+        }
+
+        Vec3 child_center;
+        const BackwardPayloadTaylorCoefficients<D> *child_coeffs;
+
+        if (node.getChildMeta(i) == ChildType::LEAF) {
+          const uint32_t child_leaf_idx =
+              leaf_pointers[current_node_idx].indices[i];
+          child_center = leaf_aabbs[child_leaf_idx].center_of_mass;
+          child_coeffs = &leaf_coefficients[child_leaf_idx];
+        } else {
+          const uint32_t child_idx = node.child_base + internal_child_count;
+          internal_child_count++;
+          child_center = nodes[child_idx]._aabb_com;
+          child_coeffs = &node_tailor_coefficients[child_idx];
+        }
+
+        const Vec3 shift = child_center - parent_center;
+        m2m_shift_d_backward(
+            zero_acc, first_acc, second_acc, child_coeffs->zero_order[d],
+            child_coeffs->first_order[d], child_coeffs->second_order[d], shift);
+      }
+
+      node_tailor_coefficients[current_node_idx].zero_order[d] = zero_acc;
+      node_tailor_coefficients[current_node_idx].first_order[d] = first_acc;
+      node_tailor_coefficients[current_node_idx].second_order[d] = second_acc;
+    }
+
+    // Ensure this node's coefficients are visible to the parent's winning
+    // thread on the next tree level before we advance.
+    __threadfence();
+    current_node_idx = __ldcg(internal_parent_map + current_node_idx);
+  }
+}
+
+template <uint32_t D>
+void compute_internal_tailor_coefficients_m2m_backward_payload(
+    BVH8Node *nodes, const uint32_t *internal_parent_map,
+    const AABB *leaf_aabbs,
+    const BackwardPayloadTaylorCoefficients<D> *leaf_coefficients,
+    const uint32_t *leaf_parents, const LeafPointers *leaf_pointers,
+    BackwardPayloadTaylorCoefficients<D> *node_tailor_coefficients,
+    const uint32_t *nodes_child_count, const uint32_t leaf_count,
+    uint32_t *atomic_counters, const cudaStream_t &stream) {
+  const uint32_t threads = 256;
+  const uint32_t blocks = (leaf_count + threads - 1) / threads;
+  compute_internal_tailor_coefficients_m2m_backward_payload_kernel<D>
+      <<<blocks, threads, 0, stream>>>(
+          nodes, internal_parent_map, leaf_aabbs, leaf_coefficients,
+          leaf_parents, leaf_pointers, node_tailor_coefficients,
+          nodes_child_count, leaf_count, atomic_counters);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+// Explicit instantiations — one per D bucket.
+template void compute_internal_tailor_coefficients_m2m_backward_payload<1>(
+    BVH8Node *, const uint32_t *, const AABB *,
+    const BackwardPayloadTaylorCoefficients<1> *, const uint32_t *,
+    const LeafPointers *, BackwardPayloadTaylorCoefficients<1> *,
+    const uint32_t *, uint32_t, uint32_t *, const cudaStream_t &);
+template void compute_internal_tailor_coefficients_m2m_backward_payload<2>(
+    BVH8Node *, const uint32_t *, const AABB *,
+    const BackwardPayloadTaylorCoefficients<2> *, const uint32_t *,
+    const LeafPointers *, BackwardPayloadTaylorCoefficients<2> *,
+    const uint32_t *, uint32_t, uint32_t *, const cudaStream_t &);
+template void compute_internal_tailor_coefficients_m2m_backward_payload<3>(
+    BVH8Node *, const uint32_t *, const AABB *,
+    const BackwardPayloadTaylorCoefficients<3> *, const uint32_t *,
+    const LeafPointers *, BackwardPayloadTaylorCoefficients<3> *,
+    const uint32_t *, uint32_t, uint32_t *, const cudaStream_t &);
+template void compute_internal_tailor_coefficients_m2m_backward_payload<4>(
+    BVH8Node *, const uint32_t *, const AABB *,
+    const BackwardPayloadTaylorCoefficients<4> *, const uint32_t *,
+    const LeafPointers *, BackwardPayloadTaylorCoefficients<4> *,
+    const uint32_t *, uint32_t, uint32_t *, const cudaStream_t &);
+template void compute_internal_tailor_coefficients_m2m_backward_payload<8>(
+    BVH8Node *, const uint32_t *, const AABB *,
+    const BackwardPayloadTaylorCoefficients<8> *, const uint32_t *,
+    const LeafPointers *, BackwardPayloadTaylorCoefficients<8> *,
+    const uint32_t *, uint32_t, uint32_t *, const cudaStream_t &);
+template void compute_internal_tailor_coefficients_m2m_backward_payload<16>(
+    BVH8Node *, const uint32_t *, const AABB *,
+    const BackwardPayloadTaylorCoefficients<16> *, const uint32_t *,
+    const LeafPointers *, BackwardPayloadTaylorCoefficients<16> *,
+    const uint32_t *, uint32_t, uint32_t *, const cudaStream_t &);
+template void compute_internal_tailor_coefficients_m2m_backward_payload<32>(
+    BVH8Node *, const uint32_t *, const AABB *,
+    const BackwardPayloadTaylorCoefficients<32> *, const uint32_t *,
+    const LeafPointers *, BackwardPayloadTaylorCoefficients<32> *,
+    const uint32_t *, uint32_t, uint32_t *, const cudaStream_t &);
+template void compute_internal_tailor_coefficients_m2m_backward_payload<64>(
+    BVH8Node *, const uint32_t *, const AABB *,
+    const BackwardPayloadTaylorCoefficients<64> *, const uint32_t *,
+    const LeafPointers *, BackwardPayloadTaylorCoefficients<64> *,
+    const uint32_t *, uint32_t, uint32_t *, const cudaStream_t &);
+template void compute_internal_tailor_coefficients_m2m_backward_payload<128>(
+    BVH8Node *, const uint32_t *, const AABB *,
+    const BackwardPayloadTaylorCoefficients<128> *, const uint32_t *,
+    const LeafPointers *, BackwardPayloadTaylorCoefficients<128> *,
+    const uint32_t *, uint32_t, uint32_t *, const cudaStream_t &);

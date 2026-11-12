@@ -53,9 +53,9 @@ void compute_winding_numbers(
     const cudaStream_t &stream);
 
 template <IsGeometry Geometry>
-void query_gradient_traversal(const ComputeQueryGradientParams<Geometry> &params,
-                             int device_id, const cudaStream_t &stream);
-
+void query_gradient_traversal(
+    const ComputeQueryGradientParams<Geometry> &params, int device_id,
+    const cudaStream_t &stream);
 
 struct ComputeGradientsPointNormalParams {
   const Vec3 *points;
@@ -66,7 +66,7 @@ struct ComputeGradientsPointNormalParams {
   const BackwardTaylorCoefficients *node_coefficients;
   const AABB *leaf_aabbs;
   const SoAView<Vec3> sorted_queries;
-  const float* sorted_grad_outputs;
+  const float *sorted_grad_outputs;
   uint32_t query_count;
   uint32_t geometry_count;
   float *gradients;
@@ -90,7 +90,7 @@ struct ComputeGradientsTriangleParams {
   const BackwardTaylorCoefficients *node_coefficients;
   const AABB *leaf_aabbs;
   const SoAView<Vec3> sorted_queries;
-  const float* sorted_grad_outputs;
+  const float *sorted_grad_outputs;
   uint32_t query_count;
   uint32_t geometry_count;
   float *gradients;
@@ -104,7 +104,6 @@ struct ComputeGradientsTriangleParams {
 
 void compute_triangle_gradients(const ComputeGradientsTriangleParams &params,
                                 int device_id, const cudaStream_t &stream);
-
 
 template <IsGeometry Geometry, uint32_t D>
 struct ComputePayloadWindingNumbersParams {
@@ -142,8 +141,8 @@ struct ComputePayloadQueryGradientParams {
   uint32_t query_count;
   uint32_t geometry_count;
   uint32_t payload_dim_user;
-  const float *grad_output;     // (M, D) adjoint
-  float *out_query_gradients;   // (M, 3)
+  const float *grad_output;   // (M, D) adjoint
+  float *out_query_gradients; // (M, 3)
   uint32_t *global_device_counter;
   float beta;
   float epsilon;
@@ -151,6 +150,54 @@ struct ComputePayloadQueryGradientParams {
   SceneNormalization norm;
 };
 
+// ===========================================================================
+// Backward (gradient) engine for the payload field.
+// ===========================================================================
+
+template <uint32_t D> struct ComputePayloadGradientsPointNormalParams {
+  const Vec3 *points;
+  const Vec3 *normals;
+  const uint32_t *sort_indirections;
+  const BVH8Node *bvh8_nodes;
+  const LeafPointers *bvh8_leaf_pointers;
+  const BackwardPayloadTaylorCoefficients<D> *node_coefficients;
+  const AABB *leaf_aabbs;
+  const SoAView<Vec3> sorted_queries;
+  const float *sorted_grad_outputs; // (M, D) bucket-strided, sorted
+  const float *sorted_payload;      // (N, D) bucket-strided, sorted
+  uint32_t query_count;
+  uint32_t geometry_count;
+  uint32_t payload_dim_user;
+  float *gradients;         // (N, 2, 3)
+  float *epsilon_gradients; // (N,)
+  uint32_t *global_device_counter;
+  float beta;
+  float epsilon;
+  float scene_scale;
+  SceneNormalization norm;
+};
+
+template <uint32_t D> struct ComputePayloadGradientsTriangleParams {
+  const Triangle *triangles;
+  const uint32_t *sort_indirections;
+  const BVH8Node *bvh8_nodes;
+  const LeafPointers *bvh8_leaf_pointers;
+  const BackwardPayloadTaylorCoefficients<D> *node_coefficients;
+  const AABB *leaf_aabbs;
+  const SoAView<Vec3> sorted_queries;
+  const float *sorted_grad_outputs;
+  const float *sorted_payload;
+  uint32_t query_count;
+  uint32_t geometry_count;
+  uint32_t payload_dim_user;
+  float *gradients;         // (N, 3, 3)
+  float *epsilon_gradients; // (N,)
+  uint32_t *global_device_counter;
+  float beta;
+  float epsilon;
+  float scene_scale;
+  SceneNormalization norm;
+};
 
 template <IsGeometry Geometry, uint32_t D>
 void compute_payload_winding_numbers(
@@ -159,10 +206,18 @@ void compute_payload_winding_numbers(
 
 template <IsGeometry Geometry, uint32_t D>
 void query_gradient_traversal_payload(
-    const ComputePayloadQueryGradientParams<Geometry, D> &params,
-    int device_id, cudaStream_t stream, bool use_kahan = false);
+    const ComputePayloadQueryGradientParams<Geometry, D> &params, int device_id,
+    cudaStream_t stream, bool use_kahan = false);
 
+template <uint32_t D>
+void compute_payload_point_normal_gradients(
+    const ComputePayloadGradientsPointNormalParams<D> &params, int device_id,
+    const cudaStream_t &stream, bool use_kahan);
 
+template <uint32_t D>
+void compute_payload_triangle_gradients(
+    const ComputePayloadGradientsTriangleParams<D> &params, int device_id,
+    const cudaStream_t &stream, bool use_kahan);
 
 extern template void compute_winding_numbers<PointNormal>(
     const ComputeWindingNumbersParams<PointNormal> &params, int device_id,

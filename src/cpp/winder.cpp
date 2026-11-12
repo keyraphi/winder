@@ -2,6 +2,7 @@
 #include "gradient_backend.h"
 #include "kernels/payload.cuh"
 #include "payload_backend.h"
+#include "payload_gradient_backend.h"
 #include "winder_brute_force.h"
 #include "winding_numbers_backend.h"
 #include <cstddef>
@@ -1221,7 +1222,8 @@ public:
                                const Vec3_t &queries,
                                Vec3_t &out_query_gradients, float beta = -1.F,
                                float epsilon = 0.004F,
-                               const uint64_t stream = 0, bool use_kahan = false) const -> void {
+                               const uint64_t stream = 0,
+                               bool use_kahan = false) const -> void {
     if (grad_output.shape(0) != queries.shape(0)) {
       throw std::runtime_error(
           "Shape[0] of grad_output must equal shape[0] of queries.");
@@ -1301,6 +1303,368 @@ private:
   }
 
   std::unique_ptr<IPayloadBackendBase> m_impl;
+};
+
+// =========================================================================
+// Type-erasure layer for PayloadGradientBackend.
+//
+// Same idea as IPayloadBackendBase, but the compute methods differ by
+// geometry (Vec3 × Vec3 vs Triangle vs shared-vertex mesh). The base exposes
+// all three; each typed impl only defines the valid ones and throws for the
+// others.
+//
+// The Python-facing PayloadFieldGeometryGradient holds *two* backends (one
+// PointNormal, one Triangle), each constructed lazily on first use. This
+// way a user who only calls compute_point_normal pays for one query-BVH
+// build and one coefficient buffer, not two. The two backends share the
+// same D bucket and the same query BVH layout, but they must remain
+// separate objects because `PayloadGradientBackend` is templated on
+// Geometry.
+// =========================================================================
+
+class IPayloadGradientBackendBase {
+public:
+  virtual ~IPayloadGradientBackendBase() = default;
+
+  [[nodiscard]] virtual auto dimension() const -> uint32_t = 0;
+
+  virtual auto compute_point_normal(const float *points,
+                                    const float *scaled_normals,
+                                    const float *payload, size_t geometry_count,
+                                    float *gradients, float *epsilon_gradient,
+                                    float beta, float epsilon, size_t stream,
+                                    bool use_kahan) const -> void = 0;
+
+  virtual auto compute_triangle_soup(const float *triangles,
+                                     const float *payload,
+                                     size_t geometry_count, float *gradients,
+                                     float *epsilon_gradient, float beta,
+                                     float epsilon, size_t stream,
+                                     bool use_kahan) const -> void = 0;
+
+  virtual auto compute_mesh(const float *vertices,
+                            const uint32_t *triangle_indices,
+                            const float *payload, size_t vertex_count,
+                            size_t triangle_count, float *vertex_gradients,
+                            float *epsilon_gradient, float beta, float epsilon,
+                            size_t stream, bool use_kahan) const -> void = 0;
+
+  [[nodiscard]] virtual auto dump() const -> std::string = 0;
+};
+
+template <IsGeometry Geometry, uint32_t D_bucket>
+class PayloadGradientBackendImpl final : public IPayloadGradientBackendBase {
+public:
+  PayloadGradientBackendImpl(
+      std::unique_ptr<PayloadGradientBackend<Geometry, D_bucket>> impl,
+      uint32_t d_user)
+      : m_impl(std::move(impl)), m_dim_user(d_user) {}
+
+  [[nodiscard]] auto dimension() const -> uint32_t override {
+    return m_dim_user;
+  }
+
+  auto compute_point_normal(const float *points, const float *scaled_normals,
+                            const float *payload, size_t geometry_count,
+                            float *gradients, float *epsilon_gradient,
+                            float beta, float epsilon, size_t stream,
+                            bool use_kahan) const -> void override {
+    if constexpr (std::is_same_v<Geometry, PointNormal>) {
+      m_impl->compute(reinterpret_cast<const Vec3 *>(points),
+                      reinterpret_cast<const Vec3 *>(scaled_normals), payload,
+                      geometry_count, gradients, epsilon_gradient, beta,
+                      epsilon, stream, use_kahan);
+    } else {
+      throw std::runtime_error(
+          "compute_point_normal called on a triangle-typed backend.");
+    }
+  }
+
+  auto compute_triangle_soup(const float *triangles, const float *payload,
+                             size_t geometry_count, float *gradients,
+                             float *epsilon_gradient, float beta, float epsilon,
+                             size_t stream, bool use_kahan) const
+      -> void override {
+    if constexpr (std::is_same_v<Geometry, Triangle>) {
+      m_impl->compute(reinterpret_cast<const Triangle *>(triangles), payload,
+                      geometry_count, gradients, epsilon_gradient, beta,
+                      epsilon, stream, use_kahan);
+    } else {
+      throw std::runtime_error(
+          "compute_triangle_soup called on a point-normal-typed backend.");
+    }
+  }
+
+  auto compute_mesh(const float *vertices, const uint32_t *triangle_indices,
+                    const float *payload, size_t vertex_count,
+                    size_t triangle_count, float *vertex_gradients,
+                    float *epsilon_gradient, float beta, float epsilon,
+                    size_t stream, bool use_kahan) const -> void override {
+    if constexpr (std::is_same_v<Geometry, Triangle>) {
+      m_impl->compute(vertices, triangle_indices, payload, vertex_count,
+                      triangle_count, vertex_gradients, epsilon_gradient, beta,
+                      epsilon, stream, use_kahan);
+    } else {
+      throw std::runtime_error(
+          "compute_mesh called on a point-normal-typed backend.");
+    }
+  }
+
+  [[nodiscard]] auto dump() const -> std::string override {
+    return m_impl->dump();
+  }
+
+private:
+  std::unique_ptr<PayloadGradientBackend<Geometry, D_bucket>> m_impl;
+  uint32_t m_dim_user;
+};
+
+// =========================================================================
+// PayloadFieldGeometryGradient — Python-facing engine.
+//
+// Constructed with (queries, grad_output), which are shared across both
+// geometries. The two underlying C++ backends are built lazily on the first
+// compute call of their respective geometry, so the typical "only triangles"
+// or "only point clouds" use case never pays for a second query-BVH build.
+// =========================================================================
+
+class PayloadFieldGeometryGradient {
+public:
+  PayloadFieldGeometryGradient(const Vec3_t &queries,
+                               const Payload_t &grad_output,
+                               const uint64_t stream = 0)
+      : m_queries{queries}, m_grad_output{grad_output},
+        m_d_user{static_cast<uint32_t>(grad_output.shape(1))},
+        m_d_bucket{resolve_payload_bucket(m_d_user)},
+        m_device_id{queries.device_id()}, m_stream{stream} {
+    if (queries.shape(0) != grad_output.shape(0)) {
+      throw std::runtime_error(
+          "Number of queries must match the number of grad_output rows.");
+    }
+    if (queries.device_id() != grad_output.device_id()) {
+      throw std::runtime_error(
+          "queries and grad_output must be on the same CUDA device.");
+    }
+  }
+
+  ~PayloadFieldGeometryGradient() = default;
+
+  // --- PointNormal ---
+  auto compute_point_normal(const Vec3_t &points, const Vec3_t &scaled_normals,
+                            const Payload_t &payload,
+                            GradResult_t &out_gradients,
+                            SingleScalar_t &epsilon_gradient, float beta = -1.F,
+                            float epsilon = 0.004F, const uint64_t stream = 0,
+                            bool use_kahan = false) -> void {
+    if (points.device_id() != scaled_normals.device_id()) {
+      throw std::runtime_error(
+          "points and scaled_normals must be on the same CUDA device.");
+    }
+    if (points.device_id() != payload.device_id()) {
+      throw std::runtime_error(
+          "points and payload must be on the same CUDA device.");
+    }
+    if (points.device_id() != out_gradients.device_id()) {
+      throw std::runtime_error(
+          "points and out_gradients must be on the same CUDA device.");
+    }
+    if (points.shape(0) != scaled_normals.shape(0)) {
+      throw std::runtime_error(
+          "Shape of points must equal shape of scaled_normals.");
+    }
+    if (points.shape(0) != payload.shape(0)) {
+      throw std::runtime_error(
+          "Shape[0] of points must equal shape[0] of payload.");
+    }
+    if (payload.shape(1) != m_d_user) {
+      throw std::runtime_error(
+          std::format("Shape[1] of payload ({}) does not match engine D ({}).",
+                      payload.shape(1), m_d_user));
+    }
+    if (points.shape(0) != out_gradients.shape(0)) {
+      throw std::runtime_error(
+          "Shape[0] of points must equal shape[0] of out_gradients.");
+    }
+    if (out_gradients.shape(1) != 2 || out_gradients.shape(2) != 3) {
+      throw std::runtime_error("Shape of out_gradients must be (N, 2, 3).");
+    }
+    ensure_pn_backend();
+    m_pn_impl->compute_point_normal(
+        points.data(), scaled_normals.data(), payload.data(), points.shape(0),
+        out_gradients.data(), epsilon_gradient.data(), beta, epsilon, stream,
+        use_kahan);
+  }
+
+  // --- Triangle soup ---
+  auto compute_triangle_soup(const Triangle_t &triangles,
+                             const Payload_t &payload,
+                             GradResult_t &out_gradients,
+                             SingleScalar_t &epsilon_gradient,
+                             float beta = -1.F, float epsilon = 0.004F,
+                             const uint64_t stream = 0, bool use_kahan = false)
+      -> void {
+    if (triangles.device_id() != payload.device_id()) {
+      throw std::runtime_error(
+          "triangles and payload must be on the same CUDA device.");
+    }
+    if (triangles.device_id() != out_gradients.device_id()) {
+      throw std::runtime_error(
+          "triangles and out_gradients must be on the same CUDA device.");
+    }
+    if (triangles.shape(0) != payload.shape(0)) {
+      throw std::runtime_error(
+          "Shape[0] of triangles must equal shape[0] of payload.");
+    }
+    if (payload.shape(1) != m_d_user) {
+      throw std::runtime_error(
+          std::format("Shape[1] of payload ({}) does not match engine D ({}).",
+                      payload.shape(1), m_d_user));
+    }
+    if (triangles.shape(0) != out_gradients.shape(0)) {
+      throw std::runtime_error(
+          "Shape[0] of triangles must equal shape[0] of out_gradients.");
+    }
+    if (out_gradients.shape(1) != 3 || out_gradients.shape(2) != 3) {
+      throw std::runtime_error("Shape of out_gradients must be (N, 3, 3).");
+    }
+    ensure_tri_backend();
+    m_tri_impl->compute_triangle_soup(triangles.data(), payload.data(),
+                                      triangles.shape(0), out_gradients.data(),
+                                      epsilon_gradient.data(), beta, epsilon,
+                                      stream, use_kahan);
+  }
+
+  // --- Mesh ---
+  auto compute_mesh(const Vec3_t &vertices,
+                    const TriangleIdx_t &triangle_indices,
+                    const Payload_t &payload, VertexGradResult_t &out_gradients,
+                    SingleScalar_t &epsilon_gradient, float beta = -1.F,
+                    float epsilon = 0.004F, const uint64_t stream = 0,
+                    bool use_kahan = false) -> void {
+    if (vertices.device_id() != triangle_indices.device_id()) {
+      throw std::runtime_error(
+          "vertices and triangle_indices must be on the same CUDA device.");
+    }
+    if (vertices.device_id() != payload.device_id()) {
+      throw std::runtime_error(
+          "vertices and payload must be on the same CUDA device.");
+    }
+    if (vertices.device_id() != out_gradients.device_id()) {
+      throw std::runtime_error(
+          "vertices and out_gradients must be on the same CUDA device.");
+    }
+    if (triangle_indices.shape(0) != payload.shape(0)) {
+      throw std::runtime_error(
+          "Shape[0] of triangle_indices must equal shape[0] of payload.");
+    }
+    if (payload.shape(1) != m_d_user) {
+      throw std::runtime_error(
+          std::format("Shape[1] of payload ({}) does not match engine D ({}).",
+                      payload.shape(1), m_d_user));
+    }
+    if (vertices.shape(0) != out_gradients.shape(0)) {
+      throw std::runtime_error(
+          "Shape[0] of vertices must equal shape[0] of out_gradients.");
+    }
+    if (out_gradients.shape(1) != 3) {
+      throw std::runtime_error("Shape[1] of out_gradients must be 3.");
+    }
+    ensure_tri_backend();
+    m_tri_impl->compute_mesh(
+        vertices.data(), triangle_indices.data(), payload.data(),
+        vertices.shape(0), triangle_indices.shape(0), out_gradients.data(),
+        epsilon_gradient.data(), beta, epsilon, stream, use_kahan);
+  }
+
+  [[nodiscard]] auto dimension() const -> uint32_t { return m_d_user; }
+
+  [[nodiscard]] auto dump() const -> std::string {
+    if (!m_pn_impl && !m_tri_impl) {
+      throw std::runtime_error(
+          "Cannot dump: no backend initialized yet (call a compute first).");
+    }
+    std::string result;
+    if (m_pn_impl) {
+      result += "// --- PointNormal backend ---\n";
+      result += m_pn_impl->dump();
+      result += "\n";
+    }
+    if (m_tri_impl) {
+      result += "// --- Triangle backend ---\n";
+      result += m_tri_impl->dump();
+    }
+    return result;
+  }
+
+private:
+  template <typename Base, typename F>
+  static auto dispatch_generic(uint32_t d, F &&f) -> std::unique_ptr<Base> {
+    switch (d) {
+    case 1:
+      return f.template operator()<1>();
+    case 2:
+      return f.template operator()<2>();
+    case 3:
+      return f.template operator()<3>();
+    case 4:
+      return f.template operator()<4>();
+    case 8:
+      return f.template operator()<8>();
+    case 16:
+      return f.template operator()<16>();
+    case 32:
+      return f.template operator()<32>();
+    case 64:
+      return f.template operator()<64>();
+    case 128:
+      return f.template operator()<128>();
+    default:
+      throw std::runtime_error("dispatch_generic: unreachable");
+    }
+  }
+
+  void ensure_pn_backend() {
+    if (m_pn_impl) {
+      return;
+    }
+    m_pn_impl = dispatch_generic<IPayloadGradientBackendBase>(
+        m_d_bucket,
+        [&]<uint32_t D>() -> std::unique_ptr<IPayloadGradientBackendBase> {
+          auto backend =
+              std::make_unique<PayloadGradientBackend<PointNormal, D>>(
+                  static_cast<size_t>(m_queries.shape(0)), m_d_user,
+                  m_device_id, m_stream);
+          backend->init(m_queries.data(), m_grad_output.data());
+          return std::make_unique<PayloadGradientBackendImpl<PointNormal, D>>(
+              std::move(backend), m_d_user);
+        });
+  }
+
+  void ensure_tri_backend() {
+    if (m_tri_impl) {
+      return;
+    }
+    m_tri_impl = dispatch_generic<IPayloadGradientBackendBase>(
+        m_d_bucket,
+        [&]<uint32_t D>() -> std::unique_ptr<IPayloadGradientBackendBase> {
+          auto backend = std::make_unique<PayloadGradientBackend<Triangle, D>>(
+              static_cast<size_t>(m_queries.shape(0)), m_d_user, m_device_id,
+              m_stream);
+          backend->init(m_queries.data(), m_grad_output.data());
+          return std::make_unique<PayloadGradientBackendImpl<Triangle, D>>(
+              std::move(backend), m_d_user);
+        });
+  }
+
+  Vec3_t m_queries;
+  Payload_t m_grad_output;
+  uint32_t m_d_user;
+  uint32_t m_d_bucket;
+  int m_device_id;
+  uint64_t m_stream;
+
+  std::unique_ptr<IPayloadGradientBackendBase> m_pn_impl;
+  std::unique_ptr<IPayloadGradientBackendBase> m_tri_impl;
 };
 
 NB_MODULE(winder_module, m) {
@@ -3349,7 +3713,8 @@ NB_MODULE(winder_module, m) {
 
       // --- Forward ---
       .def("compute", &PayloadField::compute, "queries"_a, "out_payload"_a,
-           "beta"_a = -1.F, "epsilon"_a = 0.004F, "stream"_a = 0, "use_kahan"_a = false,
+           "beta"_a = -1.F, "epsilon"_a = 0.004F, "stream"_a = 0,
+           "use_kahan"_a = false,
            nb::sig(
                "def compute(self, queries: "
                "winder.types.Array[winder.types.Shape[winder.types.M, "
@@ -3385,12 +3750,14 @@ NB_MODULE(winder_module, m) {
               `stream` : int, optional
                   Raw 64-bit CUDA stream handle. Default is 0.
           )doc") +
-       USE_KAHAN_DOC).c_str())
+            USE_KAHAN_DOC)
+               .c_str())
 
       // --- Query gradients ---
       .def("compute_query_gradients", &PayloadField::compute_query_gradients,
            "grad_output"_a, "queries"_a, "out_query_gradients"_a,
-           "beta"_a = -1.F, "epsilon"_a = 0.004F, "stream"_a = 0, "use_kahan"_a = false,
+           "beta"_a = -1.F, "epsilon"_a = 0.004F, "stream"_a = 0,
+           "use_kahan"_a = false,
            nb::sig(
                "def compute_query_gradients(self, grad_output: "
                "winder.types.Array[winder.types.Shape[winder.types.M, "
@@ -3435,8 +3802,9 @@ NB_MODULE(winder_module, m) {
               `out_query_gradients` : Array
                   (M, 3) float32 CUDA array pre-allocated by the caller.
               `beta`, `epsilon`, `stream` : as in `compute`.
-          )doc")+
-      USE_KAHAN_DOC).c_str())
+          )doc") +
+            USE_KAHAN_DOC)
+               .c_str())
 
       // --- Debug ---
       .def("dump", &PayloadField::dump, nb::sig("def dump(self) -> str"),
@@ -3454,4 +3822,259 @@ NB_MODULE(winder_module, m) {
       .def_prop_ro(
           "dimension", &PayloadField::dimension,
           "The payload dimensionality D this engine was constructed with.");
+
+  // ===========================================================================
+  // PayloadFieldGeometryGradient
+  // ===========================================================================
+  nb::class_<PayloadFieldGeometryGradient>(m, "PayloadFieldGeometryGradient")
+      .def(nb::init<const Vec3_t &, const Payload_t &, const uint64_t>(),
+           "queries"_a, "grad_output"_a, "stream"_a = 0,
+           nb::sig(
+               "def __init__(self, queries: "
+               "winder.types.Array[winder.types.Shape[winder.types.M, "
+               "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+               "grad_output: "
+               "winder.types.Array[winder.types.Shape[winder.types.M, "
+               "winder.types.D], winder.types.float32, winder.types.cuda], "
+               "stream: int = 0) -> None"),
+           R"doc(
+                Initialize the fast geometry-gradient engine for the payload
+                field.
+
+                The engine keeps the two query-side tensors (`queries` and
+                `grad_output`) alive for its lifetime. The underlying query
+                BVH is built lazily on the first call to a `compute_*` method,
+                and separately for each geometry type (point-normal vs
+                triangle). Users who only call one geometry family therefore
+                only pay for one query-BVH build.
+
+                Parameters
+                ----------
+                `queries` : Array
+                    (M, 3) float32 CUDA array of query positions. Must be the
+                    same queries for which the loss `L` was evaluated before
+                    calling `.backward()` / extracting `dL/dW`.
+                `grad_output` : Array
+                    (M, D) float32 CUDA array of the adjoint (dL/dW) at each
+                    query. Row `j` is the D-vector adjoint for query `j` and
+                    must be aligned index-for-index with `queries`.
+                `stream` : int, optional
+                    Raw 64-bit CUDA stream handle used for building the query
+                    BVH. Default is 0 (default/null stream).
+            )doc",
+           nb::keep_alive<1, 2>(), nb::keep_alive<1, 3>())
+
+      // --- compute_point_normal -------------------------------------------
+      .def("compute_point_normal",
+           &PayloadFieldGeometryGradient::compute_point_normal, "points"_a,
+           "scaled_normals"_a, "payload"_a, "out_gradients"_a,
+           "epsilon_gradient"_a, "beta"_a = -1.F, "epsilon"_a = 0.004F,
+           "stream"_a = 0, "use_kahan"_a = false,
+           nb::sig(
+               "def compute_point_normal(self, points: "
+               "winder.types.Array[winder.types.Shape[winder.types.N, "
+               "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+               "scaled_normals: "
+               "winder.types.Array[winder.types.Shape[winder.types.N, "
+               "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+               "payload: "
+               "winder.types.Array[winder.types.Shape[winder.types.N, "
+               "winder.types.D], winder.types.float32, winder.types.cuda], "
+               "out_gradients: "
+               "winder.types.Array[winder.types.Shape[winder.types.N, "
+               "typing.Literal[2], typing.Literal[3]], winder.types.float32, "
+               "winder.types.cuda], "
+               "epsilon_gradient: "
+               "winder.types.Array[winder.types.Shape[typing.Literal[1]], "
+               "winder.types.float32, winder.types.cuda], "
+               "beta: float = -1, epsilon: float = 0.004, "
+               "stream: int = 0, use_kahan: bool = false) -> None"),
+           (std::string(R"doc(
+                Computes the partial derivatives of the payload field loss
+                with respect to the source point positions and scaled normals,
+                using the BVH-accelerated Barnes-Hut traversal.
+
+                For each primitive `i` the output row `i` contains:
+
+                    out_gradients[i, 0] = dL/dn_i    (scaled-normal gradient)
+                    out_gradients[i, 1] = dL/dp_i    (position gradient)
+
+                The D-dimensional payload adjoint is collapsed onto each
+                primitive via the per-(primitive, query) weighted adjoint
+
+                    ĝ_ij = <g_j, v_i>
+
+                inside the kernel, so the caller only needs to supply the
+                `payload` once.
+
+                Parameters
+                ----------
+                `points` : Array
+                    (N, 3) float32 CUDA array of point positions.
+                `scaled_normals` : Array
+                    (N, 3) float32 CUDA array of area-scaled normals.
+                    The scaled normal direction is the orientation; the scale
+                    is the associated Voronoi area.
+                `payload` : Array
+                    (N, D) float32 CUDA array of per-primitive payloads.
+                    Row `i` is the D-vector blended by primitive `i`'s winding
+                    contribution.
+                `out_gradients` : Array
+                    (N, 2, 3) float32 CUDA array pre-allocated by the caller.
+                    Row `i` receives dL/dn_i at index `[i, 0]` and dL/dp_i at
+                    index `[i, 1]`.
+                `epsilon_gradient` : Array
+                    (1,) float32 CUDA array pre-allocated by the caller. Will
+                    be filled with dL/depsilon (a single scalar because
+                    `epsilon` is shared by the entire field).
+                `beta` : float
+                    Barnes-Hut opening criterion. Same semantics as in the
+                    scalar `GradientEngine`. Use any negative number to fall
+                    back to the default (2.3 for point clouds).
+            )doc") +
+            EPSILON_DOC + R"doc(
+                `stream` : int, optional
+                    Raw 64-bit CUDA stream handle for the compute kernel.
+                    Default is 0 (default/null stream).
+            )doc" +
+            USE_KAHAN_DOC)
+               .c_str())
+
+      // --- compute_triangle_soup ------------------------------------------
+      .def("compute_triangle_soup",
+           &PayloadFieldGeometryGradient::compute_triangle_soup, "triangles"_a,
+           "payload"_a, "out_gradients"_a, "epsilon_gradient"_a,
+           "beta"_a = -1.F, "epsilon"_a = 0.004F, "stream"_a = 0,
+           "use_kahan"_a = false,
+           nb::sig(
+               "def compute_triangle_soup(self, triangles: "
+               "winder.types.Array[winder.types.Shape[winder.types.N, "
+               "typing.Literal[3], typing.Literal[3]], winder.types.float32, "
+               "winder.types.cuda], payload: "
+               "winder.types.Array[winder.types.Shape[winder.types.N, "
+               "winder.types.D], winder.types.float32, winder.types.cuda], "
+               "out_gradients: "
+               "winder.types.Array[winder.types.Shape[winder.types.N, "
+               "typing.Literal[3], typing.Literal[3]], winder.types.float32, "
+               "winder.types.cuda], "
+               "epsilon_gradient: "
+               "winder.types.Array[winder.types.Shape[typing.Literal[1]], "
+               "winder.types.float32, winder.types.cuda], "
+               "beta: float = -1, epsilon: float = 0.004, "
+               "stream: int = 0, use_kahan: bool = false) -> None"),
+           (std::string(R"doc(
+                Computes the partial derivatives of the payload field loss
+                with respect to the vertices of an explicit triangle soup,
+                using the BVH-accelerated Barnes-Hut traversal.
+
+                Output shape is (N, 3, 3), with `out_gradients[i, j]` holding
+                dL/dv_j for vertex `j` of triangle `i`.
+
+                Parameters
+                ----------
+                `triangles` : Array
+                    (N, 3, 3) float32 CUDA array holding N triangles.
+                    Note: Order the vertices counter-clockwise when seen from
+                    the front.
+                `payload` : Array
+                    (N, D) float32 CUDA array of per-triangle payloads.
+                    Row `i` is the D-vector blended by triangle `i`'s winding
+                    contribution.
+                `out_gradients` : Array
+                    (N, 3, 3) float32 CUDA array pre-allocated by the caller.
+                    `out_gradients[i, j]` receives dL/dv_j for vertex `j` of
+                    triangle `i`.
+                `epsilon_gradient` : Array
+                    (1,) float32 CUDA array pre-allocated by the caller.
+                    Will be filled with dL/depsilon.
+                `beta` : float
+                    Barnes-Hut opening criterion. Same semantics as in the
+                    scalar `GradientEngine`. Use any negative number to fall
+                    back to the default (2.3 for triangle soups).
+            )doc") +
+            EPSILON_DOC + R"doc(
+                `stream` : int, optional
+                    Raw 64-bit CUDA stream handle for the compute kernel.
+                    Default is 0 (default/null stream).
+            )doc" +
+            USE_KAHAN_DOC)
+               .c_str())
+
+      // --- compute_mesh ---------------------------------------------------
+      .def("compute_mesh", &PayloadFieldGeometryGradient::compute_mesh,
+           "vertices"_a, "triangle_indices"_a, "payload"_a, "out_gradients"_a,
+           "epsilon_gradient"_a, "beta"_a = -1.F, "epsilon"_a = 0.004F,
+           "stream"_a = 0, "use_kahan"_a = false,
+           nb::sig(
+               "def compute_mesh(self, vertices: "
+               "winder.types.Array[winder.types.Shape[winder.types.K, "
+               "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+               "triangle_indices: "
+               "winder.types.Array[winder.types.Shape[winder.types.N, "
+               "typing.Literal[3]], winder.types.uint32, winder.types.cuda], "
+               "payload: "
+               "winder.types.Array[winder.types.Shape[winder.types.N, "
+               "winder.types.D], winder.types.float32, winder.types.cuda], "
+               "out_gradients: "
+               "winder.types.Array[winder.types.Shape[winder.types.K, "
+               "typing.Literal[3]], winder.types.float32, winder.types.cuda], "
+               "epsilon_gradient: "
+               "winder.types.Array[winder.types.Shape[typing.Literal[1]], "
+               "winder.types.float32, winder.types.cuda], "
+               "beta: float = -1, epsilon: float = 0.004, "
+               "stream: int = 0, use_kahan: bool = false) -> None"),
+           (std::string(R"doc(
+                Computes the partial derivatives of the payload field loss
+                with respect to the shared mesh vertices, using the
+                BVH-accelerated Barnes-Hut traversal.
+
+                Payload is per-triangle, so the per-triangle contributions
+                are scattered into the shared vertices. Output shape is
+                (K, 3), with `out_gradients[i]` holding dL/dv_i for vertex `i`.
+
+                Parameters
+                ----------
+                `vertices` : Array
+                    (K, 3) float32 CUDA array holding the shared vertices.
+                `triangle_indices` : Array
+                    (N, 3) uint32 CUDA array, each row indexes 3 vertices of a
+                    triangle. Note: Order the vertices counter-clockwise when
+                    seen from the front.
+                `payload` : Array
+                    (N, D) float32 CUDA array of per-triangle payloads.
+                `out_gradients` : Array
+                    (K, 3) float32 CUDA array pre-allocated by the caller.
+                    Will be filled with dL/dv_i for each shared vertex.
+                `epsilon_gradient` : Array
+                    (1,) float32 CUDA array pre-allocated by the caller.
+                    Will be filled with dL/depsilon.
+                `beta` : float
+                    Barnes-Hut opening criterion. Same semantics as in the
+                    scalar `GradientEngine`. Use any negative number to fall
+                    back to the default.
+            )doc") +
+            EPSILON_DOC + R"doc(
+                `stream` : int, optional
+                    Raw 64-bit CUDA stream handle for the compute kernel.
+                    Default is 0 (default/null stream).
+            )doc" +
+            USE_KAHAN_DOC)
+               .c_str())
+
+      // --- dump -----------------------------------------------------------
+      .def("dump", &PayloadFieldGeometryGradient::dump,
+           nb::sig("def dump(self) -> str"),
+           R"doc(
+                Returns a Graphviz .dot representation of the query BVH
+                used by the fast geometry-gradient traversal.
+
+                Only the backends that have already been constructed (via a
+                previous `compute_*` call) are dumped. If both geometries
+                have been used, both trees are included in the output.
+            )doc")
+
+      // --- introspection --------------------------------------------------
+      .def_prop_ro("dimension", &PayloadFieldGeometryGradient::dimension,
+                   "The payload dimensionality D this engine was constructed "
+                   "with.");
 }

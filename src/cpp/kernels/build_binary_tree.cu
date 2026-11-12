@@ -716,7 +716,6 @@ void populate_binary_tree_aabb_and_leaf_coefficients_backward(
   CUDA_CHECK(cudaGetLastError());
 }
 
-
 template <IsGeometry Geometry, uint32_t D>
 __global__ void populate_binary_tree_aabb_and_leaf_coefficients_payload_kernel(
     const SoAView<Geometry> sorted_geometry,
@@ -821,7 +820,7 @@ __global__ void populate_binary_tree_aabb_and_leaf_coefficients_payload_kernel(
     }
 
     // Warp-leader writes are the only writes; other lanes just participate in
-    // the reduction. This helper is inlined. 
+    // the reduction. This helper is inlined.
     auto aggregate_slot = [&](uint32_t slot_k, float c_k) -> void {
       // Thread-local: acc[d] = v_i[d] * c_k_i
       float acc[CHUNK_SIZE];
@@ -940,6 +939,318 @@ void populate_binary_tree_aabb_and_leaf_coefficients_payload(
           binary_parents, atomic_weights, geometry_count);
   CUDA_CHECK(cudaGetLastError());
 }
+
+// ===========================================================================
+// Backward (query-side) leaf coefficients for the PAYLOAD field.
+// ===========================================================================
+template <uint32_t D>
+__global__ void
+populate_binary_tree_aabb_and_leaf_coefficients_backward_payload_kernel(
+    const SoAView<Vec3> sorted_queries,
+    const float *__restrict__ sorted_grad_outputs_bucket, // (M, D) stride D
+    BackwardPayloadTaylorCoefficients<D> *leaf_coefficients,
+    const uint32_t leaf_count, const BinaryNode *binary_nodes,
+    AABB *binary_aabbs, const uint32_t *binary_parents, float *atomic_weights,
+    const uint32_t query_count) {
+
+  static_assert(D >= 1, "Payload dimensionality D must be >= 1");
+
+  const uint32_t query_idx = threadIdx.x + blockIdx.x * blockDim.x;
+  const uint32_t leaf_idx = query_idx / 32;
+  if (leaf_idx >= leaf_count) {
+    return;
+  }
+  const uint32_t lane_id = query_idx % 32;
+
+  const Vec3 query = Vec3::load(sorted_queries, query_idx, query_count);
+
+  // ---- AABB / center-of-mass for the leaf (identical to scalar backward) ----
+  const bool is_thread_active = query_idx < query_count;
+  AABB query_aabb;
+  Vec3 center_of_mass;
+  float weight = 0.F;
+  if (is_thread_active) {
+    query_aabb = query.get_aabb();
+    center_of_mass = query.centroid();
+    weight = 1.F;
+  } else {
+    query_aabb.min = Vec3_f16{65504.F, 65504.F, 65504.F};
+    query_aabb.max = Vec3_f16{65504.F, 65504.F, 65504.F};
+    center_of_mass = Vec3{.x = 0.F, .y = 0.F, .z = 0.F};
+    weight = 0.F;
+  }
+  Vec3_f16 &p_min = query_aabb.min;
+  Vec3_f16 &p_max = query_aabb.max;
+  Vec3 weighted_com = center_of_mass * weight;
+
+#pragma unroll
+  for (int offset = 16; offset > 0; offset /= 2) {
+    p_min.x = __hmin(p_min.x, __shfl_xor_sync(0xFFFFFFFF, p_min.x, offset));
+    p_min.y = __hmin(p_min.y, __shfl_xor_sync(0xFFFFFFFF, p_min.y, offset));
+    p_min.z = __hmin(p_min.z, __shfl_xor_sync(0xFFFFFFFF, p_min.z, offset));
+
+    p_max.x = __hmax(p_max.x, __shfl_xor_sync(0xFFFFFFFF, p_max.x, offset));
+    p_max.y = __hmax(p_max.y, __shfl_xor_sync(0xFFFFFFFF, p_max.y, offset));
+    p_max.z = __hmax(p_max.z, __shfl_xor_sync(0xFFFFFFFF, p_max.z, offset));
+
+    weighted_com.x += __shfl_xor_sync(0xFFFFFFFF, weighted_com.x, offset);
+    weighted_com.y += __shfl_xor_sync(0xFFFFFFFF, weighted_com.y, offset);
+    weighted_com.z += __shfl_xor_sync(0xFFFFFFFF, weighted_com.z, offset);
+
+    weight += __shfl_xor_sync(0xFFFFFFFF, weight, offset);
+  }
+  center_of_mass = weight > 0.F ? (weighted_com / weight)
+                                : Vec3{.x = 0.F, .y = 0.F, .z = 0.F};
+
+  float dist_to_com =
+      is_thread_active ? query.max_distance_to(center_of_mass) : 0.F;
+#pragma unroll
+  for (int offset = 16; offset > 0; offset /= 2) {
+    dist_to_com =
+        fmaxf(dist_to_com, __shfl_xor_sync(0xFFFFFFFF, dist_to_com, offset));
+  }
+
+  const uint32_t leaf_node_idx = leaf_idx + leaf_count - 1;
+  if (lane_id == 0) {
+    binary_aabbs[leaf_node_idx].min = p_min;
+    binary_aabbs[leaf_node_idx].max = p_max;
+    binary_aabbs[leaf_node_idx].center_of_mass = center_of_mass;
+    binary_aabbs[leaf_node_idx].max_distance = __float2half(dist_to_com);
+  }
+
+  // ---- Per-channel backward Taylor coefficients ----
+  //
+  // Per lane i:
+  //   g_i = sorted_grad_outputs_bucket[i, :]           (length D)
+  //   delta_i = query_i - leaf_com
+  //   delta_sq_i = delta_i ⊗ delta_i                    (SymMat3x3)
+  //
+  // Per channel c:
+  //   zero[c]   = warp_sum_lane(g_i[c])
+  //   first[c]  = warp_sum_lane(g_i[c] * delta_i)
+  //   second[c] = warp_sum_lane(g_i[c] * delta_sq_i)
+  constexpr int kSymFloats = sizeof(SymMat3x3) / sizeof(float);
+
+  const Vec3 delta = is_thread_active ? (query - center_of_mass) : Vec3::zero();
+  const SymMat3x3 delta_sq =
+      is_thread_active ? delta.tensor_square() : SymMat3x3::zero();
+
+  constexpr uint32_t CHUNK_SIZE = (D < 32U) ? D : 32U;
+  constexpr uint32_t NUM_CHUNKS = (D + CHUNK_SIZE - 1U) / CHUNK_SIZE;
+
+  auto warp_reduce_chunk = [](float (&acc)[CHUNK_SIZE]) -> void {
+#pragma unroll
+    for (int offset = 16; offset > 0; offset /= 2) {
+#pragma unroll
+      for (uint32_t d = 0; d < CHUNK_SIZE; ++d) {
+        acc[d] += __shfl_down_sync(0xFFFFFFFF, acc[d], offset);
+      }
+    }
+  };
+
+  for (uint32_t chunk_idx = 0; chunk_idx < NUM_CHUNKS; ++chunk_idx) {
+    const uint32_t d0 = chunk_idx * CHUNK_SIZE;
+    const uint32_t d_count = min(CHUNK_SIZE, D - d0);
+
+    float g_slice[CHUNK_SIZE];
+    if (is_thread_active) {
+      const float *src =
+          sorted_grad_outputs_bucket + static_cast<size_t>(query_idx) * D + d0;
+#pragma unroll
+      for (uint32_t d = 0; d < CHUNK_SIZE; ++d) {
+        g_slice[d] = (d < d_count) ? __ldg(src + d) : 0.F;
+      }
+    } else {
+#pragma unroll
+      for (uint32_t d = 0; d < CHUNK_SIZE; ++d) {
+        g_slice[d] = 0.F;
+      }
+    }
+
+    // Zero order
+    {
+      float acc[CHUNK_SIZE];
+#pragma unroll
+      for (uint32_t d = 0; d < CHUNK_SIZE; ++d) {
+        acc[d] = g_slice[d];
+      }
+      warp_reduce_chunk(acc);
+      if (lane_id == 0) {
+#pragma unroll
+        for (uint32_t d = 0; d < CHUNK_SIZE; ++d) {
+          if (d < d_count) {
+            leaf_coefficients[leaf_idx].zero_order[d0 + d] = acc[d];
+          }
+        }
+      }
+    }
+
+    // First order: x, y, z
+    {
+      const float factors[3] = {delta.x, delta.y, delta.z};
+      auto *first_out = reinterpret_cast<float *>(
+          &leaf_coefficients[leaf_idx].first_order[d0]);
+#pragma unroll
+      for (int k = 0; k < 3; ++k) {
+        float acc[CHUNK_SIZE];
+#pragma unroll
+        for (uint32_t d = 0; d < CHUNK_SIZE; ++d) {
+          acc[d] = g_slice[d] * factors[k];
+        }
+        warp_reduce_chunk(acc);
+        if (lane_id == 0) {
+#pragma unroll
+          for (uint32_t d = 0; d < CHUNK_SIZE; ++d) {
+            if (d < d_count) {
+              first_out[d * 3 + k] = acc[d];
+            }
+          }
+        }
+      }
+    }
+
+    // Second order: kSymFloats components (6 or 9 depending on layout)
+    {
+#pragma unroll
+      for (int i = 0; i < kSymFloats; ++i) {
+        const float factor = delta_sq.data[i];
+        float acc[CHUNK_SIZE];
+#pragma unroll
+        for (uint32_t d = 0; d < CHUNK_SIZE; ++d) {
+          acc[d] = g_slice[d] * factor;
+        }
+        warp_reduce_chunk(acc);
+        if (lane_id == 0) {
+#pragma unroll
+          for (uint32_t d = 0; d < CHUNK_SIZE; ++d) {
+            if (d < d_count) {
+              leaf_coefficients[leaf_idx].second_order[d0 + d].data[i] = acc[d];
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // ---- Race to top for AABB propagation (identical to scalar backward) ----
+  if (lane_id == 0) {
+    float my_weight = (weight == 0.F) ? 1e-10F : weight;
+
+    uint32_t current_idx = leaf_node_idx;
+    uint32_t current_parent_idx = binary_parents[current_idx];
+    if (current_parent_idx == 0xFFFFFFFF) {
+      return;
+    }
+
+    cuda::atomic_thread_fence(cuda::memory_order_seq_cst,
+                              cuda::thread_scope_device);
+    float other_weight =
+        atomicAdd(&atomic_weights[current_parent_idx], my_weight);
+    if (other_weight == 0.F) {
+      return;
+    }
+    while (current_parent_idx != 0xFFFFFFFF) {
+      BinaryNode parent_node = binary_nodes[current_parent_idx];
+
+      float weight_left;
+      float weight_right;
+      if (parent_node.left_child == current_idx) {
+        weight_left = my_weight;
+        weight_right = other_weight;
+      } else {
+        weight_left = other_weight;
+        weight_right = my_weight;
+      }
+
+      binary_aabbs[current_parent_idx] = AABB::merge_weighted(
+          binary_aabbs[parent_node.left_child],
+          binary_aabbs[parent_node.right_child], weight_left, weight_right);
+      __threadfence();
+
+      uint32_t next_parent = binary_parents[current_parent_idx];
+      if (next_parent == 0xFFFFFFFF) {
+        break;
+      }
+      my_weight = weight_left + weight_right;
+      other_weight = atomicAdd(&atomic_weights[next_parent], my_weight);
+      if (other_weight == 0.F) {
+        break;
+      }
+      current_idx = current_parent_idx;
+      current_parent_idx = next_parent;
+    }
+  }
+}
+
+template <uint32_t D>
+void populate_binary_tree_aabb_and_leaf_coefficients_backward_payload(
+    const float *__restrict__ sorted_queries,
+    const float *__restrict__ sorted_grad_outputs_bucket,
+    BackwardPayloadTaylorCoefficients<D> *leaf_coefficients,
+    const uint32_t leaf_count, const BinaryNode *binary_nodes,
+    AABB *binary_aabbs, const uint32_t *binary_parents, float *atomic_counters,
+    const uint32_t query_count, const cudaStream_t &stream) {
+  if (query_count == 0) {
+    return;
+  }
+
+  const uint32_t threads = 256;
+  const uint32_t blocks = (leaf_count * 32 + threads - 1) / threads;
+  populate_binary_tree_aabb_and_leaf_coefficients_backward_payload_kernel<D>
+      <<<blocks, threads, 0, stream>>>(
+          SoAView<Vec3>{sorted_queries, query_count},
+          sorted_grad_outputs_bucket, leaf_coefficients, leaf_count,
+          binary_nodes, binary_aabbs, binary_parents, atomic_counters,
+          query_count);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+// Explicit instantiations — one per D bucket.
+template void
+populate_binary_tree_aabb_and_leaf_coefficients_backward_payload<1>(
+    const float *, const float *, BackwardPayloadTaylorCoefficients<1> *,
+    uint32_t, const BinaryNode *, AABB *, const uint32_t *, float *, uint32_t,
+    const cudaStream_t &);
+template void
+populate_binary_tree_aabb_and_leaf_coefficients_backward_payload<2>(
+    const float *, const float *, BackwardPayloadTaylorCoefficients<2> *,
+    uint32_t, const BinaryNode *, AABB *, const uint32_t *, float *, uint32_t,
+    const cudaStream_t &);
+template void
+populate_binary_tree_aabb_and_leaf_coefficients_backward_payload<3>(
+    const float *, const float *, BackwardPayloadTaylorCoefficients<3> *,
+    uint32_t, const BinaryNode *, AABB *, const uint32_t *, float *, uint32_t,
+    const cudaStream_t &);
+template void
+populate_binary_tree_aabb_and_leaf_coefficients_backward_payload<4>(
+    const float *, const float *, BackwardPayloadTaylorCoefficients<4> *,
+    uint32_t, const BinaryNode *, AABB *, const uint32_t *, float *, uint32_t,
+    const cudaStream_t &);
+template void
+populate_binary_tree_aabb_and_leaf_coefficients_backward_payload<8>(
+    const float *, const float *, BackwardPayloadTaylorCoefficients<8> *,
+    uint32_t, const BinaryNode *, AABB *, const uint32_t *, float *, uint32_t,
+    const cudaStream_t &);
+template void
+populate_binary_tree_aabb_and_leaf_coefficients_backward_payload<16>(
+    const float *, const float *, BackwardPayloadTaylorCoefficients<16> *,
+    uint32_t, const BinaryNode *, AABB *, const uint32_t *, float *, uint32_t,
+    const cudaStream_t &);
+template void
+populate_binary_tree_aabb_and_leaf_coefficients_backward_payload<32>(
+    const float *, const float *, BackwardPayloadTaylorCoefficients<32> *,
+    uint32_t, const BinaryNode *, AABB *, const uint32_t *, float *, uint32_t,
+    const cudaStream_t &);
+template void
+populate_binary_tree_aabb_and_leaf_coefficients_backward_payload<64>(
+    const float *, const float *, BackwardPayloadTaylorCoefficients<64> *,
+    uint32_t, const BinaryNode *, AABB *, const uint32_t *, float *, uint32_t,
+    const cudaStream_t &);
+template void
+populate_binary_tree_aabb_and_leaf_coefficients_backward_payload<128>(
+    const float *, const float *, BackwardPayloadTaylorCoefficients<128> *,
+    uint32_t, const BinaryNode *, AABB *, const uint32_t *, float *, uint32_t,
+    const cudaStream_t &);
 
 // Explicit instantiations
 template void populate_binary_tree_aabb_and_leaf_coefficients<PointNormal>(

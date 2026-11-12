@@ -1,5 +1,7 @@
 #include "kernels/common.cuh"
 #include "kernels/payload.cuh"
+#include "scene_normalization.h"
+#include "vec3.h"
 #include <cstddef>
 #include <cstdint>
 #include <cuda_runtime_api.h>
@@ -16,8 +18,9 @@ __global__ void gather_payload_kernel(const float *__restrict__ payload,
   // payload has user stride (payload_dim_user).
   const size_t total_elements = num_rows * static_cast<size_t>(D);
   const size_t idx = static_cast<size_t>(blockIdx.x) * BlockSize + threadIdx.x;
-  if (idx >= total_elements)
+  if (idx >= total_elements) {
     return;
+  }
 
   const size_t row = idx / D;
   const size_t col = idx - row * D;
@@ -139,3 +142,81 @@ template void gather_payload<64>(const float *, const uint32_t *, float *,
                                  size_t, uint32_t, cudaStream_t);
 template void gather_payload<128>(const float *, const uint32_t *, float *,
                                   size_t, uint32_t, cudaStream_t);
+
+__global__ void __launch_bounds__(256)
+    gather_queries_soa_kernel(
+        const float *__restrict__ queries,          // (M, 3) AoS, world-space
+        const uint32_t *__restrict__ sort_indices,  // (M) permutation
+        float *__restrict__ sorted_queries_soa,     // (3 * M) SoA
+        size_t num_queries,
+        SceneNormalization norm) {
+
+  const size_t idx =
+      static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (idx >= num_queries) {
+    return;
+  }
+
+  const uint32_t src_row = __ldg(sort_indices + idx);
+  const auto *queries_v3 = reinterpret_cast<const Vec3 *>(queries);
+  const Vec3 q = norm.to_normalized(queries_v3[src_row]);
+
+  sorted_queries_soa[0 * num_queries + idx] = q.x;
+  sorted_queries_soa[1 * num_queries + idx] = q.y;
+  sorted_queries_soa[2 * num_queries + idx] = q.z;
+}
+
+template <uint32_t D>
+void gather_queries_and_payload_grad_outputs_soa(
+    const float *queries, const float *grad_output,
+    const uint32_t *sort_indices, float *sorted_queries,
+    float *sorted_grad_outputs_bucket, size_t query_count,
+    uint32_t payload_dim_user, cudaStream_t stream, SceneNormalization norm) {
+
+  if (query_count == 0) {
+    return;
+  }
+
+  {
+    constexpr uint32_t threads = 256;
+    const auto blocks =
+        static_cast<uint32_t>((query_count + threads - 1) / threads);
+    gather_queries_soa_kernel<<<blocks, threads, 0, stream>>>(
+        queries, sort_indices, sorted_queries, query_count, norm);
+    CUDA_CHECK(cudaGetLastError());
+  }
+
+  launch_gather_payload<D>(grad_output, sort_indices,
+                           sorted_grad_outputs_bucket, query_count,
+                           payload_dim_user, stream);
+}
+
+// ---------------------------------------------------------------------------
+// Explicit instantiations — one per D bucket.
+template void gather_queries_and_payload_grad_outputs_soa<1>(
+    const float *, const float *, const uint32_t *, float *, float *, size_t,
+    uint32_t, cudaStream_t, SceneNormalization);
+template void gather_queries_and_payload_grad_outputs_soa<2>(
+    const float *, const float *, const uint32_t *, float *, float *, size_t,
+    uint32_t, cudaStream_t, SceneNormalization);
+template void gather_queries_and_payload_grad_outputs_soa<3>(
+    const float *, const float *, const uint32_t *, float *, float *, size_t,
+    uint32_t, cudaStream_t, SceneNormalization);
+template void gather_queries_and_payload_grad_outputs_soa<4>(
+    const float *, const float *, const uint32_t *, float *, float *, size_t,
+    uint32_t, cudaStream_t, SceneNormalization);
+template void gather_queries_and_payload_grad_outputs_soa<8>(
+    const float *, const float *, const uint32_t *, float *, float *, size_t,
+    uint32_t, cudaStream_t, SceneNormalization);
+template void gather_queries_and_payload_grad_outputs_soa<16>(
+    const float *, const float *, const uint32_t *, float *, float *, size_t,
+    uint32_t, cudaStream_t, SceneNormalization);
+template void gather_queries_and_payload_grad_outputs_soa<32>(
+    const float *, const float *, const uint32_t *, float *, float *, size_t,
+    uint32_t, cudaStream_t, SceneNormalization);
+template void gather_queries_and_payload_grad_outputs_soa<64>(
+    const float *, const float *, const uint32_t *, float *, float *, size_t,
+    uint32_t, cudaStream_t, SceneNormalization);
+template void gather_queries_and_payload_grad_outputs_soa<128>(
+    const float *, const float *, const uint32_t *, float *, float *, size_t,
+    uint32_t, cudaStream_t, SceneNormalization);
