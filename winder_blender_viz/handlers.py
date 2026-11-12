@@ -7,9 +7,9 @@ from .operators import (
     recompute_payload_field,
     recompute_payload_query_gradients,
     recompute_payload_query_streamlines,
+    _recompute_payload_geometry_gradients,   # NEW
     _recompute_streamlines,
     _recompute_query_gradients,
-    _refresh_iso,
 )
 
 # Per-object tracking (was a single global name before)
@@ -28,6 +28,7 @@ _VIS_PREFIXES = (
     "Streamlines_",
     "PayloadStreamlines_",
     "QueryGradQuiver_",
+    "PayloadGeomQuiver_",
 )
 
 
@@ -101,10 +102,7 @@ def _recompute_all_for_object(context, obj):
         try:
             recompute_payload_query_gradients(context, obj)
         except Exception as e:
-            print(
-                f"[Winder] Live payload grad recompute error for "
-                f"'{name}': {e}"
-            )
+            print(f"[Winder] Live payload grad recompute error for '{name}': {e}")
 
     if bpy.data.objects.get(f"Streamlines_{name}"):
         try:
@@ -116,10 +114,7 @@ def _recompute_all_for_object(context, obj):
         try:
             recompute_payload_query_streamlines(context, obj)
         except Exception as e:
-            print(
-                f"[Winder] Live payload streamline recompute error for "
-                f"'{name}': {e}"
-            )
+            print(f"[Winder] Live payload streamline recompute error for '{name}': {e}")
     if bpy.data.objects.get(f"PayloadIsosurface_{name}"):
         try:
             thresh = float(
@@ -137,6 +132,15 @@ def _recompute_all_for_object(context, obj):
             _recompute_query_gradients(context, obj)
         except Exception as e:
             print(f"[Winder] Live query grad recompute error for '{name}': {e}")
+    if bpy.data.objects.get(f"PayloadGeomQuiver_{name}"):
+        try:
+            _recompute_payload_geometry_gradients(context, obj)
+        except NotImplementedError:
+            pass
+        except Exception as e:
+            print(
+                f"[Winder] Live payload geom grad error for '{name}': {e}"
+            )
 
 
 def _deferred_recompute_callback():

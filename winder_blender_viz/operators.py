@@ -149,9 +149,7 @@ def get_multi_object_grid_queries(objs, res=64, padding=0.1):
 class WM_OT_toggle_freeze_grid(bpy.types.Operator):
     bl_idname = "winder.toggle_freeze_grid"
     bl_label = "Toggle Freeze Grid Bounds"
-    bl_description = (
-        "Lock current grid bounds so object transformations don't alter the volume query box"
-    )
+    bl_description = "Lock current grid bounds so object transformations don't alter the volume query box"
 
     def execute(self, context):
         obj = context.active_object
@@ -211,7 +209,11 @@ def recompute_winding_field(context, obj):
         stream.keep_alive(geom_data)
         stream.keep_alive(
             compute_winding_field(
-                geom_data, q_buf, out_w_buf, props.epsilon, stream=stream,
+                geom_data,
+                q_buf,
+                out_w_buf,
+                props.epsilon,
+                stream=stream,
                 use_fast_engine=use_fast_engine,
             )
         )
@@ -235,8 +237,12 @@ def recompute_winding_field(context, obj):
             out_g_buf = CudaBuffer(grad_shape, dtype=np.float32)
             stream.keep_alive(
                 compute_geometry_gradients(
-                    geom_data, q_buf, ones_buf, out_g_buf,
-                    epsilon=props.epsilon, stream=stream,
+                    geom_data,
+                    q_buf,
+                    ones_buf,
+                    out_g_buf,
+                    epsilon=props.epsilon,
+                    stream=stream,
                     use_fast_engine=use_fast_engine,
                 )
             )
@@ -546,7 +552,7 @@ def update_all_winding_fields(self, context):
             if "winder_quantile_cdf" in obj:
                 for prefix in ("WindingVol_", "Winding_", "Vol_"):
                     if obj.name.startswith(prefix):
-                        mesh_name = obj.name[len(prefix):]
+                        mesh_name = obj.name[len(prefix) :]
                         mesh_obj = bpy.data.objects.get(mesh_name)
                         if mesh_obj and mesh_obj.type == "MESH":
                             target_objs.add(mesh_obj)
@@ -577,6 +583,17 @@ def update_all_winding_fields(self, context):
                 recompute_payload_query_streamlines(context, mesh_obj)
             except Exception as e:
                 print(f"[Winder] Error updating payload field lines for '{name}': {e}")
+
+        if bpy.data.objects.get(f"PayloadGeomQuiver_{name}"):
+            try:
+                _recompute_payload_geometry_gradients(context, mesh_obj)
+            except NotImplementedError:
+                pass  # user has fast engine on — leave stale
+            except Exception as e:
+                print(
+                    f"[Winder] Error updating payload geom quiver for "
+                    f"'{name}': {e}"
+                )
 
     update_all_query_gradients(self, context)
     update_all_streamlines(self, context)
@@ -664,7 +681,11 @@ class WM_OT_create_optimization(bpy.types.Operator):
             src_geom = extract_geometry_data(source_obj, mode=mode, stream=stream)
             stream.keep_alive(
                 compute_winding_field(
-                    src_geom, q_buf, w_src_buf, props.epsilon, stream=stream,
+                    src_geom,
+                    q_buf,
+                    w_src_buf,
+                    props.epsilon,
+                    stream=stream,
                     use_fast_engine=use_fast_engine,
                 )
             )
@@ -674,7 +695,11 @@ class WM_OT_create_optimization(bpy.types.Operator):
             )
             stream.keep_alive(
                 compute_winding_field(
-                    tgt_geom, q_buf, w_tgt_buf, props.epsilon, stream=stream,
+                    tgt_geom,
+                    q_buf,
+                    w_tgt_buf,
+                    props.epsilon,
+                    stream=stream,
                     use_fast_engine=use_fast_engine,
                 )
             )
@@ -711,8 +736,12 @@ class WM_OT_create_optimization(bpy.types.Operator):
 
             stream.keep_alive(
                 compute_geometry_gradients(
-                    src_geom, q_buf, dL_dw_buf, out_grad_buf,
-                    epsilon=props.epsilon, stream=stream,
+                    src_geom,
+                    q_buf,
+                    dL_dw_buf,
+                    out_grad_buf,
+                    epsilon=props.epsilon,
+                    stream=stream,
                     use_fast_engine=use_fast_engine,
                 )
             )
@@ -936,6 +965,29 @@ def get_or_create_query_grad_quiver(context, obj, props):
     return quiver_obj
 
 
+def get_or_create_payload_geom_quiver(context, obj, props):
+    """Retrieves or creates the payload geometry-gradient quiver object."""
+    quiver_name = f"PayloadGeomQuiver_{obj.name}"
+    quiver_obj = bpy.data.objects.get(quiver_name)
+
+    if quiver_obj is None:
+        quiver_mesh = bpy.data.meshes.new(f"PayloadGeomQuivers_{obj.name}")
+        quiver_mesh.materials.append(get_or_create_query_grad_material())
+        quiver_obj = bpy.data.objects.new(quiver_name, quiver_mesh)
+        quiver_obj.matrix_world = mathutils.Matrix.Identity(4)
+        context.collection.objects.link(quiver_obj)
+
+        # Reuse the query-gradient GN cone tree: it reads `gradient_dir` and
+        # `gradient_mag`, exactly what we set below.
+        gn_tree = build_query_grad_geometry_nodes(
+            default_scale=float(props.query_grad_scale)
+        )
+        mod = quiver_obj.modifiers.new(name="GNPayloadGeomQuiver", type="NODES")
+        mod.node_group = gn_tree
+
+    return quiver_obj
+
+
 def _recompute_query_gradients(context, obj) -> int:
     props = context.scene.winder_props
     res = props.query_res
@@ -968,8 +1020,12 @@ def _recompute_query_gradients(context, obj) -> int:
         stream.keep_alive(geom_data)
         stream.keep_alive(
             compute_query_gradients(
-                geom_data, q_buf, ones_buf, out_g_buf,
-                epsilon=props.epsilon, stream=stream,
+                geom_data,
+                q_buf,
+                ones_buf,
+                out_g_buf,
+                epsilon=props.epsilon,
+                stream=stream,
                 use_fast_engine=use_fast_engine,
             )
         )
@@ -1005,6 +1061,142 @@ def _recompute_query_gradients(context, obj) -> int:
 
     _apply_query_grad_scale_to_object(quiver_obj, props.query_grad_scale)
     return num_q
+
+
+def _recompute_payload_geometry_gradients(context, obj) -> int:
+    """Geometry gradients of the payload field, visualized as quivers at the
+    primitive positions.
+
+    Uses `grad_output = ones(M, D)` so the visualized loss is
+    `L = Σ_j Σ_c W_c(q_j)` — i.e. how moving each primitive changes the total
+    payload field summed over all queries and channels.
+
+    Only the brute-force binding is implemented; if `use_fast_engine` resolves
+    to True the wrapper raises `NotImplementedError` before any work is done.
+    """
+    props = context.scene.winder_props
+    res = props.query_res
+    padding = props.grid_padding
+    stride = max(1, int(props.query_grad_stride))
+    use_fast_engine = props.use_fast_engine
+
+    if bpy.data.objects.get(f"PayloadVol_{obj.name}") is None:
+        raise RuntimeError(
+            f"No payload field for {obj.name}. Create a payload field first."
+        )
+
+    payload = _extract_padded_payload(obj, props.geometry_mode)
+    if len(payload) == 0:
+        raise ValueError(f"No triangles in '{obj.name}'")
+    num_geom = len(payload)
+
+    quiver_obj = get_or_create_payload_geom_quiver(context, obj, props)
+
+    with CudaStream() as stream:
+        # Subsample the query grid with `query_grad_stride` — same knob as
+        # the query-gradient quivers, and the brute-force cost is O(N·M·D)
+        # so the stride is what keeps this tractable on large meshes.
+        queries_full, shape_full, _ = get_grid_queries(obj, res=res, padding=padding)
+        q3d = queries_full.reshape(shape_full + (3,))
+        sub = q3d[::stride, ::stride, ::stride]
+        queries = sub.reshape(-1, 3).astype(np.float32)
+        num_q = len(queries)
+        if num_q == 0:
+            return 0
+
+        q_buf = CudaBuffer(queries.shape, dtype=np.float32)
+        q_buf.copy_from_numpy_async(queries, stream=stream)
+
+        pl_buf = CudaBuffer(payload.shape, dtype=np.float32)
+        pl_buf.copy_from_numpy_async(payload, stream=stream)
+
+        # Adjoint: ones(M, D) — sum of all channels across all queries.
+        adjoint = np.ones((num_q, payload.shape[1]), dtype=np.float32)
+        adjoint_buf = CudaBuffer((num_q, payload.shape[1]), dtype=np.float32)
+        adjoint_buf.copy_from_numpy_async(adjoint, stream=stream)
+
+        geom_data = extract_geometry_data(obj, props.geometry_mode, stream=stream)
+        stream.keep_alive(geom_data)
+        if geom_data["count"] != num_geom:
+            raise RuntimeError(
+                f"Payload/geometry mismatch: {num_geom} vs "
+                f"{geom_data['count']} elements."
+            )
+
+        mode = props.geometry_mode
+        if mode == "PointNormal":
+            grad_shape = (num_geom, 2, 3)
+        elif mode == "Triangle":
+            grad_shape = (num_geom, 3, 3)
+        else:  # Mesh
+            grad_shape = (geom_data["num_verts"], 3)
+
+        out_grad_buf = CudaBuffer(grad_shape, dtype=np.float32)
+        stream.keep_alive(out_grad_buf)
+
+        stream.keep_alive(
+            compute_payload_geometry_gradients(
+                geom_data,
+                pl_buf,
+                q_buf,
+                adjoint_buf,
+                out_grad_buf,
+                epsilon=props.epsilon,
+                stream=stream,
+                use_fast_engine=use_fast_engine,
+            )
+        )
+
+        grad_data = np.empty(grad_shape, dtype=np.float32)
+        out_grad_buf.copy_to_numpy_async(grad_data, stream=stream)
+
+        # Mirror the winding-quiver extraction: positions of the primitives
+        # and the *position* gradient (index 1 for PointNormal).
+        if mode == "PointNormal":
+            pts = np.empty((num_geom, 3), dtype=np.float32)
+            geom_data["points"].copy_to_numpy_async(pts, stream=stream)
+            stream.synchronize()
+            vecs = grad_data[:, 1, :]
+        elif mode == "Triangle":
+            tris = np.empty((num_geom, 3, 3), dtype=np.float32)
+            geom_data["triangles"].copy_to_numpy_async(tris, stream=stream)
+            stream.synchronize()
+            pts = tris.reshape(-1, 3)
+            vecs = grad_data.reshape(-1, 3)
+        else:  # Mesh
+            pts = np.empty((geom_data["num_verts"], 3), dtype=np.float32)
+            geom_data["vertices"].copy_to_numpy_async(pts, stream=stream)
+            stream.synchronize()
+            vecs = grad_data
+
+    mags = np.linalg.norm(vecs, axis=1)
+    safe_mags = np.maximum(mags[:, None], 1e-12)
+    dirs = (vecs / safe_mags).astype(np.float32)
+
+    quiver_mesh = quiver_obj.data
+    quiver_mesh.clear_geometry()
+    quiver_mesh.from_pydata(pts.tolist(), [], [])
+
+    if "gradient_dir" in quiver_mesh.attributes:
+        attr_dir = quiver_mesh.attributes["gradient_dir"]
+    else:
+        attr_dir = quiver_mesh.attributes.new(
+            name="gradient_dir", type="FLOAT_VECTOR", domain="POINT"
+        )
+    attr_dir.data.foreach_set("vector", dirs.ravel())
+
+    if "gradient_mag" in quiver_mesh.attributes:
+        attr_mag = quiver_mesh.attributes["gradient_mag"]
+    else:
+        attr_mag = quiver_mesh.attributes.new(
+            name="gradient_mag", type="FLOAT", domain="POINT"
+        )
+    attr_mag.data.foreach_set("value", mags.ravel())
+
+    quiver_mesh.update()
+
+    _apply_query_grad_scale_to_object(quiver_obj, props.query_grad_scale)
+    return len(pts)
 
 
 def _apply_query_grad_scale_to_object(quiver_obj, new_scale: float):
@@ -1150,10 +1342,9 @@ def _apply_streamline_radius(streamline_obj, radius):
                 streamline_obj.update_tag()
                 return
 
-        print(
-            f"[Winder] No 'Radius' socket on {streamline_obj.name}'s GN group"
-        )
+        print(f"[Winder] No 'Radius' socket on {streamline_obj.name}'s GN group")
         return
+
 
 def _recompute_streamlines(context, obj):
     props = context.scene.winder_props
@@ -1204,11 +1395,18 @@ def _recompute_streamlines(context, obj):
             seeds = _seed_on_triangles(verts[idxs], n_seeds, rng, jitter_scale)
 
         line_points, line_mags, line_counts = trace_query_streamlines(
-            geom_data, seeds, step_size,
-            int(props.streamline_max_steps), max_length,
-            bounds_min, bounds_max, float(props.streamline_min_grad),
-            float(props.epsilon), -1.0,
-            bool(props.streamline_bidirectional), stream,
+            geom_data,
+            seeds,
+            step_size,
+            int(props.streamline_max_steps),
+            max_length,
+            bounds_min,
+            bounds_max,
+            float(props.streamline_min_grad),
+            float(props.epsilon),
+            -1.0,
+            bool(props.streamline_bidirectional),
+            stream,
             use_fast_engine=use_fast_engine,
         )
 
@@ -1228,13 +1426,10 @@ def _recompute_streamlines(context, obj):
     else:
         if streamline_obj.data is None:
             streamline_obj.data = bpy.data.meshes.new(f"{obj_name}_Mesh")
-        update_mesh_from_lines(
-            streamline_obj.data, line_points, line_mags, line_counts
-        )
+        update_mesh_from_lines(streamline_obj.data, line_points, line_mags, line_counts)
         _ensure_streamline_modifier(streamline_obj, props, diag)
 
     return num_lines
-
 
 
 def update_all_streamlines(self, context):
@@ -1386,6 +1581,7 @@ def _swap_vdb(vol_obj, new_filepath):
         except OSError:
             pass
 
+
 # ---------------------------------------------------------------------------
 # Payload vertex-color material (EEVEE viewport)
 # ---------------------------------------------------------------------------
@@ -1474,6 +1670,7 @@ def remove_payload_color_material(obj):
 
     return True
 
+
 def _extract_padded_payload(obj, mode, pattern="checkerboard", num_cells=None):
     """Read vertex colors as per-triangle RGB, auto-creating them if missing.
 
@@ -1486,7 +1683,7 @@ def _extract_padded_payload(obj, mode, pattern="checkerboard", num_cells=None):
 
     if payload.shape[1] < 3:
         padded = np.zeros((len(payload), 3), dtype=np.float32)
-        padded[:, :payload.shape[1]] = payload
+        padded[:, : payload.shape[1]] = payload
         payload = padded
 
     return payload
@@ -1510,9 +1707,7 @@ def recompute_payload_field(context, obj):
     vol_obj = _get_or_create_payload_vol(context, obj)
 
     with CudaStream() as stream:
-        queries, shape, (min_b, max_b) = get_grid_queries(
-            obj, res=res, padding=padding
-        )
+        queries, shape, (min_b, max_b) = get_grid_queries(obj, res=res, padding=padding)
         queries = queries.reshape([-1, 3])
         num_q = len(queries)
 
@@ -1535,9 +1730,14 @@ def recompute_payload_field(context, obj):
 
         stream.keep_alive(
             compute_payload_field(
-                geom_data, pl_buf, q_buf, out_buf,
-                epsilon=props.epsilon, stream=stream,
-                use_fast_engine=use_fast_engine, use_kahan=True,
+                geom_data,
+                pl_buf,
+                q_buf,
+                out_buf,
+                epsilon=props.epsilon,
+                stream=stream,
+                use_fast_engine=use_fast_engine,
+                use_kahan=True,
             )
         )
 
@@ -1581,9 +1781,7 @@ def recompute_payload_query_gradients(context, obj):
     vol_obj = _get_or_create_payload_grad_vol(context, obj)
 
     with CudaStream() as stream:
-        queries, shape, (min_b, max_b) = get_grid_queries(
-            obj, res=res, padding=padding
-        )
+        queries, shape, (min_b, max_b) = get_grid_queries(obj, res=res, padding=padding)
         queries = queries.reshape([-1, 3])
         num_q = len(queries)
 
@@ -1605,9 +1803,14 @@ def recompute_payload_query_gradients(context, obj):
 
         stream.keep_alive(
             compute_payload_query_gradients_rgb(
-                geom_data, pl_buf, q_buf, out_buf,
-                epsilon=props.epsilon, stream=stream,
-                use_fast_engine=use_fast_engine, use_kahan=True,
+                geom_data,
+                pl_buf,
+                q_buf,
+                out_buf,
+                epsilon=props.epsilon,
+                stream=stream,
+                use_fast_engine=use_fast_engine,
+                use_kahan=True,
             )
         )
 
@@ -1708,12 +1911,21 @@ def recompute_payload_query_streamlines(context, obj):
             seeds = _seed_on_triangles(verts[idxs], n_seeds, rng, jitter_scale)
 
         line_points, line_mags, line_counts = trace_payload_query_streamlines(
-            geom_data, payload_buf, seeds, step_size,
-            int(props.streamline_max_steps), max_length,
-            bounds_min, bounds_max, float(props.streamline_min_grad),
-            float(props.epsilon), -1.0,
-            bool(props.streamline_bidirectional), stream,
-            use_fast_engine=use_fast_engine, use_kahan=True,
+            geom_data,
+            payload_buf,
+            seeds,
+            step_size,
+            int(props.streamline_max_steps),
+            max_length,
+            bounds_min,
+            bounds_max,
+            float(props.streamline_min_grad),
+            float(props.epsilon),
+            -1.0,
+            bool(props.streamline_bidirectional),
+            stream,
+            use_fast_engine=use_fast_engine,
+            use_kahan=True,
         )
 
     num_lines = int(np.sum(line_counts >= 2))
@@ -1732,9 +1944,7 @@ def recompute_payload_query_streamlines(context, obj):
     else:
         if streamline_obj.data is None:
             streamline_obj.data = bpy.data.meshes.new(f"{obj_name}_Mesh")
-        update_mesh_from_lines(
-            streamline_obj.data, line_points, line_mags, line_counts
-        )
+        update_mesh_from_lines(streamline_obj.data, line_points, line_mags, line_counts)
         _ensure_streamline_modifier(streamline_obj, props, diag)
 
     return num_lines
@@ -1820,9 +2030,7 @@ class WM_OT_create_payload_query_streamlines(bpy.types.Operator):
             streamline_obj.select_set(True)
             context.view_layer.objects.active = streamline_obj
 
-        self.report(
-            {"INFO"}, f"Traced {n_lines} payload field lines from {obj.name}"
-        )
+        self.report({"INFO"}, f"Traced {n_lines} payload field lines from {obj.name}")
         return {"FINISHED"}
 
 
@@ -1862,6 +2070,7 @@ class WM_OT_create_payload_query_gradients(bpy.types.Operator):
         )
         return {"FINISHED"}
 
+
 class WM_OT_toggle_payload_colors(bpy.types.Operator):
     bl_idname = "winder.toggle_payload_colors"
     bl_label = "Toggle Payload Vertex Colors"
@@ -1892,6 +2101,7 @@ class WM_OT_toggle_payload_colors(bpy.types.Operator):
                     area.tag_redraw()
 
         return {"FINISHED"}
+
 
 def update_payload_color_pattern(self, context):
     """Regenerate colors on meshes with an active payload visualization."""
@@ -1996,6 +2206,7 @@ class WM_OT_regenerate_payload_colors(bpy.types.Operator):
 _ISO_PENDING: dict[str, float] = {}
 _ISO_TIMER_SCHEDULED = False
 
+
 def _bake_iso_mesh(context, src_obj, vol_obj, threshold):
     """Evaluate the isosurface at `threshold` and return a colored mesh.
 
@@ -2052,9 +2263,7 @@ def _bake_iso_mesh(context, src_obj, vol_obj, threshold):
         payload = _extract_padded_payload(src_obj, props.geometry_mode)
         if len(payload) == 0:
             raise RuntimeError("Empty payload")
-        geom_data = extract_geometry_data(
-            src_obj, props.geometry_mode, stream=stream
-        )
+        geom_data = extract_geometry_data(src_obj, props.geometry_mode, stream=stream)
         stream.keep_alive(geom_data)
 
         pl_buf = CudaBuffer(payload.shape, dtype=np.float32)
@@ -2066,9 +2275,14 @@ def _bake_iso_mesh(context, src_obj, vol_obj, threshold):
 
         stream.keep_alive(
             compute_payload_field(
-                geom_data, pl_buf, q_buf, out_buf,
-                epsilon=props.epsilon, stream=stream,
-                use_fast_engine=props.use_fast_engine, use_kahan=True,
+                geom_data,
+                pl_buf,
+                q_buf,
+                out_buf,
+                epsilon=props.epsilon,
+                stream=stream,
+                use_fast_engine=props.use_fast_engine,
+                use_kahan=True,
             )
         )
 
@@ -2162,6 +2376,7 @@ def _flush_iso_pending():
                     area.tag_redraw()
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         print(f"[Winder] Iso refresh failed for {src_name}: {e}")
     return None
@@ -2214,6 +2429,7 @@ class WM_OT_create_payload_isosurface(bpy.types.Operator):
             iso_obj = _refresh_iso(context, obj, thresh, force_recreate=True)
         except Exception as e:
             import traceback
+
             traceback.print_exc()
             self.report({"ERROR"}, f"Isosurface failed: {e}")
             return {"CANCELLED"}
@@ -2231,3 +2447,53 @@ class WM_OT_create_payload_isosurface(bpy.types.Operator):
         )
         return {"FINISHED"}
 
+
+class WM_OT_create_payload_geometry_gradients(bpy.types.Operator):
+    bl_idname = "winder.create_payload_geometry_gradients"
+    bl_label = "Create Payload Geometry Gradient Quivers"
+    bl_description = (
+        "Visualize the gradient of sum(W) (total payload field, summed over "
+        "all queries and channels) with respect to the source geometry as "
+        "arrows at the primitive positions. Same layout as the winding-"
+        "number geometry-gradient quivers. Requires the brute-force engine; "
+        "the fast (BVH) path is not yet implemented."
+    )
+
+    def execute(self, context):
+        obj = context.active_object
+        if not obj or obj.type != "MESH":
+            self.report({"ERROR"}, "Select a Mesh Object")
+            return {"CANCELLED"}
+
+        try:
+            n = _recompute_payload_geometry_gradients(context, obj)
+        except NotImplementedError:
+            self.report(
+                {"ERROR"},
+                "Fast (BVH) payload geometry gradients are not yet "
+                "implemented. Uncheck 'Use Fast Engine' in the Winder panel "
+                "to use the brute-force path. For large meshes, reduce "
+                "Query Res and Query Grad Stride to keep it tractable.",
+            )
+            return {"CANCELLED"}
+        except Exception as e:
+            self.report({"ERROR"}, f"Payload geometry gradients failed: {e}")
+            return {"CANCELLED"}
+
+        if n == 0:
+            self.report({"WARNING"}, "No arrows generated")
+            return {"CANCELLED"}
+
+        quiver_obj = bpy.data.objects.get(f"PayloadGeomQuiver_{obj.name}")
+        if quiver_obj:
+            bpy.ops.object.select_all(action="DESELECT")
+            quiver_obj.select_set(True)
+            context.view_layer.objects.active = quiver_obj
+
+        props = context.scene.winder_props
+        self.report(
+            {"INFO"},
+            f"Payload geometry gradients: {n} arrows "
+            f"(res={props.query_res}, stride={props.query_grad_stride})",
+        )
+        return {"FINISHED"}

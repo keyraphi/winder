@@ -35,6 +35,7 @@ from .operators import (
     WM_OT_create_query_streamlines,
     WM_OT_regenerate_payload_colors,
     WM_OT_create_payload_isosurface,
+    WM_OT_create_payload_geometry_gradients,
     update_all_streamlines,
     update_streamline_radius,
     update_all_query_gradients,
@@ -357,6 +358,11 @@ class VIEW3D_PT_winder_panel(bpy.types.Panel):
             text="Create Payload Isosurface",
             icon="MESH_ICOSPHERE",
         )
+        box.operator(
+            "winder.create_payload_geometry_gradients",
+            text="Payload Geometry Gradient Quivers",
+            icon="ORIENTATION_NORMAL",
+        )
 
         layout.separator()
         layout.prop(props, "loss_type")
@@ -417,6 +423,7 @@ classes = (
     WM_OT_dump_backward_bvh,
     WM_OT_regenerate_payload_colors,
     WM_OT_create_payload_isosurface,
+    WM_OT_create_payload_geometry_gradients,
 )
 
 
