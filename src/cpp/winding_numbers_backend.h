@@ -86,7 +86,7 @@ private:
   BVH8Node *m_bvh8_nodes; // [~0.2L] The 8-way wide-tree nodes (Quantized AABBs
                           // + Topology)
   TaylorCoefficientsF16
-      *m_tailor_coefficients; // Tailor expansion terms for nodes
+      *m_taylor_coefficients; // Tailor expansion terms for nodes
   TaylorCoefficientsF16 *m_leaf_coefficients; // [L] Taylor expansion terms for
                                               // leaf clusters (half)
 

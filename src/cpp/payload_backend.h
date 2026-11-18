@@ -104,7 +104,7 @@ private:
   LeafPointers *m_bvh8_leaf_pointers;
 
   // --- Payload coefficient arrays ------------------------------------
-  PayloadTaylorCoefficientsF16<D> *m_tailor_coefficients; // [~0.2L]
+  PayloadTaylorCoefficientsF16<D> *m_taylor_coefficients; // [~0.2L]
   PayloadTaylorCoefficientsF16<D> *m_leaf_coefficients;   // [L]
 };
 

@@ -109,8 +109,11 @@ auto computeSceneBounds(const PrimitiveGeometry *geometry, size_t count,
 template <typename T> struct GeometryTraits {
   static constexpr float default_beta = 2.3F;
   static constexpr float default_query_beta = 3.3F;
+  static constexpr float default_gradient_beta = 3.5F;
 };
+
 template <> struct GeometryTraits<Triangle> {
   static constexpr float default_beta = 2.0F;
-  static constexpr float default_query_beta = 2.0F;
+  static constexpr float default_query_beta = 2.5F;
+  static constexpr float default_gradient_beta = 2.3F;
 };

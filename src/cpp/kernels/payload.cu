@@ -39,8 +39,9 @@ void launch_gather_payload(const float *payload, const uint32_t *sort_indices,
                            float *sorted_payload, size_t n_rows,
                            uint32_t payload_dim_user, cudaStream_t stream) {
   const size_t total = n_rows * static_cast<size_t>(D);
-  if (total == 0)
+  if (total == 0) {
     return;
+  }
   constexpr uint32_t threads = 256;
   const auto blocks = static_cast<uint32_t>((total + threads - 1) / threads);
   gather_payload_kernel<D, threads><<<blocks, threads, 0, stream>>>(
@@ -143,16 +144,13 @@ template void gather_payload<64>(const float *, const uint32_t *, float *,
 template void gather_payload<128>(const float *, const uint32_t *, float *,
                                   size_t, uint32_t, cudaStream_t);
 
-__global__ void __launch_bounds__(256)
-    gather_queries_soa_kernel(
-        const float *__restrict__ queries,          // (M, 3) AoS, world-space
-        const uint32_t *__restrict__ sort_indices,  // (M) permutation
-        float *__restrict__ sorted_queries_soa,     // (3 * M) SoA
-        size_t num_queries,
-        SceneNormalization norm) {
+__global__ void __launch_bounds__(256) gather_queries_soa_kernel(
+    const float *__restrict__ queries,         // (M, 3) AoS, world-space
+    const uint32_t *__restrict__ sort_indices, // (M) permutation
+    float *__restrict__ sorted_queries_soa,    // (3 * M) SoA
+    size_t num_queries, SceneNormalization norm) {
 
-  const size_t idx =
-      static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (idx >= num_queries) {
     return;
   }

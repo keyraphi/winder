@@ -81,7 +81,7 @@ PayloadWindingNumbersBackend<Geometry, D>::~PayloadWindingNumbersBackend() {
   FREE_IF(m_binary_aabbs)
   FREE_IF(m_bvh8_node_count)
   FREE_IF(m_bvh8_nodes)
-  FREE_IF(m_tailor_coefficients)
+  FREE_IF(m_taylor_coefficients)
   FREE_IF(m_leaf_coefficients)
   FREE_IF(m_bvh8_leaf_pointers)
 #undef FREE_IF
@@ -117,10 +117,6 @@ PayloadWindingNumbersBackend<Geometry, D>::PayloadWindingNumbersBackend(
   CUDA_CHECK(cudaMallocAsync(&m_bvh8_nodes, max_bvh8_nodes * sizeof(BVH8Node),
                              m_build_stream));
 
-  CUDA_CHECK(
-      cudaMallocAsync(&m_tailor_coefficients,
-                      max_bvh8_nodes * sizeof(PayloadTaylorCoefficientsF16<D>),
-                      m_build_stream));
   CUDA_CHECK(cudaMallocAsync(
       &m_leaf_coefficients,
       leaf_count * sizeof(PayloadTaylorCoefficientsF16<D>), m_build_stream));
@@ -273,10 +269,15 @@ void PayloadWindingNumbersBackend<Geometry, D>::initialize_triangle_data(
       &m2m_f32_coefficients,
       max_bvh8_nodes * sizeof(PayloadTaylorCoefficients<D>), m_build_stream));
 
+  CUDA_CHECK(
+      cudaMallocAsync(&m_taylor_coefficients,
+                      bvh8_node_count * sizeof(PayloadTaylorCoefficientsF16<D>),
+                      m_build_stream));
+
   compute_internal_tailor_coefficients_m2m_payload<D>(
       m_bvh8_nodes, bvh8_internal_parent_map, m_binary_aabbs + leaf_count - 1,
       m_leaf_coefficients, bvh8_leaf_parents, m_bvh8_leaf_pointers,
-      m_tailor_coefficients, m2m_f32_coefficients, bvh8_nodes_child_count,
+      m_taylor_coefficients, m2m_f32_coefficients, bvh8_nodes_child_count,
       leaf_count, atomic_counters, m_build_stream);
 
   CUDA_CHECK(cudaFreeAsync(m2m_f32_coefficients, m_build_stream));
@@ -426,10 +427,15 @@ void PayloadWindingNumbersBackend<Geometry, D>::initialize_point_data(
       &m2m_f32_coefficients,
       max_bvh8_nodes * sizeof(PayloadTaylorCoefficients<D>), m_build_stream));
 
+  CUDA_CHECK(
+      cudaMallocAsync(&m_taylor_coefficients,
+                      bvh8_node_count * sizeof(PayloadTaylorCoefficientsF16<D>),
+                      m_build_stream));
+
   compute_internal_tailor_coefficients_m2m_payload<D>(
       m_bvh8_nodes, bvh8_internal_parent_map, m_binary_aabbs + leaf_count - 1,
       m_leaf_coefficients, bvh8_leaf_parents, m_bvh8_leaf_pointers,
-      m_tailor_coefficients, m2m_f32_coefficients, bvh8_nodes_child_count,
+      m_taylor_coefficients, m2m_f32_coefficients, bvh8_nodes_child_count,
       leaf_count, atomic_counters, m_build_stream);
 
   CUDA_CHECK(cudaFreeAsync(m2m_f32_coefficients, m_build_stream));
@@ -492,7 +498,7 @@ auto PayloadWindingNumbersBackend<Geometry, D>::compute_payload(
       .sort_indirections = queries_to_internal,
       .bvh8_nodes = m_bvh8_nodes,
       .bvh8_leaf_pointers = m_bvh8_leaf_pointers,
-      .node_coefficients = m_tailor_coefficients,
+      .node_coefficients = m_taylor_coefficients,
       .leaf_coefficients = m_leaf_coefficients,
       .leaf_aabbs = m_binary_aabbs + leaf_count - 1,
       .sorted_geometry = SoAView<Geometry>{m_sorted_geometry, m_count},
@@ -507,8 +513,8 @@ auto PayloadWindingNumbersBackend<Geometry, D>::compute_payload(
       .scene_scale = scene_scale,
       .norm = m_norm};
 
-  compute_payload_winding_numbers<Geometry, D>(params, m_device,
-                                               compute_stream, use_kahan);
+  compute_payload_winding_numbers<Geometry, D>(params, m_device, compute_stream,
+                                               use_kahan);
 
   CUDA_CHECK(cudaFreeAsync(queries_to_internal, compute_stream));
   CUDA_CHECK(cudaFreeAsync(global_counter, compute_stream));
@@ -520,8 +526,8 @@ auto PayloadWindingNumbersBackend<Geometry, D>::compute_payload(
 template <IsGeometry Geometry, uint32_t D>
 auto PayloadWindingNumbersBackend<Geometry, D>::compute_payload_query_gradients(
     const float *grad_output, const float *queries, size_t query_count,
-    float *out_query_gradients, float beta, float epsilon, size_t stream, const bool use_kahan) const
-    -> void {
+    float *out_query_gradients, float beta, float epsilon, size_t stream,
+    const bool use_kahan) const -> void {
   if (m_count == 0) {
     return;
   }
@@ -565,7 +571,7 @@ auto PayloadWindingNumbersBackend<Geometry, D>::compute_payload_query_gradients(
       .sort_indirections = queries_to_internal,
       .bvh8_nodes = m_bvh8_nodes,
       .bvh8_leaf_pointers = m_bvh8_leaf_pointers,
-      .node_coefficients = m_tailor_coefficients,
+      .node_coefficients = m_taylor_coefficients,
       .leaf_coefficients = m_leaf_coefficients,
       .leaf_aabbs = m_binary_aabbs + leaf_count - 1,
       .sorted_geometry = SoAView<Geometry>{m_sorted_geometry, m_count},
@@ -861,7 +867,7 @@ auto PayloadWindingNumbersBackend<Geometry, D>::dump() const -> std::string {
                         cudaMemcpyDeviceToHost));
 
   std::vector<PayloadTaylorCoefficientsF16<D>> node_coefficients(node_count);
-  CUDA_CHECK(cudaMemcpy(node_coefficients.data(), m_tailor_coefficients,
+  CUDA_CHECK(cudaMemcpy(node_coefficients.data(), m_taylor_coefficients,
                         sizeof(PayloadTaylorCoefficientsF16<D>) * node_count,
                         cudaMemcpyDeviceToHost));
 

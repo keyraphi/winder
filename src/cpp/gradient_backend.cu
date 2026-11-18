@@ -78,9 +78,6 @@ GradientBackend::GradientBackend(size_t query_count, int device_id,
                              m_build_stream));
   CUDA_CHECK(cudaMallocAsync(&m_bvh8_nodes, max_bvh8_nodes * sizeof(BVH8Node),
                              m_build_stream));
-  CUDA_CHECK(cudaMallocAsync(
-      &m_taylor_coefficients,
-      max_bvh8_nodes * sizeof(BackwardTaylorCoefficients), m_build_stream));
   CUDA_CHECK(cudaMallocAsync(&m_bvh8_leaf_pointers,
                              max_bvh8_nodes * sizeof(LeafPointers),
                              m_build_stream));
@@ -271,6 +268,11 @@ void GradientBackend::init(const float *queries, const float *grad_outputs) {
   CUDA_CHECK(cudaMallocAsync(
       &atomic_counters, (leaf_count - 1) * sizeof(uint32_t), m_build_stream));
   thrust::fill_n(build_stream_policy, atomic_counters, leaf_count - 1, 0);
+
+  CUDA_CHECK(cudaMallocAsync(
+      &m_taylor_coefficients,
+      bvh8_node_count * sizeof(BackwardTaylorCoefficients), m_build_stream));
+
   compute_internal_tailor_coefficients_m2m_backward(
       m_bvh8_nodes, bvh8_internal_parent_map, m_binary_aabbs + leaf_count - 1,
       leaf_coefficients, bvh8_leaf_parents, m_bvh8_leaf_pointers,
@@ -328,7 +330,7 @@ auto GradientBackend::compute(const float *points, const float *scaled_normals,
       cudaStreamWaitEvent(compute_stream, m_tree_construction_finished_event));
 
   if (beta < 0.F) {
-    beta = 2.3;
+    beta = GeometryTraits<PointNormal>::default_gradient_beta;
   }
   epsilon = std::max(0.F, epsilon);
   float scene_scale = max_dim * m_norm.scale;
@@ -368,7 +370,8 @@ auto GradientBackend::compute(const float *points, const float *scaled_normals,
   CUDA_CHECK(cudaFreeAsync(geometry_to_internal, compute_stream));
   CUDA_CHECK(cudaFreeAsync(global_counter, compute_stream));
 
-  reduce_async(epsilon_gradients, epsilon_gradient, geometry_count, compute_stream);
+  reduce_async(epsilon_gradients, epsilon_gradient, geometry_count,
+               compute_stream);
   CUDA_CHECK(cudaFreeAsync(epsilon_gradients, compute_stream));
 }
 
@@ -412,7 +415,7 @@ auto GradientBackend::compute(const float *triangles_float,
       cudaStreamWaitEvent(compute_stream, m_tree_construction_finished_event));
 
   if (beta < 0.F) {
-    beta = 2.3;
+    beta = GeometryTraits<Triangle>::default_gradient_beta;
   }
   epsilon = std::max(0.F, epsilon);
   float scene_scale = max_dim * m_norm.scale;
@@ -451,15 +454,17 @@ auto GradientBackend::compute(const float *triangles_float,
   CUDA_CHECK(cudaFreeAsync(geometry_to_internal, compute_stream));
   CUDA_CHECK(cudaFreeAsync(global_counter, compute_stream));
 
-  reduce_async(epsilon_gradients, epsilon_gradient, geometry_count, compute_stream);
+  reduce_async(epsilon_gradients, epsilon_gradient, geometry_count,
+               compute_stream);
   CUDA_CHECK(cudaFreeAsync(epsilon_gradients, compute_stream));
 }
 
 auto GradientBackend::compute(const float *vertices,
                               const uint32_t *triangle_indices,
                               size_t vertex_count, size_t geometry_count,
-                              float *vertex_gradients, float* epsilon_gradient, float beta,
-                              float epsilon, uint64_t stream) -> void {
+                              float *vertex_gradients, float *epsilon_gradient,
+                              float beta, float epsilon, uint64_t stream)
+    -> void {
   if (m_query_count == 0) {
     return;
   }
@@ -480,8 +485,8 @@ auto GradientBackend::compute(const float *vertices,
   CUDA_CHECK(cudaMallocAsync(
       &triangle_gradients, geometry_count * sizeof(Triangle), compute_stream));
 
-  this->compute(triangles, geometry_count, triangle_gradients, epsilon_gradient, beta, epsilon,
-                stream);
+  this->compute(triangles, geometry_count, triangle_gradients, epsilon_gradient,
+                beta, epsilon, stream);
   CUDA_CHECK(cudaFreeAsync(triangles, compute_stream));
 
   CUDA_CHECK(cudaMemsetAsync(vertex_gradients, 0,

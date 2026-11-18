@@ -2404,7 +2404,7 @@ __global__ void compute_payload_point_normal_gradient_single_leaf_kernel(
         Vec3::load(params.sorted_queries, threadIdx.x, params.query_count);
     const float *g =
         params.sorted_grad_outputs + static_cast<size_t>(threadIdx.x) * D;
-#pragma unroll 4
+// #pragma unroll 4
     for (uint32_t c = 0; c < D; ++c) {
       shared_grad_outputs[threadIdx.x][c] = g[c];
     }
@@ -2430,7 +2430,7 @@ __global__ void compute_payload_point_normal_gradient_single_leaf_kernel(
   for (uint32_t i = 0; i < params.query_count; ++i) {
     float g_hat = 0.F;
     const float *g_i = shared_grad_outputs[i];
-#pragma unroll 4
+// #pragma unroll 4
     for (uint32_t c = 0; c < D; ++c) {
       g_hat += g_i[c] * my_payload[c];
     }
@@ -2490,7 +2490,7 @@ __launch_bounds__(128) compute_payload_point_normal_gradient_kernel(
     if (my_geometry_idx >= params.geometry_count) {
       my_required_stack_depth = -1;
       if constexpr (use_shared_payload_cache<D>()) {
-#pragma unroll 4
+// #pragma unroll 4
         for (uint32_t c = 0; c < D; ++c) {
           shared_payload_cache[threadIdx.x * D + c] = 0.F;
         }
@@ -2503,7 +2503,7 @@ __launch_bounds__(128) compute_payload_point_normal_gradient_kernel(
       if constexpr (use_shared_payload_cache<D>()) {
         const float *src =
             params.sorted_payload + static_cast<size_t>(my_geometry_idx) * D;
-#pragma unroll 4
+// #pragma unroll 4
         for (uint32_t c = 0; c < D; ++c) {
           shared_payload_cache[threadIdx.x * D + c] = src[c];
         }
@@ -2571,7 +2571,7 @@ __launch_bounds__(128) compute_payload_point_normal_gradient_kernel(
             params.sorted_payload + static_cast<size_t>(my_geometry_idx) * D;
         const uint32_t cache_base = threadIdx.x * D;
 
-#pragma unroll 4
+// #pragma unroll 4
         for (uint32_t c = 0; c < D; ++c) {
           const float v_c = use_shared_payload_cache<D>()
                                 ? shared_payload_cache[cache_base + c]
@@ -2580,7 +2580,7 @@ __launch_bounds__(128) compute_payload_point_normal_gradient_kernel(
           G_1.x += v_c * coeffs.first_order[c].x;
           G_1.y += v_c * coeffs.first_order[c].y;
           G_1.z += v_c * coeffs.first_order[c].z;
-#pragma unroll
+ #pragma unroll
           for (int k = 0; k < 6; ++k) {
             G_2.data[k] += v_c * coeffs.second_order[c].data[k];
           }
@@ -2637,7 +2637,7 @@ __launch_bounds__(128) compute_payload_point_normal_gradient_kernel(
               const uint32_t cache_base = threadIdx.x * D;
 
               float g_hat = 0.F;
-#pragma unroll 4
+// #pragma unroll 4
               for (uint32_t c = 0; c < D; ++c) {
                 const float v_c = use_shared_payload_cache<D>()
                                       ? shared_payload_cache[cache_base + c]
@@ -2844,7 +2844,6 @@ __global__ void compute_payload_triangle_gradient_single_leaf_kernel(
         Vec3::load(params.sorted_queries, threadIdx.x, params.query_count);
     const float *g =
         params.sorted_grad_outputs + static_cast<size_t>(threadIdx.x) * D;
-#pragma unroll 4
     for (uint32_t c = 0; c < D; ++c) {
       shared_grad_outputs[threadIdx.x][c] = g[c];
     }
@@ -2871,7 +2870,6 @@ __global__ void compute_payload_triangle_gradient_single_leaf_kernel(
   for (uint32_t i = 0; i < params.query_count; ++i) {
     float g_hat = 0.F;
     const float *g_i = shared_grad_outputs[i];
-#pragma unroll 4
     for (uint32_t c = 0; c < D; ++c) {
       g_hat += g_i[c] * my_payload[c];
     }
@@ -2930,7 +2928,7 @@ __global__ void __launch_bounds__(128) compute_payload_triangle_gradient_kernel(
       shared_warp_geometry[warp_id][lane_id] =
           Triangle{.v0 = Vec3::zero(), .v1 = Vec3::zero(), .v2 = Vec3::zero()};
       if constexpr (use_shared_payload_cache_triangle<D>()) {
-#pragma unroll 4
+// #pragma unroll 4
         for (uint32_t c = 0; c < D; ++c) {
           shared_payload_cache[threadIdx.x * D + c] = 0.F;
         }
@@ -2943,7 +2941,6 @@ __global__ void __launch_bounds__(128) compute_payload_triangle_gradient_kernel(
       if constexpr (use_shared_payload_cache_triangle<D>()) {
         const float *src =
             params.sorted_payload + static_cast<size_t>(my_geometry_idx) * D;
-#pragma unroll 4
         for (uint32_t c = 0; c < D; ++c) {
           shared_payload_cache[threadIdx.x * D + c] = src[c];
         }
@@ -3014,7 +3011,7 @@ __global__ void __launch_bounds__(128) compute_payload_triangle_gradient_kernel(
             params.sorted_payload + static_cast<size_t>(my_geometry_idx) * D;
         const uint32_t cache_base = threadIdx.x * D;
 
-#pragma unroll 4
+// #pragma unroll 4
         for (uint32_t c = 0; c < D; ++c) {
           const float v_c = use_shared_payload_cache_triangle<D>()
                                 ? shared_payload_cache[cache_base + c]
@@ -3080,7 +3077,7 @@ __global__ void __launch_bounds__(128) compute_payload_triangle_gradient_kernel(
               const uint32_t cache_base = threadIdx.x * D;
 
               float g_hat = 0.F;
-#pragma unroll 4
+// #pragma unroll 4
               for (uint32_t c = 0; c < D; ++c) {
                 const float v_c = use_shared_payload_cache_triangle<D>()
                                       ? shared_payload_cache[cache_base + c]

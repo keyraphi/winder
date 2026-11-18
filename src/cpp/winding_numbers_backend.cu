@@ -111,9 +111,9 @@ WindingNumbersBackend<Geometry>::~WindingNumbersBackend() {
     CUDA_CHECK(cudaFreeAsync(m_bvh8_nodes, m_build_stream));
     m_bvh8_nodes = nullptr;
   }
-  if (m_tailor_coefficients != nullptr) {
-    CUDA_CHECK(cudaFreeAsync(m_tailor_coefficients, m_build_stream));
-    m_tailor_coefficients = nullptr;
+  if (m_taylor_coefficients != nullptr) {
+    CUDA_CHECK(cudaFreeAsync(m_taylor_coefficients, m_build_stream));
+    m_taylor_coefficients = nullptr;
   }
   if (m_leaf_coefficients != nullptr) {
     CUDA_CHECK(cudaFreeAsync(m_leaf_coefficients, m_build_stream));
@@ -152,9 +152,6 @@ WindingNumbersBackend<Geometry>::WindingNumbersBackend(size_t size,
   CUDA_CHECK(cudaMallocAsync(&m_bvh8_node_count, 1 * sizeof(uint32_t),
                              m_build_stream));
   CUDA_CHECK(cudaMallocAsync(&m_bvh8_nodes, max_bvh8_nodes * sizeof(BVH8Node),
-                             m_build_stream));
-  CUDA_CHECK(cudaMallocAsync(&m_tailor_coefficients,
-                             max_bvh8_nodes * sizeof(TaylorCoefficientsF16),
                              m_build_stream));
   CUDA_CHECK(cudaMallocAsync(&m_leaf_coefficients,
                              leaf_count * sizeof(TaylorCoefficientsF16),
@@ -297,10 +294,15 @@ void WindingNumbersBackend<Triangle>::initialize_triangle_data(
   CUDA_CHECK(cudaMallocAsync(&m2m_f32_coefficients,
                              max_bvh8_nodes * sizeof(TaylorCoefficients),
                              m_build_stream));
+
+  CUDA_CHECK(cudaMallocAsync(&m_taylor_coefficients,
+                             bvh8_node_count * sizeof(TaylorCoefficientsF16),
+                             m_build_stream));
+
   compute_internal_tailor_coefficients_m2m(
       m_bvh8_nodes, bvh8_internal_parent_map, m_binary_aabbs + leaf_count - 1,
       m_leaf_coefficients, bvh8_leaf_parents, m_bvh8_leaf_pointers,
-      m_tailor_coefficients, m2m_f32_coefficients, bvh8_nodes_child_count,
+      m_taylor_coefficients, m2m_f32_coefficients, bvh8_nodes_child_count,
       leaf_count, atomic_counters, m_build_stream);
 
   CUDA_CHECK(cudaFreeAsync(m2m_f32_coefficients, m_build_stream));
@@ -446,10 +448,15 @@ void WindingNumbersBackend<PointNormal>::initialize_point_data(
   CUDA_CHECK(cudaMallocAsync(&m2m_f32_coefficients,
                              max_bvh8_nodes * sizeof(TaylorCoefficients),
                              m_build_stream));
+
+  CUDA_CHECK(cudaMallocAsync(&m_taylor_coefficients,
+                             bvh8_node_count * sizeof(TaylorCoefficientsF16),
+                             m_build_stream));
+
   compute_internal_tailor_coefficients_m2m(
       m_bvh8_nodes, bvh8_internal_parent_map, m_binary_aabbs + leaf_count - 1,
       m_leaf_coefficients, bvh8_leaf_parents, m_bvh8_leaf_pointers,
-      m_tailor_coefficients, m2m_f32_coefficients, bvh8_nodes_child_count,
+      m_taylor_coefficients, m2m_f32_coefficients, bvh8_nodes_child_count,
       leaf_count, atomic_counters, m_build_stream);
 
   CUDA_CHECK(cudaFreeAsync(m2m_f32_coefficients, m_build_stream));
@@ -493,8 +500,10 @@ auto WindingNumbersBackend<Geometry>::compute(const float *queries,
   // sort queries by morton code, scaled with bvh8s aabb
   thrust::transform(compute_stream_policy, queries_vec3,
                     queries_vec3 + query_count, queries_morton,
-                    GeometryToMorton<Vec3>{.scale = m_norm.scale,
-                                           .min_p = m_norm.min_p,});
+                    GeometryToMorton<Vec3>{
+                        .scale = m_norm.scale,
+                        .min_p = m_norm.min_p,
+                    });
 
   thrust::sequence(compute_stream_policy, queries_to_internal,
                    queries_to_internal + query_count);
@@ -523,7 +532,7 @@ auto WindingNumbersBackend<Geometry>::compute(const float *queries,
       queries_to_internal,
       m_bvh8_nodes,
       m_bvh8_leaf_pointers,
-      m_tailor_coefficients,
+      m_taylor_coefficients,
       m_leaf_coefficients,
       m_binary_aabbs + leaf_count - 1,
       SoAView<Geometry>{m_sorted_geometry, m_count},
@@ -574,9 +583,10 @@ auto WindingNumbersBackend<Geometry>::compute_query_gradients(
                              compute_stream));
 
   // sort queries by morton code, scaled with bvh8s aabb
-  thrust::transform(compute_stream_policy, queries_vec3,
-                    queries_vec3 + query_count, queries_morton,
-                    GeometryToMorton<Vec3>{.scale=m_norm.scale, .min_p=m_norm.min_p});
+  thrust::transform(
+      compute_stream_policy, queries_vec3, queries_vec3 + query_count,
+      queries_morton,
+      GeometryToMorton<Vec3>{.scale = m_norm.scale, .min_p = m_norm.min_p});
 
   thrust::sequence(compute_stream_policy, queries_to_internal,
                    queries_to_internal + query_count);
@@ -605,7 +615,7 @@ auto WindingNumbersBackend<Geometry>::compute_query_gradients(
       .sort_indirections = queries_to_internal,
       .bvh8_nodes = m_bvh8_nodes,
       .bvh8_leaf_pointers = m_bvh8_leaf_pointers,
-      .node_coefficients = m_tailor_coefficients,
+      .node_coefficients = m_taylor_coefficients,
       .leaf_coefficients = m_leaf_coefficients,
       .leaf_aabbs = m_binary_aabbs + leaf_count - 1,
       .sorted_geometry = SoAView<Geometry>{m_sorted_geometry, m_count},
@@ -782,7 +792,7 @@ auto WindingNumbersBackend<Geometry>::dump() const -> std::string {
 
   // Pull unpacked values into your local host stack tracking vector
   std::vector<TaylorCoefficientsF16> node_coefficients(node_count);
-  CUDA_CHECK(cudaMemcpy(node_coefficients.data(), m_tailor_coefficients,
+  CUDA_CHECK(cudaMemcpy(node_coefficients.data(), m_taylor_coefficients,
                         sizeof(TaylorCoefficientsF16) * node_count,
                         cudaMemcpyDeviceToHost));
 
