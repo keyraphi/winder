@@ -105,6 +105,7 @@ PayloadGradientBackend<Geometry, D>::~PayloadGradientBackend() {
   FREE_IF(m_bvh8_node_count)
   FREE_IF(m_bvh8_nodes)
   FREE_IF(m_bvh8_leaf_pointers)
+  FREE_IF(m_leaf_coefficients)
   FREE_IF(m_taylor_coefficients)
 #undef FREE_IF
 
@@ -174,9 +175,8 @@ void PayloadGradientBackend<Geometry, D>::init(const float *queries,
   CUDA_CHECK(cudaFreeAsync(leaf_morton_codes, m_build_stream));
 
   // ---------- Leaf coefficients (D-channel backward payload) ----------
-  BackwardPayloadTaylorCoefficients<D> *leaf_coefficients;
   CUDA_CHECK(
-      cudaMallocAsync(&leaf_coefficients,
+      cudaMallocAsync(&m_leaf_coefficients,
                       leaf_count * sizeof(BackwardPayloadTaylorCoefficients<D>),
                       m_build_stream));
 
@@ -186,7 +186,7 @@ void PayloadGradientBackend<Geometry, D>::init(const float *queries,
   thrust::fill_n(build_stream_policy, atomic_weights, leaf_count - 1, 0.F);
 
   populate_binary_tree_aabb_and_leaf_coefficients_backward_payload<D>(
-      m_sorted_queries, m_sorted_grad_outputs_bucket, leaf_coefficients,
+      m_sorted_queries, m_sorted_grad_outputs_bucket, m_leaf_coefficients,
       leaf_count, binary_nodes, m_binary_aabbs, binary_parents, atomic_weights,
       m_query_count, m_build_stream);
 
@@ -265,11 +265,10 @@ void PayloadGradientBackend<Geometry, D>::init(const float *queries,
 
   compute_internal_tailor_coefficients_m2m_backward_payload<D>(
       m_bvh8_nodes, bvh8_internal_parent_map, m_binary_aabbs + leaf_count - 1,
-      leaf_coefficients, bvh8_leaf_parents, m_bvh8_leaf_pointers,
+      m_leaf_coefficients, bvh8_leaf_parents, m_bvh8_leaf_pointers,
       m_taylor_coefficients, bvh8_nodes_child_count, leaf_count,
       atomic_counters, m_build_stream);
 
-  CUDA_CHECK(cudaFreeAsync(leaf_coefficients, m_build_stream));
   CUDA_CHECK(cudaFreeAsync(atomic_counters, m_build_stream));
   CUDA_CHECK(cudaFreeAsync(bvh8_internal_parent_map, m_build_stream));
   CUDA_CHECK(cudaFreeAsync(bvh8_leaf_parents, m_build_stream));
@@ -325,6 +324,10 @@ auto PayloadGradientBackend<Geometry, D>::compute(
       &sorted_payload, geometry_count * D * sizeof(float), compute_stream));
   gather_payload<D>(payload, geometry_to_internal, sorted_payload,
                     geometry_count, m_payload_dim_user, compute_stream);
+  // TODO Why though? Should we really do this - we don't do it with the
+  // geometry. It is only read once in the traversal kerenel, so even a SoA view
+  // wouldn't help - and we don't even use that. We just do the padding.
+  // Task: Check the kernel - what would change if payload would not be aligned ot D?
 
   // ---------- Wait for tree ----------
   CUDA_CHECK(
@@ -351,6 +354,7 @@ auto PayloadGradientBackend<Geometry, D>::compute(
       .sort_indirections = geometry_to_internal,
       .bvh8_nodes = m_bvh8_nodes,
       .bvh8_leaf_pointers = m_bvh8_leaf_pointers,
+      .leaf_coefficients = m_leaf_coefficients,
       .node_coefficients = m_taylor_coefficients,
       .leaf_aabbs = m_binary_aabbs + leaf_count - 1,
       .sorted_queries =
@@ -449,6 +453,7 @@ auto PayloadGradientBackend<Geometry, D>::compute(
       .sort_indirections = geometry_to_internal,
       .bvh8_nodes = m_bvh8_nodes,
       .bvh8_leaf_pointers = m_bvh8_leaf_pointers,
+      .leaf_coefficients = m_leaf_coefficients,
       .node_coefficients = m_taylor_coefficients,
       .leaf_aabbs = m_binary_aabbs + leaf_count - 1,
       .sorted_queries =

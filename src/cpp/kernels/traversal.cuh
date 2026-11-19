@@ -160,6 +160,7 @@ template <uint32_t D> struct ComputePayloadGradientsPointNormalParams {
   const uint32_t *sort_indirections;
   const BVH8Node *bvh8_nodes;
   const LeafPointers *bvh8_leaf_pointers;
+  const BackwardPayloadTaylorCoefficients<D> *leaf_coefficients;
   const BackwardPayloadTaylorCoefficients<D> *node_coefficients;
   const AABB *leaf_aabbs;
   const SoAView<Vec3> sorted_queries;
@@ -182,6 +183,7 @@ template <uint32_t D> struct ComputePayloadGradientsTriangleParams {
   const uint32_t *sort_indirections;
   const BVH8Node *bvh8_nodes;
   const LeafPointers *bvh8_leaf_pointers;
+  const BackwardPayloadTaylorCoefficients<D> *leaf_coefficients;
   const BackwardPayloadTaylorCoefficients<D> *node_coefficients;
   const AABB *leaf_aabbs;
   const SoAView<Vec3> sorted_queries;

@@ -2371,6 +2371,7 @@ template <uint32_t D> struct PointNormalPayloadGradientKernelParams {
   const uint32_t *sort_indirections;
   const BVH8Node *bvh8_nodes;
   const LeafPointers *bvh8_leaf_pointers;
+  const BackwardPayloadTaylorCoefficients<D> *leaf_coefficients;
   const BackwardPayloadTaylorCoefficients<D> *node_coefficients;
   const AABB *leaf_aabbs;
   const float *sorted_payload;
@@ -2404,7 +2405,7 @@ __global__ void compute_payload_point_normal_gradient_single_leaf_kernel(
         Vec3::load(params.sorted_queries, threadIdx.x, params.query_count);
     const float *g =
         params.sorted_grad_outputs + static_cast<size_t>(threadIdx.x) * D;
-// #pragma unroll 4
+    // #pragma unroll 4
     for (uint32_t c = 0; c < D; ++c) {
       shared_grad_outputs[threadIdx.x][c] = g[c];
     }
@@ -2430,7 +2431,7 @@ __global__ void compute_payload_point_normal_gradient_single_leaf_kernel(
   for (uint32_t i = 0; i < params.query_count; ++i) {
     float g_hat = 0.F;
     const float *g_i = shared_grad_outputs[i];
-// #pragma unroll 4
+    // #pragma unroll 4
     for (uint32_t c = 0; c < D; ++c) {
       g_hat += g_i[c] * my_payload[c];
     }
@@ -2466,6 +2467,7 @@ __launch_bounds__(128) compute_payload_point_normal_gradient_kernel(
   __shared__ BackwardPayloadTaylorCoefficients<D>
       current_taylor_coefficients_cache[4];
   __shared__ LeafPointers shared_leaf_ptrs[4];
+  __shared__ PointNormal shared_warp_geometry[4][32];
   __shared__ float shared_payload_cache[shared_payload_capacity<D>()];
 
   uint32_t warp_tile_base;
@@ -2484,32 +2486,35 @@ __launch_bounds__(128) compute_payload_point_normal_gradient_kernel(
 
     uint32_t my_geometry_idx = warp_tile_base + lane_id;
 
-    PointNormal my_geometry{Vec3::zero(), Vec3::zero()};
-    uint32_t original_geometry_idx = 0xFFFFFFFF;
-
     if (my_geometry_idx >= params.geometry_count) {
       my_required_stack_depth = -1;
+      shared_warp_geometry[warp_id][lane_id] =
+          PointNormal{.p = Vec3::zero(), .n = Vec3::zero()};
       if constexpr (use_shared_payload_cache<D>()) {
-// #pragma unroll 4
+        // #pragma unroll 4
         for (uint32_t c = 0; c < D; ++c) {
           shared_payload_cache[threadIdx.x * D + c] = 0.F;
         }
       }
     } else {
-      original_geometry_idx = params.sort_indirections[my_geometry_idx];
-      my_geometry = params.norm.to_normalized(
-          PointNormal{.p = params.points[original_geometry_idx],
-                      .n = params.normals[original_geometry_idx]});
+      const uint32_t original_geometry_idx =
+          params.sort_indirections[my_geometry_idx];
+      shared_warp_geometry[warp_id][lane_id] =
+          params.norm.to_normalized(PointNormal{
+              .p = params.points[original_geometry_idx],
+              .n = params.normals[original_geometry_idx],
+          });
       if constexpr (use_shared_payload_cache<D>()) {
         const float *src =
             params.sorted_payload + static_cast<size_t>(my_geometry_idx) * D;
-// #pragma unroll 4
+        // #pragma unroll 4
         for (uint32_t c = 0; c < D; ++c) {
           shared_payload_cache[threadIdx.x * D + c] = src[c];
         }
       }
     }
 
+    // Note: If no Kahan is used the compiler will not use the compensations
     PointNormal my_gradient{.p = Vec3::zero(), .n = Vec3::zero()};
     PointNormal geo_compensation{.p = Vec3::zero(), .n = Vec3::zero()};
     float my_epsilon = 0.F;
@@ -2548,8 +2553,9 @@ __launch_bounds__(128) compute_payload_point_normal_gradient_kernel(
 
       bool need_taylor_coefficients =
           is_active &&
-          should_node_be_approximated(my_geometry, current_node.getAABB(),
-                                      params.beta, params.reg_context);
+          should_node_be_approximated(shared_warp_geometry[warp_id][lane_id],
+                                      current_node.getAABB(), params.beta,
+                                      params.reg_context);
 
       uint32_t load_taylor_coefficients_mask =
           __ballot_sync(0xFFFFFFFF, need_taylor_coefficients);
@@ -2571,7 +2577,7 @@ __launch_bounds__(128) compute_payload_point_normal_gradient_kernel(
             params.sorted_payload + static_cast<size_t>(my_geometry_idx) * D;
         const uint32_t cache_base = threadIdx.x * D;
 
-// #pragma unroll 4
+        // #pragma unroll 4
         for (uint32_t c = 0; c < D; ++c) {
           const float v_c = use_shared_payload_cache<D>()
                                 ? shared_payload_cache[cache_base + c]
@@ -2580,7 +2586,7 @@ __launch_bounds__(128) compute_payload_point_normal_gradient_kernel(
           G_1.x += v_c * coeffs.first_order[c].x;
           G_1.y += v_c * coeffs.first_order[c].y;
           G_1.z += v_c * coeffs.first_order[c].z;
- #pragma unroll
+#pragma unroll
           for (int k = 0; k < 6; ++k) {
             G_2.data[k] += v_c * coeffs.second_order[c].data[k];
           }
@@ -2588,7 +2594,8 @@ __launch_bounds__(128) compute_payload_point_normal_gradient_kernel(
 
         PointNormal approx_grad_contribution =
             compute_node_gradient_approximation(
-                my_geometry, parent_aabb.center_of_mass, G_0, G_1, G_2);
+                shared_warp_geometry[warp_id][lane_id],
+                parent_aabb.center_of_mass, G_0, G_1, G_2);
         accum_point_normal<UseKahan>(my_gradient, approx_grad_contribution,
                                      geo_compensation);
 
@@ -2619,7 +2626,59 @@ __launch_bounds__(128) compute_payload_point_normal_gradient_kernel(
         if (child_type == ChildType::LEAF) {
           uint32_t leaf_idx = shared_leaf_ptrs[warp_id].indices[child_idx];
 
-          if (is_still_active) {
+          AABB child_aabb = params.leaf_aabbs[leaf_idx];
+          bool need_taylor_coefficients =
+              is_still_active &&
+              should_node_be_approximated(
+                  shared_warp_geometry[warp_id][lane_id], child_aabb,
+                  params.beta, params.reg_context);
+          uint32_t needs_taylor_coefficients_mask =
+              __ballot_sync(0xFFFFFFFF, need_taylor_coefficients);
+
+          if (needs_taylor_coefficients_mask > 0) {
+            load_shared_cooperative<BackwardPayloadTaylorCoefficients<D>>(
+                &current_taylor_coefficients_cache[warp_id],
+                params.leaf_coefficients + leaf_idx, lane_id);
+            __syncwarp();
+          }
+          bool is_detail_eval_needed = true;
+          if (need_taylor_coefficients) {
+            const auto &coeffs = current_taylor_coefficients_cache[warp_id];
+
+            float G_0 = 0.F;
+            Vec3 G_1 = Vec3::zero();
+            SymMat3x3 G_2 = {0.F, 0.F, 0.F, 0.F, 0.F, 0.F};
+
+            const float *my_payload_ptr =
+                params.sorted_payload +
+                static_cast<size_t>(my_geometry_idx) * D;
+            const uint32_t cache_base = threadIdx.x * D;
+
+            // #pragma unroll 4
+            for (uint32_t c = 0; c < D; ++c) {
+              const float v_c = use_shared_payload_cache<D>()
+                                    ? shared_payload_cache[cache_base + c]
+                                    : my_payload_ptr[c];
+              G_0 += v_c * coeffs.zero_order[c];
+              G_1.x += v_c * coeffs.first_order[c].x;
+              G_1.y += v_c * coeffs.first_order[c].y;
+              G_1.z += v_c * coeffs.first_order[c].z;
+#pragma unroll
+              for (int k = 0; k < 6; ++k) {
+                G_2.data[k] += v_c * coeffs.second_order[c].data[k];
+              }
+            }
+
+            PointNormal approx_grad_contribution =
+                compute_node_gradient_approximation(
+                    shared_warp_geometry[warp_id][lane_id],
+                    child_aabb.center_of_mass, G_0, G_1, G_2);
+            accum_point_normal<UseKahan>(my_gradient, approx_grad_contribution,
+                                         geo_compensation);
+            is_detail_eval_needed = false;
+          }
+
+          if (is_detail_eval_needed) {
             for (uint32_t query_counter = 0; query_counter < LEAF_SIZE;
                  ++query_counter) {
               uint32_t query_idx = query_counter + leaf_idx * LEAF_SIZE;
@@ -2637,7 +2696,7 @@ __launch_bounds__(128) compute_payload_point_normal_gradient_kernel(
               const uint32_t cache_base = threadIdx.x * D;
 
               float g_hat = 0.F;
-// #pragma unroll 4
+              // #pragma unroll 4
               for (uint32_t c = 0; c < D; ++c) {
                 const float v_c = use_shared_payload_cache<D>()
                                       ? shared_payload_cache[cache_base + c]
@@ -2646,8 +2705,9 @@ __launch_bounds__(128) compute_payload_point_normal_gradient_kernel(
               }
 
               GeometryGradient<PointNormal> grad_contribution =
-                  my_geometry.gradContributionOfQuery(query, g_hat,
-                                                      params.reg_context);
+                  shared_warp_geometry[warp_id][lane_id]
+                      .gradContributionOfQuery(query, g_hat,
+                                               params.reg_context);
               accum_point_normal<UseKahan>(
                   my_gradient, grad_contribution.geometry, geo_compensation);
               accum_float<UseKahan>(my_epsilon, grad_contribution.epsilon,
@@ -2667,6 +2727,9 @@ __launch_bounds__(128) compute_payload_point_normal_gradient_kernel(
     }
 
     if (my_required_stack_depth >= 0) {
+      const uint32_t original_geometry_idx =
+          params.sort_indirections[my_geometry_idx];
+
       params.gradients[original_geometry_idx * 6 + 0] =
           my_gradient.n.x * params.norm.scale2;
       params.gradients[original_geometry_idx * 6 + 1] =
@@ -2679,6 +2742,7 @@ __launch_bounds__(128) compute_payload_point_normal_gradient_kernel(
           my_gradient.p.y * params.norm.scale;
       params.gradients[original_geometry_idx * 6 + 5] =
           my_gradient.p.z * params.norm.scale;
+
       params.epsilon_gradients[original_geometry_idx] = my_epsilon;
     }
   }
@@ -2703,6 +2767,7 @@ void compute_payload_point_normal_gradients(
       .sort_indirections = params.sort_indirections,
       .bvh8_nodes = params.bvh8_nodes,
       .bvh8_leaf_pointers = params.bvh8_leaf_pointers,
+      .leaf_coefficients = params.leaf_coefficients,
       .node_coefficients = params.node_coefficients,
       .leaf_aabbs = params.leaf_aabbs,
       .sorted_payload = params.sorted_payload,
@@ -2798,7 +2863,8 @@ template void compute_payload_point_normal_gradients<128>(
 
 template <uint32_t D>
 constexpr auto use_shared_payload_cache_triangle() -> bool {
-  return D <= 32;
+  return D <= 64; // TODO was 32 - profiler run 5
+  // return D <= 128; // Needs too much shared memory
 }
 
 template <uint32_t D>
@@ -2811,6 +2877,7 @@ template <uint32_t D> struct TrianglePayloadGradientKernelParams {
   const uint32_t *sort_indirections;
   const BVH8Node *bvh8_nodes;
   const LeafPointers *bvh8_leaf_pointers;
+  const BackwardPayloadTaylorCoefficients<D> *leaf_coefficients;
   const BackwardPayloadTaylorCoefficients<D> *node_coefficients;
   const AABB *leaf_aabbs;
   const float *sorted_payload;
@@ -2928,7 +2995,7 @@ __global__ void __launch_bounds__(128) compute_payload_triangle_gradient_kernel(
       shared_warp_geometry[warp_id][lane_id] =
           Triangle{.v0 = Vec3::zero(), .v1 = Vec3::zero(), .v2 = Vec3::zero()};
       if constexpr (use_shared_payload_cache_triangle<D>()) {
-// #pragma unroll 4
+        // #pragma unroll 4
         for (uint32_t c = 0; c < D; ++c) {
           shared_payload_cache[threadIdx.x * D + c] = 0.F;
         }
@@ -2940,13 +3007,16 @@ __global__ void __launch_bounds__(128) compute_payload_triangle_gradient_kernel(
           params.norm.to_normalized(params.triangles[original_geometry_idx]);
       if constexpr (use_shared_payload_cache_triangle<D>()) {
         const float *src =
-            params.sorted_payload + static_cast<size_t>(my_geometry_idx) * D;
-        for (uint32_t c = 0; c < D; ++c) {
+            params.sorted_payload + static_cast<size_t>(my_geometry_idx) *
+                                        D; // TODO: Why did we sort the payload?
+        for (uint32_t c = 0; c < D;
+             ++c) { // Maybe just to get the Padding to D?
           shared_payload_cache[threadIdx.x * D + c] = src[c];
         }
       }
     }
 
+    // Note: If no kahan is used the compiler will not use the compensations
     Triangle my_gradient{
         .v0 = Vec3::zero(), .v1 = Vec3::zero(), .v2 = Vec3::zero()};
     Triangle geo_compensation{
@@ -3011,7 +3081,7 @@ __global__ void __launch_bounds__(128) compute_payload_triangle_gradient_kernel(
             params.sorted_payload + static_cast<size_t>(my_geometry_idx) * D;
         const uint32_t cache_base = threadIdx.x * D;
 
-// #pragma unroll 4
+        // #pragma unroll 4
         for (uint32_t c = 0; c < D; ++c) {
           const float v_c = use_shared_payload_cache_triangle<D>()
                                 ? shared_payload_cache[cache_base + c]
@@ -3059,7 +3129,60 @@ __global__ void __launch_bounds__(128) compute_payload_triangle_gradient_kernel(
         if (child_type == ChildType::LEAF) {
           uint32_t leaf_idx = shared_leaf_ptrs[warp_id].indices[child_idx];
 
-          if (is_still_active) {
+          AABB child_aabb = params.leaf_aabbs[leaf_idx];
+          bool need_taylor_coefficients =
+              is_still_active &&
+              should_node_be_approximated(
+                  shared_warp_geometry[warp_id][lane_id], child_aabb,
+                  params.beta, params.reg_context);
+          uint32_t needs_taylor_coefficients_mask =
+              __ballot_sync(0xFFFFFFFF, need_taylor_coefficients);
+
+          if (needs_taylor_coefficients_mask > 0) {
+            load_shared_cooperative<BackwardPayloadTaylorCoefficients<D>>(
+                &current_taylor_coefficients_cache[warp_id],
+                params.leaf_coefficients + leaf_idx, lane_id);
+            __syncwarp();
+          }
+          bool is_detail_eval_needed = true;
+
+          if (need_taylor_coefficients) {
+            const auto &coeffs = current_taylor_coefficients_cache[warp_id];
+
+            float G_0 = 0.F;
+            Vec3 G_1 = Vec3::zero();
+            SymMat3x3 G_2 = {0.F, 0.F, 0.F, 0.F, 0.F, 0.F};
+
+            const float *my_payload_ptr =
+                params.sorted_payload +
+                static_cast<size_t>(my_geometry_idx) * D;
+            const uint32_t cache_base = threadIdx.x * D;
+
+            // #pragma unroll 4
+            for (uint32_t c = 0; c < D; ++c) {
+              const float v_c = use_shared_payload_cache_triangle<D>()
+                                    ? shared_payload_cache[cache_base + c]
+                                    : my_payload_ptr[c];
+              G_0 += v_c * coeffs.zero_order[c];
+              G_1.x += v_c * coeffs.first_order[c].x;
+              G_1.y += v_c * coeffs.first_order[c].y;
+              G_1.z += v_c * coeffs.first_order[c].z;
+#pragma unroll
+              for (int k = 0; k < 6; ++k) {
+                G_2.data[k] += v_c * coeffs.second_order[c].data[k];
+              }
+            }
+
+            Triangle approx_grad_contribution =
+                compute_node_gradient_approximation(
+                    shared_warp_geometry[warp_id][lane_id],
+                   child_aabb.center_of_mass, G_0, G_1, G_2);
+            accum_triangle<UseKahan>(my_gradient, approx_grad_contribution,
+                                     geo_compensation);
+            is_detail_eval_needed = false;
+          }
+
+          if (is_detail_eval_needed) {
             for (uint32_t query_counter = 0; query_counter < LEAF_SIZE;
                  ++query_counter) {
               uint32_t query_idx = query_counter + leaf_idx * LEAF_SIZE;
@@ -3077,7 +3200,7 @@ __global__ void __launch_bounds__(128) compute_payload_triangle_gradient_kernel(
               const uint32_t cache_base = threadIdx.x * D;
 
               float g_hat = 0.F;
-// #pragma unroll 4
+              // #pragma unroll 4
               for (uint32_t c = 0; c < D; ++c) {
                 const float v_c = use_shared_payload_cache_triangle<D>()
                                       ? shared_payload_cache[cache_base + c]
@@ -3139,6 +3262,7 @@ void compute_payload_triangle_gradients(
       .sort_indirections = params.sort_indirections,
       .bvh8_nodes = params.bvh8_nodes,
       .bvh8_leaf_pointers = params.bvh8_leaf_pointers,
+      .leaf_coefficients = params.leaf_coefficients,
       .node_coefficients = params.node_coefficients,
       .leaf_aabbs = params.leaf_aabbs,
       .sorted_payload = params.sorted_payload,
@@ -3201,20 +3325,20 @@ void compute_payload_triangle_gradients(
 // Explicit instantiations
 // ===========================================================================
 template void compute_payload_triangle_gradients<1>(
-    const ComputePayloadGradientsTriangleParams<1> &, int,
-    const cudaStream_t &, bool);
+    const ComputePayloadGradientsTriangleParams<1> &, int, const cudaStream_t &,
+    bool);
 template void compute_payload_triangle_gradients<2>(
-    const ComputePayloadGradientsTriangleParams<2> &, int,
-    const cudaStream_t &, bool);
+    const ComputePayloadGradientsTriangleParams<2> &, int, const cudaStream_t &,
+    bool);
 template void compute_payload_triangle_gradients<3>(
-    const ComputePayloadGradientsTriangleParams<3> &, int,
-    const cudaStream_t &, bool);
+    const ComputePayloadGradientsTriangleParams<3> &, int, const cudaStream_t &,
+    bool);
 template void compute_payload_triangle_gradients<4>(
-    const ComputePayloadGradientsTriangleParams<4> &, int,
-    const cudaStream_t &, bool);
+    const ComputePayloadGradientsTriangleParams<4> &, int, const cudaStream_t &,
+    bool);
 template void compute_payload_triangle_gradients<8>(
-    const ComputePayloadGradientsTriangleParams<8> &, int,
-    const cudaStream_t &, bool);
+    const ComputePayloadGradientsTriangleParams<8> &, int, const cudaStream_t &,
+    bool);
 template void compute_payload_triangle_gradients<16>(
     const ComputePayloadGradientsTriangleParams<16> &, int,
     const cudaStream_t &, bool);

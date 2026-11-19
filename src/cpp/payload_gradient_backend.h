@@ -75,4 +75,6 @@ private:
 
   // Per-node D-channel backward Taylor coefficients
   BackwardPayloadTaylorCoefficients<D> *m_taylor_coefficients = nullptr;
+  BackwardPayloadTaylorCoefficients<D> *m_leaf_coefficients = nullptr;
+
 };
