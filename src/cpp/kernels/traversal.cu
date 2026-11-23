@@ -1320,7 +1320,8 @@ template void query_gradient_traversal<Triangle>(
     const cudaStream_t &stream);
 
 template <uint32_t D>
-constexpr uint32_t components_per_thread = (D < 4U) ? D : 4U;
+// constexpr uint32_t components_per_thread = (D < 4U) ? D : 4U;
+constexpr uint32_t components_per_thread = (D > 32U) ? 4U : (D < 2U ? D : 2U);
 
 template <uint32_t D>
 constexpr uint32_t threads_per_query =
@@ -1856,8 +1857,9 @@ __global__ void __launch_bounds__(128) traverse_payload_query_gradient_kernel(
       warp_tile_base = atomicAdd(global_device_counter, QUERIES_PER_WARP);
     }
     warp_tile_base = __shfl_sync(0xFFFFFFFF, warp_tile_base, 0);
-    if (warp_tile_base >= query_count)
+    if (warp_tile_base >= query_count) {
       break;
+    }
 
     int my_required_stack_depth = std::numeric_limits<int>::max();
     const uint32_t my_query_idx = warp_tile_base + my_query_slot;
@@ -1873,8 +1875,6 @@ __global__ void __launch_bounds__(128) traverse_payload_query_gradient_kernel(
     } else {
       original_query_idx = sort_indirections[my_query_idx];
       my_query = norm.to_normalized(queries[original_query_idx]);
-      // CHANGED — user stride for grad_output; loop bound already respects
-      //           my_d_count so we never read past D_user
       const float *g_full =
           grad_output +
           static_cast<size_t>(original_query_idx) * payload_dim_user + my_d0;
@@ -1936,8 +1936,9 @@ __global__ void __launch_bounds__(128) traverse_payload_query_gradient_kernel(
 
 #pragma unroll
         for (uint32_t c = 0; c < COMPONENTS_PER_THREAD; ++c) {
-          if (c >= my_d_count)
+          if (c >= my_d_count) {
             break;
+          }
           const float g = g_block[c];
           const uint32_t d = my_d0 + c;
           tilde_0 += g * Vec3::from_f16(coeffs.getZeroOrder(d));
@@ -2002,7 +2003,7 @@ __global__ void __launch_bounds__(128) traverse_payload_query_gradient_kernel(
             Vec3 tilde_0 = Vec3::zero();
             Mat3x3 tilde_1 = Mat3x3::zero();
             Tensor3_compressed tilde_2 = Tensor3_compressed::zero();
-#pragma unroll
+            // #pragma unroll
             for (uint32_t c = 0; c < COMPONENTS_PER_THREAD; ++c) {
               if (c >= my_d_count) {
                 break;
@@ -2123,8 +2124,7 @@ __global__ void traverse_payload_query_grad_single_leaf_kernel(
     const Vec3 *__restrict__ queries,
     const uint32_t *__restrict__ sort_indirections,
     const SoAView<Geometry> sorted_geometry,
-    const float *__restrict__ sorted_payload,
-    const uint32_t payload_dim_user, // NEW
+    const float *__restrict__ sorted_payload, const uint32_t payload_dim_user,
     const float *__restrict__ grad_output, const uint32_t query_count,
     const uint32_t geometry_count, float *__restrict__ out_query_gradients,
     const typename Geometry::Context ctx, const SceneNormalization norm) {
@@ -3176,7 +3176,7 @@ __global__ void __launch_bounds__(128) compute_payload_triangle_gradient_kernel(
             Triangle approx_grad_contribution =
                 compute_node_gradient_approximation(
                     shared_warp_geometry[warp_id][lane_id],
-                   child_aabb.center_of_mass, G_0, G_1, G_2);
+                    child_aabb.center_of_mass, G_0, G_1, G_2);
             accum_triangle<UseKahan>(my_gradient, approx_grad_contribution,
                                      geo_compensation);
             is_detail_eval_needed = false;
@@ -3276,7 +3276,8 @@ void compute_payload_triangle_gradients(
       .payload_dim_user = params.payload_dim_user,
       .beta = params.beta,
       .reg_context = ctx,
-      .norm = params.norm};
+      .norm = params.norm,
+  };
 
   if (params.query_count <= 32) {
     constexpr uint32_t threads = 256;
