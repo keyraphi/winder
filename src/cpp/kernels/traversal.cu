@@ -1320,7 +1320,6 @@ template void query_gradient_traversal<Triangle>(
     const cudaStream_t &stream);
 
 template <uint32_t D>
-// constexpr uint32_t components_per_thread = (D < 4U) ? D : 4U;
 constexpr uint32_t components_per_thread = (D > 32U) ? 4U : (D < 2U ? D : 2U);
 
 template <uint32_t D>
@@ -1852,7 +1851,7 @@ __global__ void __launch_bounds__(128) traverse_payload_query_gradient_kernel(
 
   uint32_t warp_tile_base;
 
-  while (true) {
+  while (true) { // warp tiles
     if (lane_id == 0) {
       warp_tile_base = atomicAdd(global_device_counter, QUERIES_PER_WARP);
     }
@@ -1895,7 +1894,7 @@ __global__ void __launch_bounds__(128) traverse_payload_query_gradient_kernel(
     stack_ptr++;
     const float two_eps = 2.F * ctx.eps_length;
 
-    while (true) {
+    while (true) { // traversal
       uint32_t stack_not_empty_mask = __ballot_sync(0xFFFFFFFF, stack_ptr > 0);
       if (stack_not_empty_mask == 0) {
         break;
@@ -2003,7 +2002,7 @@ __global__ void __launch_bounds__(128) traverse_payload_query_gradient_kernel(
             Vec3 tilde_0 = Vec3::zero();
             Mat3x3 tilde_1 = Mat3x3::zero();
             Tensor3_compressed tilde_2 = Tensor3_compressed::zero();
-            // #pragma unroll
+// #pragma unroll
             for (uint32_t c = 0; c < COMPONENTS_PER_THREAD; ++c) {
               if (c >= my_d_count) {
                 break;
@@ -2071,7 +2070,7 @@ __global__ void __launch_bounds__(128) traverse_payload_query_gradient_kernel(
                   break;
                 }
                 const float *v_j =
-                    sorted_payload + static_cast<size_t>(geom_j * D);
+                    sorted_payload + static_cast<size_t>(geom_j) * D;
 
                 float partial_dot = payload_partial_dot<COMPONENTS_PER_THREAD>(
                     g_block, v_j + my_d0, my_d_count);
