@@ -356,7 +356,7 @@ __global__ void __launch_bounds__(128) traverse_geometry_tree_kernel(
                 leaf_coefficients + leaf_idx, lane_id);
             __syncwarp();
           }
-          bool is_detail_eval_needed = true;
+          bool is_detail_eval_needed = is_still_active;
           if (need_taylor_coefficients) {
             const TaylorCoefficientsF16 &current_leaf_coefficients =
                 current_taylor_coefficients_cache[warp_id];
@@ -2640,7 +2640,7 @@ __launch_bounds__(128) compute_payload_point_normal_gradient_kernel(
                 params.leaf_coefficients + leaf_idx, lane_id);
             __syncwarp();
           }
-          bool is_detail_eval_needed = true;
+          bool is_detail_eval_needed = is_still_active;
           if (need_taylor_coefficients) {
             const auto &coeffs = current_taylor_coefficients_cache[warp_id];
 
@@ -3143,7 +3143,7 @@ __global__ void __launch_bounds__(128) compute_payload_triangle_gradient_kernel(
                 params.leaf_coefficients + leaf_idx, lane_id);
             __syncwarp();
           }
-          bool is_detail_eval_needed = true;
+          bool is_detail_eval_needed = is_still_active;
 
           if (need_taylor_coefficients) {
             const auto &coeffs = current_taylor_coefficients_cache[warp_id];
